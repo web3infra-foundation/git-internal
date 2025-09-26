@@ -1,0 +1,13 @@
+F:\mercury\target\debug\deps\uuid-3910ba88810de5a4.d: C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\lib.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\macros.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\builder.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\error.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\non_nil.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\parser.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\fmt.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\timestamp.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\external.rs
+
+F:\mercury\target\debug\deps\libuuid-3910ba88810de5a4.rmeta: C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\lib.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\macros.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\builder.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\error.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\non_nil.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\parser.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\fmt.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\timestamp.rs C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\external.rs
+
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\lib.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\macros.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\builder.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\error.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\non_nil.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\parser.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\fmt.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\timestamp.rs:
+C:\Users\Neon\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\uuid-1.18.1\src\external.rs:
