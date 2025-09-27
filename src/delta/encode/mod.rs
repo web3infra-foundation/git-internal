@@ -229,7 +229,7 @@ mod tests {
     use std::io::{self, BufReader, Cursor, Read};
     use std::path::{Path, PathBuf};
 
-    use crate::decode::delta_decode;
+    use crate::delta::decode::delta_decode;
 
     use super::DeltaDiff;
     fn read_zlib_data(path: &Path) -> Result<Vec<u8>, io::Error> {

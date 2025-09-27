@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::errors::GitError;
 use crate::hash::SHA1;
+use crate::zstdelta;
 use crate::internal::object::types::ObjectType;
 
 use super::cache_object::CacheObjectInfo;

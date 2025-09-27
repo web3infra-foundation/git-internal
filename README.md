@@ -1,10 +1,10 @@
-## Mercury Module - Git Internal Module
+## Git Internal Module
 
-Mercury is a high-performance Rust library for encoding and decoding Git internal objects and Pack files. It provides comprehensive support for Git's internal object storage format with advanced features like delta compression, memory management, and concurrent processing.
+Git-Internal is a high-performance Rust library for encoding and decoding Git internal objects and Pack files. It provides comprehensive support for Git's internal object storage format with advanced features like delta compression, memory management, and concurrent processing.
 
 ## Overview
 
-Mercury is designed to handle Git internal objects and Pack files efficiently, supporting both reading and writing operations with optimized memory usage and multi-threaded processing capabilities. The library implements the complete Git Pack format specification with additional optimizations for large-scale Git operations.
+This module is designed to handle Git internal objects and Pack files efficiently, supporting both reading and writing operations with optimized memory usage and multi-threaded processing capabilities. The library implements the complete Git Pack format specification with additional optimizations for large-scale Git operations.
 
 ## Key Features
 
@@ -74,7 +74,7 @@ Input Stream → Header Parsing → Object Decoding → Delta Resolution → Cac
 ### Memory Allocator Recommendations
 
 > [!TIP]
-> Here are some performance tips that you can use to significantly improve performance when using `Mercury` crates as a dependency.
+> Here are some performance tips that you can use to significantly improve performance when using `git-internal` crates as a dependency.
 
 In certain versions of Rust, using `HashMap` on Windows can lead to performance issues. This is due to the allocation strategy of the internal heap memory allocator. To mitigate these performance issues on Windows, you can use [mimalloc](https://github.com/microsoft/mimalloc). (See [this issue](https://github.com/rust-lang/rust/issues/121747) for more details.)
 
@@ -87,7 +87,7 @@ A simple approach:
    ```toml
    [target.'cfg(not(windows))'.dependencies]
    jemallocator = "0.5.4"
-   
+
    [target.'cfg(windows)'.dependencies]
    mimalloc = "0.1.43"
    ```
@@ -98,7 +98,7 @@ A simple approach:
    #[cfg(not(target_os = "windows"))]
    #[global_allocator]
    static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
-   
+
    #[cfg(target_os = "windows")]
    #[global_allocator]
    static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

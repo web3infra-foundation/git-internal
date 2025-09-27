@@ -191,8 +191,8 @@ impl TreeItem {
     /// Convert a TreeItem to a byte vector
     /// ```rust
     /// use std::str::FromStr;
-    /// use mercury::internal::object::tree::{TreeItem, TreeItemMode};
-    /// use mercury::hash::SHA1;
+    /// use git_internal::internal::object::tree::{TreeItem, TreeItemMode};
+    /// use git_internal::hash::SHA1;
     ///
     /// let tree_item = TreeItem::new(
     ///     TreeItemMode::Blob,

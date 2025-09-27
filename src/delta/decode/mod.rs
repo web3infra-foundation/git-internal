@@ -1,4 +1,4 @@
-use crate::{errors::GitDeltaError, utils};
+use super::{errors::GitDeltaError, utils};
 use std::io::{ErrorKind, Read};
 
 const COPY_INSTRUCTION_FLAG: u8 = 1 << 7;

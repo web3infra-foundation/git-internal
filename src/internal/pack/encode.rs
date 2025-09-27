@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::io::Write;
 
+use crate::delta;
+use crate::zstdelta;
 use crate::internal::object::types::ObjectType;
 use crate::time_it;
 use crate::{errors::GitError, hash::SHA1, internal::pack::entry::Entry};
