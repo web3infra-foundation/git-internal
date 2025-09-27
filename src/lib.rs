@@ -4,6 +4,8 @@ pub mod errors;
 pub mod hash;
 pub mod internal;
 pub mod utils;
+mod zstdelta;
+mod delta;
 
 // #[cfg(test)]
 pub mod test_utils {
