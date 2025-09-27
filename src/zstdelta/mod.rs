@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-mod zstdelta;
+pub mod zstdelta;
 
-pub use crate::zstdelta::apply;
-pub use crate::zstdelta::diff;
+pub use zstdelta::apply;
+pub use zstdelta::diff;

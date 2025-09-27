@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use encode::DeltaDiff;
 use rayon::prelude::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -6,8 +8,6 @@ mod decode;
 mod encode;
 mod errors;
 mod utils;
-
-pub use decode::delta_decode as decode;
 
 const SAMPLE_STEP: usize = 64;
 const MIN_DELTA_RATE: f64 = 0.5;
@@ -108,7 +108,7 @@ pub fn encode(old_data: &[u8], new_data: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{encode_rate, heuristic_encode_rate, heuristic_encode_rate_parallel};
+    use super::{encode_rate, heuristic_encode_rate, heuristic_encode_rate_parallel};
 
     #[test]
     fn test_heuristic_encode_rate() {
