@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_signature_without_delta() {
-        let mut source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/packs/pack-1d0e6c14760c956c173ede71cb28f33d921e232f.pack");
 
         let f = std::fs::File::open(source).unwrap();

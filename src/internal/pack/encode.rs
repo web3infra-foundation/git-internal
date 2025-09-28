@@ -274,7 +274,6 @@ impl PackEncoder {
         ]
         .concat();
 
-        // 按顺序发送合并后的结果
         for data in all_encoded_data {
             self.write_all_and_update(&data).await;
         }
@@ -582,16 +581,12 @@ mod tests {
     }
 
     async fn get_entries_for_test() -> Arc<Mutex<Vec<Entry>>> {
-        let mut source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
-        source.push("tests/data/packs/pack-f8bbb573cef7d851957caceb491c073ee8e8de41.pack");
-        // let file_map = crate::test_utils::setup_lfs_file().await;
-        // let source = file_map
-        //     .get("git-2d187177923cd618a75da6c6db45bb89d92bd504.pack")
-        //     .unwrap();
-        // decode pack file to get entries
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data/packs/pack-f8bbb573cef7d851957caceb491c073ee8e8de41.pack");
+        
         let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
 
-        let f = std::fs::File::open(source).unwrap();
+        let f = std::fs::File::open(&source).unwrap();
         tracing::info!("pack file size: {}", f.metadata().unwrap().len());
         let mut reader = std::io::BufReader::new(f);
         let entries = Arc::new(Mutex::new(Vec::new()));

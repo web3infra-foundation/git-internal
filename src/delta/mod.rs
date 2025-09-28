@@ -157,11 +157,13 @@ mod tests {
         let data3 = vec![0u8; 100];
         let mut data4 = vec![0u8; 100];
 
-        for i in 0..2 {
-            data4[i] = 1;
+        for i in data4.iter_mut().take(2) {
+            *i = 1;
         }
+
         let rate1 = heuristic_encode_rate_parallel(&data3, &data4);
         let rate2 = encode_rate(&data3, &data4);
+        
         println!(
             "Large partially matching data rate = {}, accurate rate = {}",
             rate1, rate2

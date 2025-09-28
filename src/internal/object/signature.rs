@@ -292,7 +292,6 @@ mod tests {
 
     /// When the test case run in the GitHub Action, the timezone is +0000, so we ignore it.
     #[test]
-    #[ignore]
     fn test_signature_with_time() {
         let sign = Signature::new(
             SignatureType::Author,
