@@ -342,9 +342,8 @@ mod test {
     use lru_mem::LruCache;
 
     use super::*;
+    
     #[test]
-    #[ignore = "only in single thread"]
-    // 只在单线程测试
     fn test_heap_size_record() {
         let mut obj = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, SHA1::default()),
@@ -356,7 +355,7 @@ mod test {
         assert_eq!(mem.load(Ordering::Relaxed), 0);
         obj.set_mem_recorder(mem.clone());
         obj.record_mem_size();
-        assert_eq!(mem.load(Ordering::Relaxed), 1120);
+        assert_eq!(mem.load(Ordering::Relaxed), obj.mem_size());
         drop(obj);
         assert_eq!(mem.load(Ordering::Relaxed), 0);
     }
@@ -375,8 +374,8 @@ mod test {
         let b = ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(false)), None);
         assert!(b.heap_size() == 1024);
     }
+    
     #[test]
-    #[ignore]
     fn test_cache_object_with_lru() {
         let mut cache = LruCache::new(2048);
 
@@ -424,7 +423,7 @@ mod test {
         {
             // a should be ejected
             let r = cache.get(&hash_a.to_string());
-            assert!(r.is_some());
+            assert!(r.is_none());
         }
     }
 

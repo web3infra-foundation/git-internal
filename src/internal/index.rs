@@ -1,5 +1,3 @@
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use sha1::{Digest, Sha1};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File};
@@ -9,6 +7,9 @@ use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use sha1::{Digest, Sha1};
 
 use crate::errors::GitError;
 use crate::hash::SHA1;
@@ -554,14 +555,20 @@ mod tests {
 
     #[test]
     fn test_check_header() {
-        let file = File::open("../tests/data/index/index-2").unwrap();
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/index/index-2");
+
+        let file = File::open(source).unwrap();
         let entries = Index::check_header(&mut BufReader::new(file)).unwrap();
         assert_eq!(entries, 2);
     }
 
     #[test]
     fn test_index() {
-        let index = Index::from_file("../tests/data/index/index-760").unwrap();
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/index/index-760");
+
+        let index = Index::from_file(source).unwrap();
         assert_eq!(index.size(), 760);
         for (_, entry) in index.entries.iter() {
             println!("{entry}");
@@ -570,7 +577,10 @@ mod tests {
 
     #[test]
     fn test_index_to_file() {
-        let index = Index::from_file("../tests/data/index/index-760").unwrap();
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/index/index-760");
+
+        let index = Index::from_file(source).unwrap();
         index.to_file("/tmp/index-760").unwrap();
         let new_index = Index::from_file("/tmp/index-760").unwrap();
         assert_eq!(index.size(), new_index.size());
@@ -578,7 +588,10 @@ mod tests {
 
     #[test]
     fn test_index_entry_create() {
-        let file = Path::new("Cargo.toml"); // use as a normal file
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("Cargo.toml");
+
+        let file = Path::new(source.as_path()); // use as a normal file
         let hash = SHA1::from_bytes(&[0; 20]);
         let workdir = Path::new("../");
         let entry = IndexEntry::new_from_file(file, hash, workdir).unwrap();

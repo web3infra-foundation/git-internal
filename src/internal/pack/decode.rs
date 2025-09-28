@@ -706,11 +706,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_pack_check_header() {
-        let res = crate::test_utils::setup_lfs_file().await;
-        println!("{res:?}");
-        let source = res
-            .get("git-2d187177923cd618a75da6c6db45bb89d92bd504.pack")
-            .unwrap();
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
 
         let f = fs::File::open(source).unwrap();
         let mut buf_reader = BufReader::new(f);
@@ -744,7 +741,7 @@ mod tests {
 
     #[test]
     fn test_pack_decode_without_delta() {
-        let mut source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/packs/pack-1d0e6c14760c956c173ede71cb28f33d921e232f.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
@@ -760,7 +757,7 @@ mod tests {
     fn test_pack_decode_with_ref_delta() {
         init_logger();
 
-        let mut source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/packs/ref-delta-65d47638aa7cb7c39f1bd1d5011a415439b887a8.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
@@ -773,7 +770,7 @@ mod tests {
 
     #[test]
     fn test_pack_decode_no_mem_limit() {
-        let mut source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/packs/pack-1d0e6c14760c956c173ede71cb28f33d921e232f.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
@@ -785,13 +782,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Take too long time
     async fn test_pack_decode_with_large_file_with_delta_without_ref() {
         init_logger();
-        let file_map = crate::test_utils::setup_lfs_file().await;
-        let source = file_map
-            .get("git-2d187177923cd618a75da6c6db45bb89d92bd504.pack")
-            .unwrap();
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -815,10 +809,8 @@ mod tests {
     #[tokio::test]
     async fn test_decode_large_file_stream() {
         init_logger();
-        let file_map = crate::test_utils::setup_lfs_file().await;
-        let source = file_map
-            .get("git-2d187177923cd618a75da6c6db45bb89d92bd504.pack")
-            .unwrap();
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = tokio::fs::File::open(source).await.unwrap();
@@ -850,12 +842,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Take too long time, duplicate with `test_decode_large_file_stream`
     async fn test_decode_large_file_async() {
-        let file_map = crate::test_utils::setup_lfs_file().await;
-        let source = file_map
-            .get("git-2d187177923cd618a75da6c6db45bb89d92bd504.pack")
-            .unwrap();
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = fs::File::open(source).unwrap();
@@ -870,7 +859,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = p.decode_async(buffered, tx); // new thread
         let mut cnt = 0;
-        while let Ok(_entry) = rx.try_recv() {
+        while let Some(_entry) = rx.recv().await {
             cnt += 1; //use entry here
         }
         let p = handle.join().unwrap();
@@ -879,7 +868,7 @@ mod tests {
 
     #[test]
     fn test_pack_decode_with_delta_without_ref() {
-        let mut source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/packs/pack-d50df695086eea6253a237cb5ac44af1629e7ced.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
@@ -890,8 +879,7 @@ mod tests {
         p.decode(&mut buffered, |_, _| {}).unwrap();
     }
 
-    #[test]
-    #[ignore] // Take too long time
+    #[test]// Take too long time
     fn test_pack_decode_multi_task_with_large_file_with_delta_without_ref() {
         let task1 = std::thread::spawn(|| {
             test_pack_decode_with_large_file_with_delta_without_ref();
