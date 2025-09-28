@@ -184,7 +184,8 @@ mod tests {
     fn test_delta_efficiency() {
         // 1 MB incompressible random data
         let mut base = vec![0u8; 1000000];
-        ChaChaRng::from_seed([0; 32]).fill_bytes(&mut base);
+        let mut rng = ChaChaRng::from_seed([0; 32]);
+        rng.fill_bytes(&mut base);
         // Change a few bytes
         let mut data = base.clone();
         data[0] ^= 1;
