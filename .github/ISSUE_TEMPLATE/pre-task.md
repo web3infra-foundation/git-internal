@@ -1,7 +1,7 @@
 ---
 name: pre-task
 about: r2cn 测试任务模板
-title: "[git-internal] "
+title: "[r2cn-测试任务] "
 labels: git, internal, pre-task
 assignees: ''
 
@@ -9,4 +9,4 @@ assignees: ''
 
 [具体描述] XXX 具体功能描述
 
-[实现方案]
+[实现方案] XXX 实现方案描述
