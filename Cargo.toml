@@ -42,7 +42,7 @@ axum = { version = "0.8.6", features = ["macros", "json"] }
 
 
 [dev-dependencies]
-tokio = { version = "1.45.1", features = ["full"] }
+tokio = { version = "1.47.1", features = ["full"] }
 tokio-util = { version = "0.7.15", features = ["io"] }
 quickcheck = "1.0.3"
 rand = "0.9.2"
