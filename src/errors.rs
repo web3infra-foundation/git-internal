@@ -103,8 +103,8 @@ pub enum GitError {
     InvalidObjectInfo(String),
 
     /// Hash not found in current file context.
-    #[error("Can't found Hash value :{0} from current file")]
-    NotFountHashValue(String),
+    #[error("Cannot find Hash value: {0} from current file")]
+    NotFoundHashValue(String),
 
     /// Failed to encode object to bytes.
     #[error("Can't encode the object which id [{0}] to bytes")]
