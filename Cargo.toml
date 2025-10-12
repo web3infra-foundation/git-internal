@@ -7,38 +7,39 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sea-orm = { version = "1.1.12", features = ["sqlx-sqlite"] }
-flate2 = { version = "1.1.1", features = ["zlib"] }
-serde = { version = "1.0.219", features = ["derive"] }
 bstr = "1.12.0"
 hex = "0.4.3"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 tracing = "0.1.41"
+tracing-subscriber = "0.3.20"
 sha1 = "0.10.6"
 colored = "3.0.0"
-chrono = { version = "0.4.41", features = ["serde"] }
-tracing-subscriber = "0.3.19"
-uuid = { version = "1.17.0", features = ["v4"] }
 threadpool = "1.8.1"
 num_cpus = "1.17.0"
 dashmap = "6.1.0"
-tokio = { version = "1.45.1", features = ["fs"] }
 lru-mem = "0.3.0"
-bincode = { version = "2.0.1", features = ["serde"] }
 byteorder = "1.5.0"
 futures-util = "0.3.31"
 bytes = "1.10.1"
-axum = { version = "0.8.4", features = ["macros", "json"] }
 memchr = "2.7.4"
 encoding_rs = "0.8.35"
-rayon = "1.10.0"
-reqwest = "0.12.18"
+rayon = "1.11.0"
+reqwest = "0.12.23"
 ring = "0.17.14"
-serde_json = "1.0.140"
+serde_json = "1.0.145"
 ahash = "0.8.12"
 diffs = "0.5.1"
-libc = "0.2.172"
-zstd-sys = { version = "2.0.15+zstd.1.5.7", features = ["experimental"] }
+libc = "0.2.177"
+zstd-sys = { version = "2.0.16+zstd.1.5.7", features = ["experimental"] }
+sea-orm = { version = "1.1.17", features = ["sqlx-sqlite"] }
+flate2 = { version = "1.1.4", features = ["zlib"] }
+serde = { version = "1.0.228", features = ["derive"] }
+chrono = { version = "0.4.42", features = ["serde"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+tokio = { version = "1.47.1", features = ["fs"] }
+bincode = { version = "2.0.1", features = ["serde"] }
+axum = { version = "0.8.6", features = ["macros", "json"] }
+
 
 [dev-dependencies]
 tokio = { version = "1.45.1", features = ["full"] }
