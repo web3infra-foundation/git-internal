@@ -20,7 +20,7 @@ assignees: ''
 2. 所有 __PR__ 提交必须通过 `GitHub Actions` 自动化测试，提交 __PR__ 后请关注 `GitHub Actions` 结果；
 3. 代码注释均需要使用英文;
 
-[__PR 提交地址__] 提交到 [git-internal](https://github.com/web3infra-foundation/git-internal) 仓库的 `main` 分支 `` 目录；
+[__PR 提交地址__] 提交到 [git-internal](https://github.com/web3infra-foundation/git-internal) 仓库的 `main` 分支 `src` 目录；
 
 [__开发指导__]
 1. 认领任务参考 [r2cn 开源实习计划 - 任务认领与确认](https://r2cn.dev/docs/student/assign);
