@@ -45,7 +45,7 @@ tokio-stream = "0.1.17"
 http = "1.2.0"
 base64 = "0.22.1"
 # SSH server dependencies
-russh = "0.52.1"
+russh = "0.54.6"
 russh-keys = "0.49.2"
 hyper = "1.5.1"
 async-stream = "0.3.6"

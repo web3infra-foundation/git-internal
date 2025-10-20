@@ -13,7 +13,6 @@ use super::types::{
     RefTypeEnum, SP, ServiceType, SideBind, TransportProtocol, UPLOAD_CAP_LIST, ZERO_ID,
 };
 use super::utils::{add_pkt_line_string, build_smart_reply, read_pkt_line, read_until_white_space};
-use crate::config::PackConfig;
 
 /// Smart Git Protocol implementation
 ///
@@ -29,7 +28,6 @@ where
     pub capabilities: Vec<Capability>,
     pub side_bind: Option<SideBind>,
     pub command_list: Vec<RefCommand>,
-    pub repo_path: Option<String>,
 
     // Trait-based dependencies
     repo_storage: R,
@@ -49,7 +47,6 @@ where
             capabilities: Vec::new(),
             side_bind: None,
             command_list: Vec::new(),
-            repo_path: None,
             repo_storage,
             auth_service,
         }
@@ -60,10 +57,7 @@ where
         &self,
         headers: &HashMap<String, String>,
     ) -> Result<(), ProtocolError> {
-        // Authentication service now returns Result<(), ProtocolError>.
-        // Propagate Unauthorized or other errors directly.
-        self.auth_service.authenticate_http(headers).await?;
-        Ok(())
+        self.auth_service.authenticate_http(headers).await
     }
 
     /// Authenticate an SSH session using username and public key
@@ -72,12 +66,9 @@ where
         username: &str,
         public_key: &[u8],
     ) -> Result<(), ProtocolError> {
-        // Authentication service now returns Result<(), ProtocolError>.
-        // Propagate Unauthorized or other errors directly.
         self.auth_service
             .authenticate_ssh(username, public_key)
-            .await?;
-        Ok(())
+            .await
     }
 
     /// Set the service type for this protocol session
@@ -90,25 +81,16 @@ where
         self.service_type
     }
 
-    /// Set the repository path
-    pub fn set_repository_path(&mut self, repo_path: String) {
-        self.repo_path = Some(repo_path);
-    }
-
     /// Set transport protocol (Http, Ssh, etc.)
     pub fn set_transport_protocol(&mut self, protocol: TransportProtocol) {
         self.transport_protocol = protocol;
     }
 
     /// Get git info refs for the repository
-    pub async fn git_info_refs(&self) -> Result<BytesMut, ProtocolError> {
+    pub async fn git_info_refs(&self, repo_path: &str) -> Result<BytesMut, ProtocolError> {
         let service_type = self
             .service_type
             .ok_or_else(|| ProtocolError::repository_error("Service type not set".to_string()))?;
-
-        let repo_path = self.repo_path.as_ref().ok_or_else(|| {
-            ProtocolError::repository_error("Repository path not set".to_string())
-        })?;
 
         let refs = self
             .repo_storage
@@ -159,6 +141,7 @@ where
     /// Handle git upload-pack operation (fetch/clone)
     pub async fn git_upload_pack(
         &mut self,
+        repo_path: &str,
         upload_request: &mut Bytes,
     ) -> Result<(ReceiverStream<Vec<u8>>, BytesMut), ProtocolError> {
         let mut want: Vec<String> = Vec::new();
@@ -206,7 +189,6 @@ where
         let mut protocol_buf = BytesMut::new();
 
         // Create pack generator for this operation
-        let repo_path = self.repo_path.as_deref().unwrap_or("");
         let pack_generator = PackGenerator::new(&self.repo_storage, repo_path);
 
         if have.is_empty() {
@@ -278,8 +260,8 @@ where
     /// Handle git receive-pack operation (push)
     pub async fn git_receive_pack_stream(
         &mut self,
+        repo_path: &str,
         data_stream: Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>,
-        _pack_config: &PackConfig,
     ) -> Result<Bytes, ProtocolError> {
         // Collect all pack data from stream
         let mut pack_data = BytesMut::new();
@@ -292,7 +274,6 @@ where
         }
 
         // Create pack generator for unpacking
-        let repo_path = self.repo_path.as_deref().unwrap_or("");
         let pack_generator = PackGenerator::new(&self.repo_storage, repo_path);
 
         // Unpack the received data
@@ -310,7 +291,6 @@ where
         let mut report_status = BytesMut::new();
         add_pkt_line_string(&mut report_status, "unpack ok\n".to_owned());
 
-        let repo_path = self.repo_path.as_deref().unwrap_or("");
         let mut default_exist = self
             .repo_storage
             .has_default_branch(repo_path)
@@ -360,7 +340,6 @@ where
         }
 
         // Post-receive hook
-        let repo_path = self.repo_path.as_deref().unwrap_or("");
         self.repo_storage
             .post_receive_hook(repo_path)
             .await
@@ -465,7 +444,16 @@ mod tests {
             &self,
             _repo_path: &str,
         ) -> Result<Vec<(String, String)>, ProtocolError> {
-            Ok(vec![])
+            Ok(vec![
+                (
+                    "HEAD".to_string(),
+                    "0000000000000000000000000000000000000000".to_string(),
+                ),
+                (
+                    "refs/heads/main".to_string(),
+                    "1111111111111111111111111111111111111111".to_string(),
+                ),
+            ])
         }
 
         async fn has_object(
@@ -473,7 +461,7 @@ mod tests {
             _repo_path: &str,
             _object_hash: &str,
         ) -> Result<bool, ProtocolError> {
-            Ok(false)
+            Ok(true)
         }
 
         async fn get_object(
@@ -481,9 +469,7 @@ mod tests {
             _repo_path: &str,
             _object_hash: &str,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::repository_error(
-                "get_object not implemented".to_string(),
-            ))
+            Ok(vec![])
         }
 
         async fn store_pack_data(
@@ -520,7 +506,10 @@ mod tests {
         }
 
         async fn has_default_branch(&self, _repo_path: &str) -> Result<bool, ProtocolError> {
-            Ok(*self.default_branch_exists.lock().unwrap())
+            let mut exists = self.default_branch_exists.lock().unwrap();
+            let current = *exists;
+            *exists = true; // flip to true after first check
+            Ok(current)
         }
 
         async fn post_receive_hook(&self, _repo_path: &str) -> Result<(), ProtocolError> {
@@ -603,7 +592,6 @@ mod tests {
         let repo_access = TestRepoAccess::new();
         let auth = TestAuth;
         let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access.clone(), auth);
-        smart.set_repository_path("test-repo-path".to_string());
         smart.command_list.push(RefCommand::new(
             ZERO_ID.to_string(),
             commit.id.to_string(),
@@ -614,9 +602,8 @@ mod tests {
         let request_stream = Box::pin(futures::stream::once(async { Ok(Bytes::from(pack_bytes)) }));
 
         // Execute receive-pack
-        let pack_config = crate::config::PackConfig::default();
         let result_bytes = smart
-            .git_receive_pack_stream(request_stream, &pack_config)
+            .git_receive_pack_stream("test-repo-path", request_stream)
             .await
             .expect("receive-pack should succeed");
 

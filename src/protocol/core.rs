@@ -265,11 +265,9 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
         };
 
         self.smart_protocol.set_service_type(service_type);
-        self.smart_protocol
-            .set_repository_path(repo_path.to_string());
 
         self.smart_protocol
-            .git_info_refs()
+            .git_info_refs(repo_path)
             .await
             .map(|bytes| bytes.to_vec())
     }
@@ -283,13 +281,11 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
     {
         self.smart_protocol
             .set_service_type(ServiceType::UploadPack);
-        self.smart_protocol
-            .set_repository_path(repo_path.to_string());
 
         let mut request_bytes = bytes::Bytes::from(request_data.to_vec());
         let (stream, _) = self
             .smart_protocol
-            .git_upload_pack(&mut request_bytes)
+            .git_upload_pack(repo_path, &mut request_bytes)
             .await?;
         Ok(Box::pin(stream.map(|data| Ok(Bytes::from(data)))))
     }
@@ -303,13 +299,10 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
     {
         self.smart_protocol
             .set_service_type(ServiceType::ReceivePack);
-        self.smart_protocol
-            .set_repository_path(repo_path.to_string());
 
-        let pack_config = crate::config::PackConfig::default();
         let result_bytes = self
             .smart_protocol
-            .git_receive_pack_stream(request_stream, &pack_config)
+            .git_receive_pack_stream(repo_path, request_stream)
             .await?;
         // Return the report status as a single-chunk stream
         Ok(Box::pin(futures::stream::once(async { Ok(result_bytes) })))
