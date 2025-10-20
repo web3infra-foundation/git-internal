@@ -55,7 +55,6 @@ pub enum TransportProtocol {
     Http,
     Ssh,
     Git,
-    P2p,
 }
 
 /// Git service types for smart protocol
@@ -99,12 +98,51 @@ pub enum Capability {
     OfsDelta,
     DeepenSince,
     DeepenNot,
+    ThinPack,
+    Shallow,
+    Deepen,
+    IncludeTag,
+    DeleteRefs,
+    Quiet,
+    Atomic,
+    NoThin,
+    AllowTipSha1InWant,
+    AllowReachableSha1InWant,
+    PushCert(String),
+    PushOptions,
+    ObjectFormat(String),
+    ServerOption(String),
+    SessionId(String),
+    PackfileUris(String),
+    Lfs,
+    Agent(String),
+    Unknown(String),
 }
 
 impl FromStr for Capability {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Parameterized capabilities
+        if let Some(rest) = s.strip_prefix("agent=") {
+            return Ok(Capability::Agent(rest.to_string()));
+        }
+        if let Some(rest) = s.strip_prefix("server-option=") {
+            return Ok(Capability::ServerOption(rest.to_string()));
+        }
+        if let Some(rest) = s.strip_prefix("session-id=") {
+            return Ok(Capability::SessionId(rest.to_string()));
+        }
+        if let Some(rest) = s.strip_prefix("packfile-uris=") {
+            return Ok(Capability::PackfileUris(rest.to_string()));
+        }
+        if let Some(rest) = s.strip_prefix("push-cert=") {
+            return Ok(Capability::PushCert(rest.to_string()));
+        }
+        if let Some(rest) = s.strip_prefix("object-format=") {
+            return Ok(Capability::ObjectFormat(rest.to_string()));
+        }
+
         match s {
             "multi_ack" => Ok(Capability::MultiAck),
             "multi_ack_detailed" => Ok(Capability::MultiAckDetailed),
@@ -116,7 +154,55 @@ impl FromStr for Capability {
             "ofs-delta" => Ok(Capability::OfsDelta),
             "deepen-since" => Ok(Capability::DeepenSince),
             "deepen-not" => Ok(Capability::DeepenNot),
-            _ => Err(()),
+            "thin-pack" => Ok(Capability::ThinPack),
+            "shallow" => Ok(Capability::Shallow),
+            "deepen" => Ok(Capability::Deepen),
+            "include-tag" => Ok(Capability::IncludeTag),
+            "delete-refs" => Ok(Capability::DeleteRefs),
+            "quiet" => Ok(Capability::Quiet),
+            "atomic" => Ok(Capability::Atomic),
+            "no-thin" => Ok(Capability::NoThin),
+            "allow-tip-sha1-in-want" => Ok(Capability::AllowTipSha1InWant),
+            "allow-reachable-sha1-in-want" => Ok(Capability::AllowReachableSha1InWant),
+            "push-options" => Ok(Capability::PushOptions),
+            "lfs" => Ok(Capability::Lfs),
+            _ => Ok(Capability::Unknown(s.to_string())),
+        }
+    }
+}
+
+impl std::fmt::Display for Capability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Capability::MultiAck => write!(f, "multi_ack"),
+            Capability::MultiAckDetailed => write!(f, "multi_ack_detailed"),
+            Capability::NoDone => write!(f, "no-done"),
+            Capability::SideBand => write!(f, "side-band"),
+            Capability::SideBand64k => write!(f, "side-band-64k"),
+            Capability::ReportStatus => write!(f, "report-status"),
+            Capability::ReportStatusv2 => write!(f, "report-status-v2"),
+            Capability::OfsDelta => write!(f, "ofs-delta"),
+            Capability::DeepenSince => write!(f, "deepen-since"),
+            Capability::DeepenNot => write!(f, "deepen-not"),
+            Capability::ThinPack => write!(f, "thin-pack"),
+            Capability::Shallow => write!(f, "shallow"),
+            Capability::Deepen => write!(f, "deepen"),
+            Capability::IncludeTag => write!(f, "include-tag"),
+            Capability::DeleteRefs => write!(f, "delete-refs"),
+            Capability::Quiet => write!(f, "quiet"),
+            Capability::Atomic => write!(f, "atomic"),
+            Capability::NoThin => write!(f, "no-thin"),
+            Capability::AllowTipSha1InWant => write!(f, "allow-tip-sha1-in-want"),
+            Capability::AllowReachableSha1InWant => write!(f, "allow-reachable-sha1-in-want"),
+            Capability::PushCert(value) => write!(f, "push-cert={}", value),
+            Capability::PushOptions => write!(f, "push-options"),
+            Capability::ObjectFormat(format) => write!(f, "object-format={}", format),
+            Capability::ServerOption(option) => write!(f, "server-option={}", option),
+            Capability::SessionId(id) => write!(f, "session-id={}", id),
+            Capability::PackfileUris(uris) => write!(f, "packfile-uris={}", uris),
+            Capability::Lfs => write!(f, "lfs"),
+            Capability::Agent(agent) => write!(f, "agent={}", agent),
+            Capability::Unknown(s) => write!(f, "{}", s),
         }
     }
 }
@@ -235,5 +321,5 @@ pub const PKT_LINE_END_MARKER: &[u8; 4] = b"0000";
 // Git protocol capability lists
 pub const RECEIVE_CAP_LIST: &str =
     "report-status report-status-v2 delete-refs quiet atomic no-thin ";
-pub const COMMON_CAP_LIST: &str = "side-band-64k ofs-delta agent=git-internal/0.1.0";
+pub const COMMON_CAP_LIST: &str = "side-band-64k ofs-delta lfs agent=git-internal/0.1.0";
 pub const UPLOAD_CAP_LIST: &str = "multi_ack_detailed no-done include-tag ";

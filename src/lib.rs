@@ -30,7 +30,6 @@
 //! Test Data
 //! - Located under `tests/data/`, includes real pack files and object sets.
 
-pub mod config;
 pub mod errors;
 pub mod hash;
 pub mod internal;
