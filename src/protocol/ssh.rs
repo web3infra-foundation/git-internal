@@ -4,10 +4,7 @@
 /// It's a thin wrapper around the core GitProtocol that handles SSH command
 /// execution and data streaming.
 use super::core::{AuthenticationService, GitProtocol, RepositoryAccess};
-use super::types::ProtocolError;
-use bytes::Bytes;
-use futures::stream::Stream;
-use std::pin::Pin;
+use super::types::{ProtocolError, ProtocolStream};
 
 /// SSH Git protocol handler
 pub struct SshGitHandler<R: RepositoryAccess, A: AuthenticationService> {
@@ -35,30 +32,22 @@ impl<R: RepositoryAccess, A: AuthenticationService> SshGitHandler<R, A> {
     /// Handle git-upload-pack command (for clone/fetch)
     pub async fn handle_upload_pack(
         &mut self,
-        repo_path: &str,
         request_data: &[u8],
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>, ProtocolError>
-    {
-        self.protocol.upload_pack(repo_path, request_data).await
+    ) -> Result<ProtocolStream, ProtocolError> {
+        self.protocol.upload_pack(request_data).await
     }
 
     /// Handle git-receive-pack command (for push)
     pub async fn handle_receive_pack(
         &mut self,
-        repo_path: &str,
-        request_stream: Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>, ProtocolError>
-    {
-        self.protocol.receive_pack(repo_path, request_stream).await
+        request_stream: ProtocolStream,
+    ) -> Result<ProtocolStream, ProtocolError> {
+        self.protocol.receive_pack(request_stream).await
     }
 
     /// Handle info/refs request for SSH
-    pub async fn handle_info_refs(
-        &mut self,
-        repo_path: &str,
-        service: &str,
-    ) -> Result<Vec<u8>, ProtocolError> {
-        self.protocol.info_refs(repo_path, service).await
+    pub async fn handle_info_refs(&mut self, service: &str) -> Result<Vec<u8>, ProtocolError> {
+        self.protocol.info_refs(service).await
     }
 }
 

@@ -1,5 +1,11 @@
+use bytes::Bytes;
+use futures::stream::Stream;
 use std::fmt;
+use std::pin::Pin;
 use std::str::FromStr;
+
+/// Type alias for protocol data streams to reduce nesting
+pub type ProtocolStream = Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>;
 
 /// Protocol error types
 #[derive(Debug, thiserror::Error)]
@@ -86,36 +92,85 @@ impl FromStr for ServiceType {
 }
 
 /// Git protocol capabilities
+///
+/// ## Implementation Status Overview
+///
+/// ### Implemented capabilities:
+/// - **Data transmission**: SideBand, SideBand64k - Multiplexed data streams via side-band formatter
+/// - **Status reporting**: ReportStatus, ReportStatusv2 - Push status feedback via protocol handlers
+/// - **Pack optimization**: OfsDelta, ThinPack, NoThin - Delta compression and efficient transmission
+/// - **Protocol control**: MultiAckDetailed, NoDone - ACK mechanism optimization for upload-pack
+/// - **Push control**: Atomic, DeleteRefs, Quiet - Atomic operations and reference management
+/// - **Tag handling**: IncludeTag - Automatic tag inclusion for upload-pack
+/// - **Client identification**: Agent - Client/server identification in capability negotiation
+///
+/// ### Not yet implemented capabilities:
+/// - **Basic protocol**: MultiAck - Basic multi-ack support (only detailed version implemented)
+/// - **Shallow cloning**: Shallow, DeepenSince, DeepenNot, DeepenRelative - Depth control for shallow clones
+/// - **Progress control**: NoProgress - Progress output suppression
+/// - **Special fetch**: AllowTipSha1InWant, AllowReachableSha1InWant - SHA1 validation in want processing
+/// - **Security**: PushCert - Push certificate verification mechanism
+/// - **Extensions**: PushOptions, Filter, Symref - Extended parameter handling
+/// - **Session management**: SessionId, ObjectFormat - Session and format negotiation
 #[derive(Debug, Clone, PartialEq)]
 pub enum Capability {
+    /// Multi-ack capability for upload-pack protocol
     MultiAck,
+    /// Multi-ack-detailed capability for more granular acknowledgment
     MultiAckDetailed,
+    /// No-done capability to optimize upload-pack protocol
     NoDone,
+    /// Side-band capability for multiplexing data streams
     SideBand,
+    /// Side-band-64k capability for larger side-band packets
     SideBand64k,
+    /// Report-status capability for push status reporting
     ReportStatus,
+    /// Report-status-v2 capability for enhanced push status reporting
     ReportStatusv2,
+    /// OFS-delta capability for offset-based delta compression
     OfsDelta,
+    /// Deepen-since capability for shallow clone with time-based depth
     DeepenSince,
+    /// Deepen-not capability for shallow clone exclusions
     DeepenNot,
+    /// Deepen-relative capability for relative depth specification
+    DeepenRelative,
+    /// Thin-pack capability for efficient pack transmission
     ThinPack,
+    /// Shallow capability for shallow clone support
     Shallow,
-    Deepen,
+    /// Include-tag capability for automatic tag inclusion
     IncludeTag,
+    /// Delete-refs capability for reference deletion
     DeleteRefs,
+    /// Quiet capability to suppress output
     Quiet,
+    /// Atomic capability for atomic push operations
     Atomic,
+    /// No-thin capability to disable thin pack
     NoThin,
+    /// No-progress capability to disable progress reporting
+    NoProgress,
+    /// Allow-tip-sha1-in-want capability for fetching specific commits
     AllowTipSha1InWant,
+    /// Allow-reachable-sha1-in-want capability for fetching reachable commits
     AllowReachableSha1InWant,
+    /// Push-cert capability for signed push certificates
     PushCert(String),
+    /// Push-options capability for additional push metadata
     PushOptions,
+    /// Object-format capability for specifying hash algorithm
     ObjectFormat(String),
-    ServerOption(String),
+    /// Session-id capability for session tracking
     SessionId(String),
-    PackfileUris(String),
-    Lfs,
+    /// Filter capability for partial clone support
+    Filter(String),
+    /// Symref capability for symbolic reference information
+    Symref(String),
+    /// Agent capability for client/server identification
     Agent(String),
+    /// Unknown capability for forward compatibility
     Unknown(String),
 }
 
@@ -127,20 +182,20 @@ impl FromStr for Capability {
         if let Some(rest) = s.strip_prefix("agent=") {
             return Ok(Capability::Agent(rest.to_string()));
         }
-        if let Some(rest) = s.strip_prefix("server-option=") {
-            return Ok(Capability::ServerOption(rest.to_string()));
-        }
         if let Some(rest) = s.strip_prefix("session-id=") {
             return Ok(Capability::SessionId(rest.to_string()));
-        }
-        if let Some(rest) = s.strip_prefix("packfile-uris=") {
-            return Ok(Capability::PackfileUris(rest.to_string()));
         }
         if let Some(rest) = s.strip_prefix("push-cert=") {
             return Ok(Capability::PushCert(rest.to_string()));
         }
         if let Some(rest) = s.strip_prefix("object-format=") {
             return Ok(Capability::ObjectFormat(rest.to_string()));
+        }
+        if let Some(rest) = s.strip_prefix("filter=") {
+            return Ok(Capability::Filter(rest.to_string()));
+        }
+        if let Some(rest) = s.strip_prefix("symref=") {
+            return Ok(Capability::Symref(rest.to_string()));
         }
 
         match s {
@@ -154,18 +209,18 @@ impl FromStr for Capability {
             "ofs-delta" => Ok(Capability::OfsDelta),
             "deepen-since" => Ok(Capability::DeepenSince),
             "deepen-not" => Ok(Capability::DeepenNot),
+            "deepen-relative" => Ok(Capability::DeepenRelative),
             "thin-pack" => Ok(Capability::ThinPack),
             "shallow" => Ok(Capability::Shallow),
-            "deepen" => Ok(Capability::Deepen),
             "include-tag" => Ok(Capability::IncludeTag),
             "delete-refs" => Ok(Capability::DeleteRefs),
             "quiet" => Ok(Capability::Quiet),
             "atomic" => Ok(Capability::Atomic),
             "no-thin" => Ok(Capability::NoThin),
+            "no-progress" => Ok(Capability::NoProgress),
             "allow-tip-sha1-in-want" => Ok(Capability::AllowTipSha1InWant),
             "allow-reachable-sha1-in-want" => Ok(Capability::AllowReachableSha1InWant),
             "push-options" => Ok(Capability::PushOptions),
-            "lfs" => Ok(Capability::Lfs),
             _ => Ok(Capability::Unknown(s.to_string())),
         }
     }
@@ -184,23 +239,23 @@ impl std::fmt::Display for Capability {
             Capability::OfsDelta => write!(f, "ofs-delta"),
             Capability::DeepenSince => write!(f, "deepen-since"),
             Capability::DeepenNot => write!(f, "deepen-not"),
+            Capability::DeepenRelative => write!(f, "deepen-relative"),
             Capability::ThinPack => write!(f, "thin-pack"),
             Capability::Shallow => write!(f, "shallow"),
-            Capability::Deepen => write!(f, "deepen"),
             Capability::IncludeTag => write!(f, "include-tag"),
             Capability::DeleteRefs => write!(f, "delete-refs"),
             Capability::Quiet => write!(f, "quiet"),
             Capability::Atomic => write!(f, "atomic"),
             Capability::NoThin => write!(f, "no-thin"),
+            Capability::NoProgress => write!(f, "no-progress"),
             Capability::AllowTipSha1InWant => write!(f, "allow-tip-sha1-in-want"),
             Capability::AllowReachableSha1InWant => write!(f, "allow-reachable-sha1-in-want"),
             Capability::PushCert(value) => write!(f, "push-cert={}", value),
             Capability::PushOptions => write!(f, "push-options"),
             Capability::ObjectFormat(format) => write!(f, "object-format={}", format),
-            Capability::ServerOption(option) => write!(f, "server-option={}", option),
             Capability::SessionId(id) => write!(f, "session-id={}", id),
-            Capability::PackfileUris(uris) => write!(f, "packfile-uris={}", uris),
-            Capability::Lfs => write!(f, "lfs"),
+            Capability::Filter(filter) => write!(f, "filter={}", filter),
+            Capability::Symref(symref) => write!(f, "symref={}", symref),
             Capability::Agent(agent) => write!(f, "agent={}", agent),
             Capability::Unknown(s) => write!(f, "{}", s),
         }
@@ -208,7 +263,7 @@ impl std::fmt::Display for Capability {
 }
 
 /// Side-band types for multiplexed data streams
-pub enum SideBind {
+pub enum SideBand {
     /// Sideband 1 contains packfile data
     PackfileData,
     /// Sideband 2 contains progress information
@@ -217,7 +272,7 @@ pub enum SideBind {
     Error,
 }
 
-impl SideBind {
+impl SideBand {
     pub fn value(&self) -> u8 {
         match self {
             Self::PackfileData => b'\x01',
@@ -321,5 +376,5 @@ pub const PKT_LINE_END_MARKER: &[u8; 4] = b"0000";
 // Git protocol capability lists
 pub const RECEIVE_CAP_LIST: &str =
     "report-status report-status-v2 delete-refs quiet atomic no-thin ";
-pub const COMMON_CAP_LIST: &str = "side-band-64k ofs-delta lfs agent=git-internal/0.1.0";
+pub const COMMON_CAP_LIST: &str = "side-band-64k ofs-delta agent=git-internal/0.1.0";
 pub const UPLOAD_CAP_LIST: &str = "multi_ack_detailed no-done include-tag ";

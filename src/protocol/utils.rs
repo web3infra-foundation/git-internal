@@ -92,7 +92,7 @@ pub fn read_until_white_space(bytes: &mut Bytes) -> String {
 
 pub fn build_smart_reply(
     transport_protocol: TransportProtocol,
-    ref_list: &Vec<String>,
+    ref_list: &[String],
     service: String,
 ) -> BytesMut {
     let mut pkt_line_stream = BytesMut::new();

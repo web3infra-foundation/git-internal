@@ -5,16 +5,15 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::StreamExt;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::str::FromStr;
 
 use crate::hash::SHA1;
 use crate::internal::object::ObjectTrait;
 
 use super::smart::SmartProtocol;
-use super::types::{ProtocolError, ServiceType};
+use super::types::{ProtocolError, ProtocolStream, ServiceType};
 
 /// Repository access trait for storage operations
 ///
@@ -23,29 +22,20 @@ use super::types::{ProtocolError, ServiceType};
 #[async_trait]
 pub trait RepositoryAccess: Send + Sync + Clone {
     /// Get repository references as raw (name, hash) pairs
-    async fn get_repository_refs(
-        &self,
-        repo_path: &str,
-    ) -> Result<Vec<(String, String)>, ProtocolError>;
+    async fn get_repository_refs(&self) -> Result<Vec<(String, String)>, ProtocolError>;
 
     /// Check if an object exists in the repository
-    async fn has_object(&self, repo_path: &str, object_hash: &str) -> Result<bool, ProtocolError>;
+    async fn has_object(&self, object_hash: &str) -> Result<bool, ProtocolError>;
 
     /// Get raw object data by hash
-    async fn get_object(
-        &self,
-        repo_path: &str,
-        object_hash: &str,
-    ) -> Result<Vec<u8>, ProtocolError>;
+    async fn get_object(&self, object_hash: &str) -> Result<Vec<u8>, ProtocolError>;
 
     /// Store pack data in the repository
-    async fn store_pack_data(&self, repo_path: &str, pack_data: &[u8])
-    -> Result<(), ProtocolError>;
+    async fn store_pack_data(&self, pack_data: &[u8]) -> Result<(), ProtocolError>;
 
     /// Update a single reference
     async fn update_reference(
         &self,
-        repo_path: &str,
         ref_name: &str,
         old_hash: Option<&str>,
         new_hash: &str,
@@ -54,27 +44,25 @@ pub trait RepositoryAccess: Send + Sync + Clone {
     /// Get objects needed for pack generation
     async fn get_objects_for_pack(
         &self,
-        repo_path: &str,
         wants: &[String],
         haves: &[String],
     ) -> Result<Vec<String>, ProtocolError>;
 
     /// Check if repository has a default branch
-    async fn has_default_branch(&self, repo_path: &str) -> Result<bool, ProtocolError>;
+    async fn has_default_branch(&self) -> Result<bool, ProtocolError>;
 
     /// Post-receive hook after successful push
-    async fn post_receive_hook(&self, repo_path: &str) -> Result<(), ProtocolError>;
+    async fn post_receive_hook(&self) -> Result<(), ProtocolError>;
 
-    /// Get blob data by hash (with repo_path)
+    /// Get blob data by hash
     ///
     /// Default implementation parses the object data using the internal object module.
     /// Override this method if you need custom blob handling logic.
     async fn get_blob(
         &self,
-        repo_path: &str,
         object_hash: &str,
     ) -> Result<crate::internal::object::blob::Blob, ProtocolError> {
-        let data = self.get_object(repo_path, object_hash).await?;
+        let data = self.get_object(object_hash).await?;
         let hash = SHA1::from_str(object_hash)
             .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
 
@@ -82,16 +70,15 @@ pub trait RepositoryAccess: Send + Sync + Clone {
             .map_err(|e| ProtocolError::repository_error(format!("Failed to parse blob: {}", e)))
     }
 
-    /// Get commit data by hash (with repo_path)
+    /// Get commit data by hash
     ///
     /// Default implementation parses the object data using the internal object module.
     /// Override this method if you need custom commit handling logic.
     async fn get_commit(
         &self,
-        repo_path: &str,
         commit_hash: &str,
     ) -> Result<crate::internal::object::commit::Commit, ProtocolError> {
-        let data = self.get_object(repo_path, commit_hash).await?;
+        let data = self.get_object(commit_hash).await?;
         let hash = SHA1::from_str(commit_hash)
             .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
 
@@ -99,16 +86,15 @@ pub trait RepositoryAccess: Send + Sync + Clone {
             .map_err(|e| ProtocolError::repository_error(format!("Failed to parse commit: {}", e)))
     }
 
-    /// Get tree data by hash (with repo_path)
+    /// Get tree data by hash
     ///
     /// Default implementation parses the object data using the internal object module.
     /// Override this method if you need custom tree handling logic.
     async fn get_tree(
         &self,
-        repo_path: &str,
         tree_hash: &str,
     ) -> Result<crate::internal::object::tree::Tree, ProtocolError> {
-        let data = self.get_object(repo_path, tree_hash).await?;
+        let data = self.get_object(tree_hash).await?;
         let hash = SHA1::from_str(tree_hash)
             .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
 
@@ -116,23 +102,19 @@ pub trait RepositoryAccess: Send + Sync + Clone {
             .map_err(|e| ProtocolError::repository_error(format!("Failed to parse tree: {}", e)))
     }
 
-    /// Check if a commit exists (with repo_path)
+    /// Check if a commit exists
     ///
     /// Default implementation checks object existence and validates it's a commit.
     /// Override this method if you have more efficient commit existence checking.
-    async fn commit_exists(
-        &self,
-        repo_path: &str,
-        commit_hash: &str,
-    ) -> Result<bool, ProtocolError> {
-        match self.has_object(repo_path, commit_hash).await {
+    async fn commit_exists(&self, commit_hash: &str) -> Result<bool, ProtocolError> {
+        match self.has_object(commit_hash).await {
             Ok(exists) => {
                 if !exists {
                     return Ok(false);
                 }
 
                 // Verify it's actually a commit by trying to parse it
-                match self.get_commit(repo_path, commit_hash).await {
+                match self.get_commit(commit_hash).await {
                     Ok(_) => Ok(true),
                     Err(_) => Ok(false), // Object exists but is not a valid commit
                 }
@@ -141,13 +123,12 @@ pub trait RepositoryAccess: Send + Sync + Clone {
         }
     }
 
-    /// Handle pack objects (commits, trees, blobs) after unpacking (with repo_path)
+    /// Handle pack objects after unpacking
     ///
     /// Default implementation stores each object individually using store_pack_data.
     /// Override this method if you need batch processing or custom storage logic.
     async fn handle_pack_objects(
         &self,
-        repo_path: &str,
         commits: Vec<crate::internal::object::commit::Commit>,
         trees: Vec<crate::internal::object::tree::Tree>,
         blobs: Vec<crate::internal::object::blob::Blob>,
@@ -157,7 +138,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
             let data = blob.to_data().map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to serialize blob: {}", e))
             })?;
-            self.store_pack_data(repo_path, &data).await.map_err(|e| {
+            self.store_pack_data(&data).await.map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to store blob {}: {}", blob.id, e))
             })?;
         }
@@ -167,7 +148,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
             let data = tree.to_data().map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to serialize tree: {}", e))
             })?;
-            self.store_pack_data(repo_path, &data).await.map_err(|e| {
+            self.store_pack_data(&data).await.map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to store tree {}: {}", tree.id, e))
             })?;
         }
@@ -177,7 +158,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
             let data = commit.to_data().map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to serialize commit: {}", e))
             })?;
-            self.store_pack_data(repo_path, &data).await.map_err(|e| {
+            self.store_pack_data(&data).await.map_err(|e| {
                 ProtocolError::repository_error(format!(
                     "Failed to store commit {}: {}",
                     commit.id, e
@@ -253,56 +234,35 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
     }
 
     /// Handle git info-refs request
-    pub async fn info_refs(
-        &mut self,
-        repo_path: &str,
-        service: &str,
-    ) -> Result<Vec<u8>, ProtocolError> {
+    pub async fn info_refs(&self, service: &str) -> Result<Vec<u8>, ProtocolError> {
         let service_type = match service {
             "git-upload-pack" => ServiceType::UploadPack,
             "git-receive-pack" => ServiceType::ReceivePack,
-            _ => return Err(ProtocolError::InvalidService(service.to_string())),
+            _ => return Err(ProtocolError::invalid_service(service)),
         };
 
-        self.smart_protocol.set_service_type(service_type);
-
-        self.smart_protocol
-            .git_info_refs(repo_path)
-            .await
-            .map(|bytes| bytes.to_vec())
+        let bytes = self.smart_protocol.git_info_refs(service_type).await?;
+        Ok(bytes.to_vec())
     }
 
     /// Handle git-upload-pack request (for clone/fetch)
     pub async fn upload_pack(
         &mut self,
-        repo_path: &str,
         request_data: &[u8],
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>, ProtocolError>
-    {
-        self.smart_protocol
-            .set_service_type(ServiceType::UploadPack);
-
-        let mut request_bytes = bytes::Bytes::from(request_data.to_vec());
-        let (stream, _) = self
-            .smart_protocol
-            .git_upload_pack(repo_path, &mut request_bytes)
-            .await?;
+    ) -> Result<ProtocolStream, ProtocolError> {
+        let request_bytes = bytes::Bytes::from(request_data.to_vec());
+        let (stream, _) = self.smart_protocol.git_upload_pack(request_bytes).await?;
         Ok(Box::pin(stream.map(|data| Ok(Bytes::from(data)))))
     }
 
     /// Handle git-receive-pack request (for push)
     pub async fn receive_pack(
         &mut self,
-        repo_path: &str,
-        request_stream: Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>, ProtocolError>
-    {
-        self.smart_protocol
-            .set_service_type(ServiceType::ReceivePack);
-
+        request_stream: ProtocolStream,
+    ) -> Result<ProtocolStream, ProtocolError> {
         let result_bytes = self
             .smart_protocol
-            .git_receive_pack_stream(repo_path, request_stream)
+            .git_receive_pack_stream(request_stream)
             .await?;
         // Return the report status as a single-chunk stream
         Ok(Box::pin(futures::stream::once(async { Ok(result_bytes) })))

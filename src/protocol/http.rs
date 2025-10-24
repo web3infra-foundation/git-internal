@@ -1,7 +1,5 @@
 use super::core::{AuthenticationService, GitProtocol, RepositoryAccess};
-use super::types::ProtocolError;
-use bytes::Bytes;
-use futures::stream::Stream;
+use super::types::{ProtocolError, ProtocolStream};
 /// HTTP transport adapter for Git protocol
 ///
 /// This module provides HTTP-specific handling for Git smart protocol operations.
@@ -9,7 +7,6 @@ use futures::stream::Stream;
 /// request/response formatting and uses the utility functions for proper HTTP handling.
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::pin::Pin;
 
 /// HTTP Git protocol handler
 pub struct HttpGitHandler<R: RepositoryAccess, A: AuthenticationService> {
@@ -42,8 +39,8 @@ impl<R: RepositoryAccess, A: AuthenticationService> HttpGitHandler<R, A> {
         request_path: &str,
         query: &str,
     ) -> Result<(Vec<u8>, &'static str), ProtocolError> {
-        // Extract repository path from request
-        let repo_path = extract_repo_path(request_path)
+        // Validate repository path exists in request
+        extract_repo_path(request_path)
             .ok_or_else(|| ProtocolError::InvalidRequest("Invalid repository path".to_string()))?;
 
         // Get service from query parameters
@@ -58,7 +55,7 @@ impl<R: RepositoryAccess, A: AuthenticationService> HttpGitHandler<R, A> {
             ));
         }
 
-        let response_data = self.protocol.info_refs(repo_path, service).await?;
+        let response_data = self.protocol.info_refs(service).await?;
         let content_type = get_advertisement_content_type(service);
 
         Ok((response_data, content_type))
@@ -71,15 +68,9 @@ impl<R: RepositoryAccess, A: AuthenticationService> HttpGitHandler<R, A> {
         &mut self,
         request_path: &str,
         request_body: &[u8],
-    ) -> Result<
-        (
-            Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>,
-            &'static str,
-        ),
-        ProtocolError,
-    > {
-        // Extract repository path from request
-        let repo_path = extract_repo_path(request_path)
+    ) -> Result<(ProtocolStream, &'static str), ProtocolError> {
+        // Validate repository path exists in request
+        extract_repo_path(request_path)
             .ok_or_else(|| ProtocolError::InvalidRequest("Invalid repository path".to_string()))?;
 
         // Validate it's a Git request
@@ -89,7 +80,7 @@ impl<R: RepositoryAccess, A: AuthenticationService> HttpGitHandler<R, A> {
             ));
         }
 
-        let response_stream = self.protocol.upload_pack(repo_path, request_body).await?;
+        let response_stream = self.protocol.upload_pack(request_body).await?;
         let content_type = get_content_type("git-upload-pack");
 
         Ok((response_stream, content_type))
@@ -101,16 +92,10 @@ impl<R: RepositoryAccess, A: AuthenticationService> HttpGitHandler<R, A> {
     pub async fn handle_receive_pack(
         &mut self,
         request_path: &str,
-        request_stream: Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>,
-    ) -> Result<
-        (
-            Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>,
-            &'static str,
-        ),
-        ProtocolError,
-    > {
-        // Extract repository path from request
-        let repo_path = extract_repo_path(request_path)
+        request_stream: ProtocolStream,
+    ) -> Result<(ProtocolStream, &'static str), ProtocolError> {
+        // Validate repository path exists in request
+        extract_repo_path(request_path)
             .ok_or_else(|| ProtocolError::InvalidRequest("Invalid repository path".to_string()))?;
 
         // Validate it's a Git request
@@ -120,10 +105,7 @@ impl<R: RepositoryAccess, A: AuthenticationService> HttpGitHandler<R, A> {
             ));
         }
 
-        let response_stream = self
-            .protocol
-            .receive_pack(repo_path, request_stream)
-            .await?;
+        let response_stream = self.protocol.receive_pack(request_stream).await?;
         let content_type = get_content_type("git-receive-pack");
 
         Ok((response_stream, content_type))

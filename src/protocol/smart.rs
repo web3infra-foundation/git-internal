@@ -1,7 +1,4 @@
-use std::pin::Pin;
-
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::Stream;
 use std::collections::HashMap;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -9,8 +6,9 @@ use super::core::{AuthenticationService, RepositoryAccess};
 use super::pack::PackGenerator;
 use super::types::ProtocolError;
 use super::types::{
-    COMMON_CAP_LIST, Capability, LF, NUL, PKT_LINE_END_MARKER, RECEIVE_CAP_LIST, RefCommand,
-    RefTypeEnum, SP, ServiceType, SideBind, TransportProtocol, UPLOAD_CAP_LIST, ZERO_ID,
+    COMMON_CAP_LIST, Capability, LF, NUL, PKT_LINE_END_MARKER, ProtocolStream, RECEIVE_CAP_LIST,
+    RefCommand, RefTypeEnum, SP, ServiceType, SideBand, TransportProtocol, UPLOAD_CAP_LIST,
+    ZERO_ID,
 };
 use super::utils::{add_pkt_line_string, build_smart_reply, read_pkt_line, read_until_white_space};
 
@@ -24,9 +22,8 @@ where
     A: AuthenticationService,
 {
     pub transport_protocol: TransportProtocol,
-    pub service_type: Option<ServiceType>,
     pub capabilities: Vec<Capability>,
-    pub side_bind: Option<SideBind>,
+    pub side_band: Option<SideBand>,
     pub command_list: Vec<RefCommand>,
 
     // Trait-based dependencies
@@ -43,9 +40,8 @@ where
     pub fn new(transport_protocol: TransportProtocol, repo_storage: R, auth_service: A) -> Self {
         Self {
             transport_protocol,
-            service_type: None,
             capabilities: Vec::new(),
-            side_bind: None,
+            side_band: None,
             command_list: Vec::new(),
             repo_storage,
             auth_service,
@@ -71,32 +67,20 @@ where
             .await
     }
 
-    /// Set the service type for this protocol session
-    pub fn set_service_type(&mut self, service_type: ServiceType) {
-        self.service_type = Some(service_type);
-    }
-
-    /// Get the current service type
-    pub fn get_service_type(&self) -> Option<ServiceType> {
-        self.service_type
-    }
-
     /// Set transport protocol (Http, Ssh, etc.)
     pub fn set_transport_protocol(&mut self, protocol: TransportProtocol) {
         self.transport_protocol = protocol;
     }
 
-    /// Get git info refs for the repository
-    pub async fn git_info_refs(&self, repo_path: &str) -> Result<BytesMut, ProtocolError> {
-        let service_type = self
-            .service_type
-            .ok_or_else(|| ProtocolError::repository_error("Service type not set".to_string()))?;
-
-        let refs = self
-            .repo_storage
-            .get_repository_refs(repo_path)
-            .await
-            .map_err(|e| ProtocolError::repository_error(format!("Failed to get refs: {}", e)))?;
+    /// Get git info refs for the repository, with explicit service type
+    pub async fn git_info_refs(
+        &self,
+        service_type: ServiceType,
+    ) -> Result<BytesMut, ProtocolError> {
+        let refs =
+            self.repo_storage.get_repository_refs().await.map_err(|e| {
+                ProtocolError::repository_error(format!("Failed to get refs: {}", e))
+            })?;
 
         // Convert to the expected format (head_hash, git_refs)
         let head_hash = refs
@@ -138,19 +122,19 @@ where
         Ok(pkt_line_stream)
     }
 
-    /// Handle git upload-pack operation (fetch/clone)
+    /// Handle git-upload-pack request
     pub async fn git_upload_pack(
         &mut self,
-        repo_path: &str,
-        upload_request: &mut Bytes,
+        upload_request: Bytes,
     ) -> Result<(ReceiverStream<Vec<u8>>, BytesMut), ProtocolError> {
+        let mut upload_request = upload_request;
         let mut want: Vec<String> = Vec::new();
         let mut have: Vec<String> = Vec::new();
         let mut last_common_commit = String::new();
 
         let mut read_first_line = false;
         loop {
-            let (bytes_take, pkt_line) = read_pkt_line(upload_request);
+            let (bytes_take, pkt_line) = read_pkt_line(&mut upload_request);
 
             if bytes_take == 0 {
                 break;
@@ -189,7 +173,7 @@ where
         let mut protocol_buf = BytesMut::new();
 
         // Create pack generator for this operation
-        let pack_generator = PackGenerator::new(&self.repo_storage, repo_path);
+        let pack_generator = PackGenerator::new(&self.repo_storage);
 
         if have.is_empty() {
             // Full pack
@@ -200,16 +184,9 @@ where
 
         // Check for common commits
         for hash in &have {
-            let exists = self
-                .repo_storage
-                .commit_exists(repo_path, hash)
-                .await
-                .map_err(|e| {
-                    ProtocolError::repository_error(format!(
-                        "Failed to check commit existence: {}",
-                        e
-                    ))
-                })?;
+            let exists = self.repo_storage.commit_exists(hash).await.map_err(|e| {
+                ProtocolError::repository_error(format!("Failed to check commit existence: {}", e))
+            })?;
             if exists {
                 add_pkt_line_string(&mut protocol_buf, format!("ACK {hash} common\n"));
                 if last_common_commit.is_empty() {
@@ -260,8 +237,7 @@ where
     /// Handle git receive-pack operation (push)
     pub async fn git_receive_pack_stream(
         &mut self,
-        repo_path: &str,
-        data_stream: Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>,
+        data_stream: ProtocolStream,
     ) -> Result<Bytes, ProtocolError> {
         // Collect all pack data from stream
         let mut pack_data = BytesMut::new();
@@ -274,14 +250,14 @@ where
         }
 
         // Create pack generator for unpacking
-        let pack_generator = PackGenerator::new(&self.repo_storage, repo_path);
+        let pack_generator = PackGenerator::new(&self.repo_storage);
 
         // Unpack the received data
         let (commits, trees, blobs) = pack_generator.unpack_stream(pack_data.freeze()).await?;
 
         // Store the unpacked objects via the repository access trait
         self.repo_storage
-            .handle_pack_objects(repo_path, commits, trees, blobs)
+            .handle_pack_objects(commits, trees, blobs)
             .await
             .map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to store pack objects: {}", e))
@@ -291,13 +267,9 @@ where
         let mut report_status = BytesMut::new();
         add_pkt_line_string(&mut report_status, "unpack ok\n".to_owned());
 
-        let mut default_exist = self
-            .repo_storage
-            .has_default_branch(repo_path)
-            .await
-            .map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to check default branch: {}", e))
-            })?;
+        let mut default_exist = self.repo_storage.has_default_branch().await.map_err(|e| {
+            ProtocolError::repository_error(format!("Failed to check default branch: {}", e))
+        })?;
 
         // Update refs with proper error handling
         for command in &mut self.command_list {
@@ -311,7 +283,7 @@ where
                 };
                 if let Err(e) = self
                     .repo_storage
-                    .update_reference(repo_path, &command.ref_name, old_hash, &command.new_hash)
+                    .update_reference(&command.ref_name, old_hash, &command.new_hash)
                     .await
                 {
                     command.failed(e.to_string());
@@ -330,7 +302,7 @@ where
                 };
                 if let Err(e) = self
                     .repo_storage
-                    .update_reference(repo_path, &command.ref_name, old_hash, &command.new_hash)
+                    .update_reference(&command.ref_name, old_hash, &command.new_hash)
                     .await
                 {
                     command.failed(e.to_string());
@@ -340,12 +312,9 @@ where
         }
 
         // Post-receive hook
-        self.repo_storage
-            .post_receive_hook(repo_path)
-            .await
-            .map_err(|e| {
-                ProtocolError::repository_error(format!("Post-receive hook failed: {}", e))
-            })?;
+        self.repo_storage.post_receive_hook().await.map_err(|e| {
+            ProtocolError::repository_error(format!("Post-receive hook failed: {}", e))
+        })?;
 
         report_status.put(&PKT_LINE_END_MARKER[..]);
         Ok(report_status.freeze())
@@ -359,7 +328,7 @@ where
         {
             let length = length + 5;
             to_bytes.put(Bytes::from(format!("{length:04x}")));
-            to_bytes.put_u8(SideBind::PackfileData.value());
+            to_bytes.put_u8(SideBand::PackfileData.value());
             to_bytes.put(from_bytes);
         } else {
             to_bytes.put(from_bytes);
@@ -440,10 +409,7 @@ mod tests {
 
     #[async_trait]
     impl RepositoryAccess for TestRepoAccess {
-        async fn get_repository_refs(
-            &self,
-            _repo_path: &str,
-        ) -> Result<Vec<(String, String)>, ProtocolError> {
+        async fn get_repository_refs(&self) -> Result<Vec<(String, String)>, ProtocolError> {
             Ok(vec![
                 (
                     "HEAD".to_string(),
@@ -456,34 +422,21 @@ mod tests {
             ])
         }
 
-        async fn has_object(
-            &self,
-            _repo_path: &str,
-            _object_hash: &str,
-        ) -> Result<bool, ProtocolError> {
+        async fn has_object(&self, _object_hash: &str) -> Result<bool, ProtocolError> {
             Ok(true)
         }
 
-        async fn get_object(
-            &self,
-            _repo_path: &str,
-            _object_hash: &str,
-        ) -> Result<Vec<u8>, ProtocolError> {
+        async fn get_object(&self, _object_hash: &str) -> Result<Vec<u8>, ProtocolError> {
             Ok(vec![])
         }
 
-        async fn store_pack_data(
-            &self,
-            _repo_path: &str,
-            _pack_data: &[u8],
-        ) -> Result<(), ProtocolError> {
+        async fn store_pack_data(&self, _pack_data: &[u8]) -> Result<(), ProtocolError> {
             *self.stored_count.lock().unwrap() += 1;
             Ok(())
         }
 
         async fn update_reference(
             &self,
-            _repo_path: &str,
             ref_name: &str,
             old_hash: Option<&str>,
             new_hash: &str,
@@ -498,21 +451,20 @@ mod tests {
 
         async fn get_objects_for_pack(
             &self,
-            _repo_path: &str,
             _wants: &[String],
             _haves: &[String],
         ) -> Result<Vec<String>, ProtocolError> {
             Ok(vec![])
         }
 
-        async fn has_default_branch(&self, _repo_path: &str) -> Result<bool, ProtocolError> {
+        async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
             let mut exists = self.default_branch_exists.lock().unwrap();
             let current = *exists;
             *exists = true; // flip to true after first check
             Ok(current)
         }
 
-        async fn post_receive_hook(&self, _repo_path: &str) -> Result<(), ProtocolError> {
+        async fn post_receive_hook(&self) -> Result<(), ProtocolError> {
             self.post_called.store(true, Ordering::SeqCst);
             Ok(())
         }
@@ -603,7 +555,7 @@ mod tests {
 
         // Execute receive-pack
         let result_bytes = smart
-            .git_receive_pack_stream("test-repo-path", request_stream)
+            .git_receive_pack_stream(request_stream)
             .await
             .expect("receive-pack should succeed");
 
