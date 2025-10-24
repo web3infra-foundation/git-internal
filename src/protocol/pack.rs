@@ -20,18 +20,14 @@ where
     R: RepositoryAccess,
 {
     repo_access: &'a R,
-    repo_path: &'a str,
 }
 
 impl<'a, R> PackGenerator<'a, R>
 where
     R: RepositoryAccess,
 {
-    pub fn new(repo_access: &'a R, repo_path: &'a str) -> Self {
-        Self {
-            repo_access,
-            repo_path,
-        }
+    pub fn new(repo_access: &'a R) -> Self {
+        Self { repo_access }
     }
 
     /// Generate a full pack containing all requested objects
@@ -165,7 +161,7 @@ where
             // Get commit object
             let commit = self
                 .repo_access
-                .get_commit(self.repo_path, &commit_hash)
+                .get_commit(&commit_hash)
                 .await
                 .map_err(|e| {
                     ProtocolError::repository_error(format!(
@@ -212,13 +208,9 @@ where
         }
         visited_trees.insert(tree_hash.to_string());
 
-        let tree = self
-            .repo_access
-            .get_tree(self.repo_path, tree_hash)
-            .await
-            .map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to get tree {}: {}", tree_hash, e))
-            })?;
+        let tree = self.repo_access.get_tree(tree_hash).await.map_err(|e| {
+            ProtocolError::repository_error(format!("Failed to get tree {}: {}", tree_hash, e))
+        })?;
 
         for entry in &tree.tree_items {
             let entry_hash = entry.id.to_string();
@@ -237,16 +229,12 @@ where
                 | crate::internal::object::tree::TreeItemMode::BlobExecutable => {
                     if !visited_blobs.contains(&entry_hash) {
                         visited_blobs.insert(entry_hash.clone());
-                        let blob = self
-                            .repo_access
-                            .get_blob(self.repo_path, &entry_hash)
-                            .await
-                            .map_err(|e| {
-                                ProtocolError::repository_error(format!(
-                                    "Failed to get blob {}: {}",
-                                    entry_hash, e
-                                ))
-                            })?;
+                        let blob = self.repo_access.get_blob(&entry_hash).await.map_err(|e| {
+                            ProtocolError::repository_error(format!(
+                                "Failed to get blob {}: {}",
+                                entry_hash, e
+                            ))
+                        })?;
                         blobs.push(blob);
                     }
                 }
@@ -363,38 +351,22 @@ mod tests {
 
     #[async_trait]
     impl RepositoryAccess for DummyRepoAccess {
-        async fn get_repository_refs(
-            &self,
-            _repo_path: &str,
-        ) -> Result<Vec<(String, String)>, ProtocolError> {
+        async fn get_repository_refs(&self) -> Result<Vec<(String, String)>, ProtocolError> {
             Ok(vec![])
         }
-        async fn has_object(
-            &self,
-            _repo_path: &str,
-            _object_hash: &str,
-        ) -> Result<bool, ProtocolError> {
+        async fn has_object(&self, _object_hash: &str) -> Result<bool, ProtocolError> {
             Ok(false)
         }
-        async fn get_object(
-            &self,
-            _repo_path: &str,
-            _object_hash: &str,
-        ) -> Result<Vec<u8>, ProtocolError> {
+        async fn get_object(&self, _object_hash: &str) -> Result<Vec<u8>, ProtocolError> {
             Err(ProtocolError::repository_error(
                 "not implemented".to_string(),
             ))
         }
-        async fn store_pack_data(
-            &self,
-            _repo_path: &str,
-            _pack_data: &[u8],
-        ) -> Result<(), ProtocolError> {
+        async fn store_pack_data(&self, _pack_data: &[u8]) -> Result<(), ProtocolError> {
             Ok(())
         }
         async fn update_reference(
             &self,
-            _repo_path: &str,
             _ref_name: &str,
             _old_hash: Option<&str>,
             _new_hash: &str,
@@ -403,32 +375,31 @@ mod tests {
         }
         async fn get_objects_for_pack(
             &self,
-            _repo_path: &str,
             _wants: &[String],
             _haves: &[String],
         ) -> Result<Vec<String>, ProtocolError> {
             Ok(vec![])
         }
-        async fn has_default_branch(&self, _repo_path: &str) -> Result<bool, ProtocolError> {
+        async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
             Ok(false)
         }
-        async fn post_receive_hook(&self, _repo_path: &str) -> Result<(), ProtocolError> {
+        async fn post_receive_hook(&self) -> Result<(), ProtocolError> {
             Ok(())
         }
     }
 
     #[tokio::test]
     async fn test_pack_roundtrip_encode_decode() {
-        // 构造两个 Blob
+        // Create two Blob objects
         let blob1 = Blob::from_content("hello");
         let blob2 = Blob::from_content("world");
 
-        // 构造一个 Tree，包含两个文件项
+        // Create a Tree containing two file items
         let item1 = TreeItem::new(TreeItemMode::Blob, blob1.id, "hello.txt".to_string());
         let item2 = TreeItem::new(TreeItemMode::Blob, blob2.id, "world.txt".to_string());
         let tree = Tree::from_tree_items(vec![item1, item2]).unwrap();
 
-        // 构造一个 Commit 指向该 Tree
+        // Create a Commit pointing to the Tree
         let author = Signature::new(
             SignatureType::Author,
             "tester".to_string(),
@@ -441,7 +412,7 @@ mod tests {
         );
         let commit = Commit::new(author, committer, tree.id, vec![], "init commit");
 
-        // 生成 pack 流
+        // Generate pack stream
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
         PackGenerator::<DummyRepoAccess>::generate_pack_stream(
             (
@@ -460,9 +431,9 @@ mod tests {
         }
         println!("Encoded pack size: {} bytes", pack_bytes.len());
 
-        // 解包 pack 流
+        // Unpack the pack stream
         let dummy = DummyRepoAccess;
-        let generator = PackGenerator::new(&dummy, "test-repo-path");
+        let generator = PackGenerator::new(&dummy);
         let (decoded_commits, decoded_trees, decoded_blobs) = generator
             .unpack_stream(Bytes::from(pack_bytes))
             .await
@@ -490,7 +461,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        // 验证对象 ID 往返一致
+        // Verify object ID roundtrip consistency
         assert_eq!(decoded_commits.len(), 1);
         assert_eq!(decoded_trees.len(), 1);
         assert_eq!(decoded_blobs.len(), 2);
