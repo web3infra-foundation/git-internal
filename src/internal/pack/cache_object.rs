@@ -12,6 +12,7 @@ use threadpool::ThreadPool;
 use crate::internal::pack::entry::Entry;
 use crate::internal::pack::utils;
 use crate::{hash::SHA1, internal::object::types::ObjectType};
+use crate::internal::metadata::{EntryMeta, MetaAttached};
 
 // /// record heap-size of all CacheObjects, used for memory limit.
 // static CACHE_OBJS_MEM_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -85,6 +86,7 @@ pub struct CacheObject {
     pub offset: usize,
     pub data_decompressed: Vec<u8>,
     pub mem_recorder: Option<Arc<AtomicUsize>>, // record mem-size of all CacheObjects of a Pack
+    pub is_delta_in_pack: bool,
 }
 
 impl Clone for CacheObject {
@@ -94,6 +96,7 @@ impl Clone for CacheObject {
             offset: self.offset,
             data_decompressed: self.data_decompressed.clone(),
             mem_recorder: self.mem_recorder.clone(),
+            is_delta_in_pack: self.is_delta_in_pack,
         };
         obj.record_mem_size();
         obj
@@ -185,6 +188,7 @@ impl CacheObject {
             offset,
             data_decompressed: data,
             mem_recorder: None,
+            is_delta_in_pack: false,
         }
     }
 
@@ -233,6 +237,34 @@ impl CacheObject {
                 chain_len: 0,
             },
             _ => {
+                unreachable!("delta object should not persist!")
+            }
+        }
+    }
+    
+    pub fn to_entry_metadata(&self) -> MetaAttached<Entry,EntryMeta>{
+        match self.info {
+            CacheObjectInfo::BaseObject(obj_type, hash) => {
+                let entry = Entry {
+                    obj_type,
+                    data: self.data_decompressed.clone(),
+                    hash,
+                    chain_len: 0,
+                };
+                let meta = EntryMeta{
+                    // pack_id:Some(pack_id),
+                    pack_offset: Some(self.offset), 
+                    is_delta: self.is_delta_in_pack,
+                    ..Default::default()
+                };
+                MetaAttached{
+                    inner:entry,
+                    meta
+                }
+                
+            }
+        
+        _ => {
                 unreachable!("delta object should not persist!")
             }
         }
@@ -350,6 +382,7 @@ mod test {
             offset: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
+            is_delta_in_pack: false,
         };
         let mem = Arc::new(AtomicUsize::default());
         assert_eq!(mem.load(Ordering::Relaxed), 0);
@@ -367,6 +400,7 @@ mod test {
             offset: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
+            is_delta_in_pack: false,
         };
         assert!(a.heap_size() == 1024);
 
@@ -386,6 +420,7 @@ mod test {
             offset: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
+            is_delta_in_pack: false,
         };
         println!("a.heap_size() = {}", a.heap_size());
 
@@ -394,6 +429,7 @@ mod test {
             offset: 0,
             data_decompressed: vec![0; (1024.0 * 1.5) as usize],
             mem_recorder: None,
+            is_delta_in_pack: false,
         };
         {
             let r = cache.insert(
@@ -496,6 +532,7 @@ mod test {
             offset: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
+            is_delta_in_pack: false,
         };
         let s = bincode::serde::encode_to_vec(&a, bincode::config::standard()).unwrap();
         let b: CacheObject = bincode::serde::decode_from_slice(&s, bincode::config::standard())

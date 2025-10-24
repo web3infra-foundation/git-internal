@@ -302,6 +302,7 @@ impl Pack {
                     offset: init_offset,
                     data_decompressed: data,
                     mem_recorder: None,
+                    is_delta_in_pack: true,
                 })
             }
             ObjectType::HashDelta => {
@@ -321,6 +322,7 @@ impl Pack {
                     offset: init_offset,
                     data_decompressed: data,
                     mem_recorder: None,
+                    is_delta_in_pack: true,
                 })
             }
         }
@@ -567,7 +569,7 @@ impl Pack {
 
     /// Cache the new object & process the objects waiting for it (in multi-threading).
     fn cache_obj_and_process_waitlist(shared_params: Arc<SharedParams>, new_obj: CacheObject) {
-        (shared_params.callback)(new_obj.to_entry(), new_obj.offset);
+        (shared_params.callback)(new_obj.to_entry_metadata(), new_obj.offset);
         let new_obj = shared_params.caches.insert(
             new_obj.offset,
             new_obj.base_object_hash().unwrap(),
@@ -669,6 +671,7 @@ impl Pack {
             offset: delta_obj.offset,
             data_decompressed: result,
             mem_recorder: None,
+            is_delta_in_pack: delta_obj.is_delta_in_pack,
         } // Canonical form (Complete Object)
         // Memory recording will happen after this function returns. See `process_delta`
     }
@@ -681,6 +684,7 @@ impl Pack {
             offset: delta_obj.offset,
             data_decompressed: result,
             mem_recorder: None,
+            is_delta_in_pack: delta_obj.is_delta_in_pack,
         } // Canonical form (Complete Object)
         // Memory recording will happen after this function returns. See `process_delta`
     }
@@ -876,7 +880,9 @@ mod tests {
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
         let mut p = Pack::new(None, Some(1024 * 1024 * 20), Some(tmp), true);
+        print!("pack_id: {:?}",p.signature);
         p.decode(&mut buffered, |_, _| {}).unwrap();
+        print!("pack_id: {:?}",p.signature.to_string());
     }
 
     #[test] // Take too long time
