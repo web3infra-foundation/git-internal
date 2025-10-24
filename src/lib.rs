@@ -1,4 +1,4 @@
-//! Git-Internal: a high-performance Rust library for Git objects and pack files—encode/decode, delta (ref/offset/zstd), 
+//! Git-Internal: a high-performance Rust library for Git objects and pack files—encode/decode, delta (ref/offset/zstd),
 //! caching, streaming, and sync/async pipelines.
 //!
 //! Goals
@@ -33,7 +33,13 @@
 pub mod errors;
 pub mod hash;
 pub mod internal;
+pub mod protocol;
 pub mod utils;
 
-mod zstdelta;
 mod delta;
+mod zstdelta;
+
+// Core traits and types that external users need to implement/use
+pub use protocol::{
+    AuthenticationService, GitProtocol, ProtocolError, RepositoryAccess, ServiceType,
+};
