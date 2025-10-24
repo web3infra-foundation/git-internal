@@ -108,7 +108,7 @@ impl SHA1 {
     /// Calculate the SHA-1 hash of the byte slice, then create a Hash value
     pub fn new(data: &[u8]) -> SHA1 {
         let h = sha1::Sha1::digest(data);
-        SHA1::from_bytes(h.as_slice())
+        SHA1::from_bytes(h.as_ref())
     }
     /// Create a Hash from the object type and data
     /// This function is used to create a SHA1 hash from the object type and data.
