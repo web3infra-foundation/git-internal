@@ -50,9 +50,6 @@ This repository (git-internal) houses an advanced, internal rewrite / extension 
 
 ## Testing
 
-- Bench and regression test for pack size, object count, clone time under large scale.
-- Must interoperate with Git on disk and on network: support both SHA-1 and SHA-256 object IDs.
-- On examples or docs, always mention dual-stack context (SHA-1 legacy vs new SHA-256).
 
 ## Provide clear invariants
 
