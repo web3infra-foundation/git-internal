@@ -56,7 +56,6 @@ This repository (git-internal) houses an advanced, internal rewrite / extension 
 - Content-addressed: objects are identified by their content hash (SHA-1 or SHA-256).
 - Idempotent: same input always produces same output.
 - Backward/forward compatibility: old clients can fetch new packs, new clients can fetch old packs. 
-- Provide clear invariants: content-addressed, idempotent, backward/forward compatibility.
 
 ## Testing
 
