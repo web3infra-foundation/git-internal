@@ -2,18 +2,18 @@
 //!
 //! This module provides the main `GitProtocol` struct and `RepositoryAccess` trait
 //! that form the core interface of the git-internal library.
-
-use async_trait::async_trait;
-use bytes::Bytes;
-use futures::stream::StreamExt;
-use std::collections::HashMap;
 use std::str::FromStr;
+use std::collections::HashMap;
+
+use bytes::Bytes;
+use async_trait::async_trait;
+use futures::stream::StreamExt;
 
 use crate::hash::SHA1;
 use crate::internal::object::ObjectTrait;
 
-use super::smart::SmartProtocol;
-use super::types::{ProtocolError, ProtocolStream, ServiceType};
+use crate::protocol::smart::SmartProtocol;
+use crate::protocol::types::{ProtocolError, ProtocolStream, ServiceType};
 
 /// Repository access trait for storage operations
 ///
