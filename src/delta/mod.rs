@@ -163,7 +163,7 @@ mod tests {
 
         let rate1 = heuristic_encode_rate_parallel(&data3, &data4);
         let rate2 = encode_rate(&data3, &data4);
-        
+
         println!(
             "Large partially matching data rate = {}, accurate rate = {}",
             rate1, rate2

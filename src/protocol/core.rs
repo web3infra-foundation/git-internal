@@ -2,11 +2,11 @@
 //!
 //! This module provides the main `GitProtocol` struct and `RepositoryAccess` trait
 //! that form the core interface of the git-internal library.
-use std::str::FromStr;
 use std::collections::HashMap;
+use std::str::FromStr;
 
-use bytes::Bytes;
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::StreamExt;
 
 use crate::hash::SHA1;
