@@ -3,9 +3,9 @@ use std::collections::VecDeque;
 use std::io::Write;
 
 use crate::delta;
-use crate::zstdelta;
 use crate::internal::object::types::ObjectType;
 use crate::time_it;
+use crate::zstdelta;
 use crate::{errors::GitError, hash::SHA1, internal::pack::entry::Entry};
 use ahash::AHasher;
 use flate2::write::ZlibEncoder;
@@ -583,7 +583,7 @@ mod tests {
     async fn get_entries_for_test() -> Arc<Mutex<Vec<Entry>>> {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/data/packs/pack-f8bbb573cef7d851957caceb491c073ee8e8de41.pack");
-        
+
         let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
 
         let f = std::fs::File::open(&source).unwrap();

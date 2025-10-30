@@ -342,7 +342,7 @@ mod test {
     use lru_mem::LruCache;
 
     use super::*;
-    
+
     #[test]
     fn test_heap_size_record() {
         let mut obj = CacheObject {
@@ -374,7 +374,7 @@ mod test {
         let b = ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(false)), None);
         assert!(b.heap_size() == 1024);
     }
-    
+
     #[test]
     fn test_cache_object_with_lru() {
         let mut cache = LruCache::new(2048);
