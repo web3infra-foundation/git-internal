@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use crate::errors::GitError;
 use crate::hash::SHA1;
-use crate::zstdelta;
 use crate::internal::object::types::ObjectType;
+use crate::zstdelta;
 
 use super::cache_object::CacheObjectInfo;
 use crate::internal::pack::cache::_Cache;
@@ -879,7 +879,7 @@ mod tests {
         p.decode(&mut buffered, |_, _| {}).unwrap();
     }
 
-    #[test]// Take too long time
+    #[test] // Take too long time
     fn test_pack_decode_multi_task_with_large_file_with_delta_without_ref() {
         let task1 = std::thread::spawn(|| {
             test_pack_decode_with_large_file_with_delta_without_ref();
