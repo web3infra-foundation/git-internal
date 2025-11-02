@@ -254,7 +254,7 @@ impl CacheObject {
                 let meta = EntryMeta{
                     // pack_id:Some(pack_id),
                     pack_offset: Some(self.offset), 
-                    is_delta: self.is_delta_in_pack,
+                    is_delta: Some(self.is_delta_in_pack),
                     ..Default::default()
                 };
                 MetaAttached{
