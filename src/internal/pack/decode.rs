@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Cursor, ErrorKind, Read, Seek};
+use std::io::{self, BufRead, Cursor, ErrorKind, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,7 +21,6 @@ use crate::zstdelta;
 
 use crate::internal::object::types::ObjectType;
 
-
 use super::cache_object::CacheObjectInfo;
 use crate::internal::pack::cache::_Cache;
 use crate::internal::pack::cache::Caches;
@@ -31,7 +30,6 @@ use crate::internal::pack::entry::Entry;
 use crate::internal::pack::waitlist::Waitlist;
 use crate::internal::pack::wrapper::Wrapper;
 use crate::internal::pack::{DEFAULT_TMP_DIR, Pack, utils};
-use crate::internal::pack::encode::PackEncoder;
 use crate::utils::CountingReader;
 
 /// For the convenience of passing parameters
@@ -335,15 +333,19 @@ impl Pack {
 
     /// Decodes a pack file from a given Read and BufRead source, for each object in the pack,
     /// it decodes the object and processes it using the provided callback function.
-    pub fn decode<F,C>(
+    /// 
+    /// # Parameters
+    /// * pack_id_callback: A callback that seed pack_file sha1 for updating database
+    /// 
+    pub fn decode<F, C>(
         &mut self,
         pack: &mut (impl BufRead + Send),
         callback: F,
-        pack_id_callback: Option<C>
+        pack_id_callback: Option<C>,
     ) -> Result<(), GitError>
     where
-       F: Fn(MetaAttached<Entry, EntryMeta>) + Sync + Send + 'static,
-       C: FnOnce(SHA1)  + Send + 'static,
+        F: Fn(MetaAttached<Entry, EntryMeta>) + Sync + Send + 'static,
+        C: FnOnce(SHA1) + Send + 'static,
     {
         let time = Instant::now();
         let mut last_update_time = time.elapsed().as_millis();
@@ -469,9 +471,9 @@ impl Pack {
         }
 
         self.pool.join(); // wait for all threads to finish
-        
+
         // send pack id for metadata
-        if let Some(pack_callback) = pack_id_callback  { 
+        if let Some(pack_callback) = pack_id_callback {
             pack_callback(self.signature);
         }
         // !Attention: Caches threadpool may not stop, but it's not a problem (garbage file data)
@@ -502,11 +504,15 @@ impl Pack {
         sender: UnboundedSender<Entry>,
     ) -> JoinHandle<Pack> {
         thread::spawn(move || {
-            self.decode(&mut pack, move |entry| {
-                if let Err(e) = sender.send(entry.inner) {
-                    eprintln!("Channel full, failed to send entry: {e:?}");
-                }
-            },None::<fn(SHA1)>)
+            self.decode(
+                &mut pack,
+                move |entry| {
+                    if let Err(e) = sender.send(entry.inner) {
+                        eprintln!("Channel full, failed to send entry: {e:?}");
+                    }
+                },
+                None::<fn(SHA1)>,
+            )
             .unwrap();
             self
         })
@@ -516,8 +522,8 @@ impl Pack {
     pub async fn decode_stream(
         mut self,
         mut stream: impl Stream<Item = Result<Bytes, Error>> + Unpin + Send + 'static,
-        sender: UnboundedSender<MetaAttached<Entry,EntryMeta>>,
-        pack_hash_send: Option<UnboundedSender<SHA1>>
+        sender: UnboundedSender<MetaAttached<Entry, EntryMeta>>,
+        pack_hash_send: Option<UnboundedSender<SHA1>>,
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut reader = StreamBufReader::new(rx);
@@ -533,18 +539,22 @@ impl Pack {
         // CPU-bound task, so use spawn_blocking
         // DO NOT use thread::spawn, because it will block tokio runtime (if single-threaded runtime, like in tests)
         tokio::task::spawn_blocking(move || {
-            self.decode(&mut reader, move |entry: MetaAttached<Entry, EntryMeta>| {
-                // as we used unbound channel here, it will never full so can be send with synchronous
-                if let Err(e) = sender.send(entry) {
-                    eprintln!("unbound channel Sending Error: {e:?}");
-                }
-            },Some(move |pack_id:SHA1| {
-                if let Some(pack_id_send) = pack_hash_send {
-                    if let Err(e) = pack_id_send.send(pack_id) {
+            self.decode(
+                &mut reader,
+                move |entry: MetaAttached<Entry, EntryMeta>| {
+                    // as we used unbound channel here, it will never full so can be send with synchronous
+                    if let Err(e) = sender.send(entry) {
                         eprintln!("unbound channel Sending Error: {e:?}");
                     }
-                }
-            }))
+                },
+                Some(move |pack_id: SHA1| {
+                    if let Some(pack_id_send) = pack_hash_send
+                        && let Err(e) = pack_id_send.send(pack_id)
+                    {
+                        eprintln!("unbound channel Sending Error: {e:?}");
+                    }
+                }),
+            )
             .unwrap();
             self
         })
@@ -723,10 +733,10 @@ mod tests {
     use flate2::write::ZlibEncoder;
     use tokio_util::io::ReaderStream;
 
+    use crate::hash::SHA1;
     use crate::internal::pack::Pack;
     use crate::internal::pack::tests::init_logger;
     use futures_util::TryStreamExt;
-    use crate::hash::SHA1;
 
     #[tokio::test]
     async fn test_pack_check_header() {
@@ -773,7 +783,7 @@ mod tests {
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
         let mut p = Pack::new(None, Some(1024 * 1024 * 20), Some(tmp), true);
-        p.decode(&mut buffered, |_| {},None::<fn(SHA1)>).unwrap();
+        p.decode(&mut buffered, |_| {}, None::<fn(SHA1)>).unwrap();
     }
 
     #[test]
@@ -789,7 +799,7 @@ mod tests {
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
         let mut p = Pack::new(None, Some(1024 * 1024 * 20), Some(tmp), true);
-        p.decode(&mut buffered, |_| {},None::<fn(SHA1)>).unwrap();
+        p.decode(&mut buffered, |_| {}, None::<fn(SHA1)>).unwrap();
     }
 
     #[test]
@@ -802,7 +812,7 @@ mod tests {
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
         let mut p = Pack::new(None, None, Some(tmp), true);
-        p.decode(&mut buffered, |_| {},None::<fn(SHA1)>).unwrap();
+        p.decode(&mut buffered, |_| {}, None::<fn(SHA1)>).unwrap();
     }
 
     #[tokio::test]
@@ -821,9 +831,13 @@ mod tests {
             Some(tmp.clone()),
             true,
         );
-        let rt = p.decode(&mut buffered, |_obj| {
-            // println!("{:?} {}", obj.hash.to_string(), offset);
-        },None::<fn(SHA1)>);
+        let rt = p.decode(
+            &mut buffered,
+            |_obj| {
+                // println!("{:?} {}", obj.hash.to_string(), offset);
+            },
+            None::<fn(SHA1)>,
+        );
         if let Err(e) = rt {
             fs::remove_dir_all(tmp).unwrap();
             panic!("Error: {e:?}");
@@ -847,7 +861,7 @@ mod tests {
         );
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let handle = tokio::spawn(async move { p.decode_stream(stream, tx,None).await });
+        let handle = tokio::spawn(async move { p.decode_stream(stream, tx, None).await });
         let count = Arc::new(AtomicUsize::new(0));
         let count_c = count.clone();
         // in tests, RUNTIME is single-threaded, so `sync code` will block the tokio runtime
@@ -900,9 +914,9 @@ mod tests {
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
         let mut p = Pack::new(None, Some(1024 * 1024 * 20), Some(tmp), true);
-        print!("pack_id: {:?}",p.signature);
-        p.decode(&mut buffered, |_| {},None::<fn(SHA1)>).unwrap();
-        print!("pack_id: {:?}",p.signature.to_string());
+        print!("pack_id: {:?}", p.signature);
+        p.decode(&mut buffered, |_| {}, None::<fn(SHA1)>).unwrap();
+        print!("pack_id: {:?}", p.signature.to_string());
     }
 
     #[test] // Take too long time

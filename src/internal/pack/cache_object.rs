@@ -9,10 +9,10 @@ use lru_mem::{HeapSize, MemSize};
 use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
 
+use crate::internal::metadata::{EntryMeta, MetaAttached};
 use crate::internal::pack::entry::Entry;
 use crate::internal::pack::utils;
 use crate::{hash::SHA1, internal::object::types::ObjectType};
-use crate::internal::metadata::{EntryMeta, MetaAttached};
 
 // /// record heap-size of all CacheObjects, used for memory limit.
 // static CACHE_OBJS_MEM_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -241,8 +241,8 @@ impl CacheObject {
             }
         }
     }
-    
-    pub fn to_entry_metadata(&self) -> MetaAttached<Entry,EntryMeta>{
+
+    pub fn to_entry_metadata(&self) -> MetaAttached<Entry, EntryMeta> {
         match self.info {
             CacheObjectInfo::BaseObject(obj_type, hash) => {
                 let entry = Entry {
@@ -251,20 +251,16 @@ impl CacheObject {
                     hash,
                     chain_len: 0,
                 };
-                let meta = EntryMeta{
+                let meta = EntryMeta {
                     // pack_id:Some(pack_id),
-                    pack_offset: Some(self.offset), 
+                    pack_offset: Some(self.offset),
                     is_delta: Some(self.is_delta_in_pack),
                     ..Default::default()
                 };
-                MetaAttached{
-                    inner:entry,
-                    meta
-                }
-                
+                MetaAttached { inner: entry, meta }
             }
-        
-        _ => {
+
+            _ => {
                 unreachable!("delta object should not persist!")
             }
         }

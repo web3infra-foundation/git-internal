@@ -2,9 +2,7 @@ mod entry_meta;
 pub use entry_meta::EntryMeta;
 use std::fmt;
 
-
 pub trait MetadataExt {
-    
     type Meta: Clone + std::fmt::Debug + Send + Sync + 'static;
 
     fn metadata(&self) -> Option<&Self::Meta>;

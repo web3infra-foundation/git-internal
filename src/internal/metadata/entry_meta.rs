@@ -1,4 +1,4 @@
-#[derive(Debug, Clone,Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EntryMeta {
     /// 源文件路径，相对于仓库根
     pub file_path: Option<String>,

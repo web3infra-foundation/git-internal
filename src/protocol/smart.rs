@@ -359,6 +359,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal::metadata::{EntryMeta, MetaAttached};
     use crate::internal::object::blob::Blob;
     use crate::internal::object::commit::Commit;
     use crate::internal::object::signature::{Signature, SignatureType};
@@ -528,10 +529,30 @@ mod tests {
         let blob1_clone = blob1.clone();
         let blob2_clone = blob2.clone();
         tokio::spawn(async move {
-            let _ = entry_tx.send(Entry::from(commit_clone)).await;
-            let _ = entry_tx.send(Entry::from(tree_clone)).await;
-            let _ = entry_tx.send(Entry::from(blob1_clone)).await;
-            let _ = entry_tx.send(Entry::from(blob2_clone)).await;
+            let _ = entry_tx
+                .send(MetaAttached {
+                    inner: Entry::from(commit_clone),
+                    meta: EntryMeta::new(),
+                })
+                .await;
+            let _ = entry_tx
+                .send(MetaAttached {
+                    inner: Entry::from(tree_clone),
+                    meta: EntryMeta::new(),
+                })
+                .await;
+            let _ = entry_tx
+                .send(MetaAttached {
+                    inner: Entry::from(blob1_clone),
+                    meta: EntryMeta::new(),
+                })
+                .await;
+            let _ = entry_tx
+                .send(MetaAttached {
+                    inner: Entry::from(blob2_clone),
+                    meta: EntryMeta::new(),
+                })
+                .await;
             // sender drop indicates end
         });
 
