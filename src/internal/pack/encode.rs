@@ -691,68 +691,68 @@ mod tests {
         check_format(&result);
     }
 
-    // #[tokio::test]
-    // async fn test_pack_encoder_large_file() {
-    //     init_logger();
-    //     let entries = get_entries_for_test().await;
-    //     let entries_number = entries.lock().await.len();
-    // 
-    //     let total_original_size: usize = entries
-    //         .lock()
-    //         .await
-    //         .iter()
-    //         .map(|entry| entry.data.len())
-    //         .sum();
-    // 
-    //     let start = Instant::now();
-    //     // encode entries
-    //     let (tx, mut rx) = mpsc::channel(100_000);
-    //     let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry,EntryMeta>>(100_000);
-    // 
-    //     let mut encoder = PackEncoder::new(entries_number, 0, tx);
-    //     tokio::spawn(async move {
-    //         time_it!("test encode no parallel", {
-    //             encoder.encode(entry_rx).await.unwrap();
-    //         });
-    //     });
-    // 
-    //     // spawn a task to send entries
-    //     tokio::spawn(async move {
-    //         let entries = entries.lock().await;
-    //         for entry in entries.iter() {
-    //             entry_tx.send(MetaAttached{inner:entry.clone(),meta:EntryMeta::new()}).await.unwrap();
-    //         }
-    //         drop(entry_tx);
-    //         tracing::info!("all entries sent");
-    //     });
-    // 
-    //     // // only receive data
-    //     // while (rx.recv().await).is_some() {
-    //     //     // do nothing
-    //     // }
-    // 
-    //     let mut result = Vec::new();
-    //     while let Some(chunk) = rx.recv().await {
-    //         result.extend(chunk);
-    //     }
-    // 
-    //     let pack_size = result.len();
-    //     let compression_rate = if total_original_size > 0 {
-    //         1.0 - (pack_size as f64 / total_original_size as f64)
-    //     } else {
-    //         0.0
-    //     };
-    // 
-    //     let duration = start.elapsed();
-    //     tracing::info!("test executed in: {:.2?}", duration);
-    //     tracing::info!("new pack file size: {}", pack_size);
-    //     tracing::info!("original total size: {}", total_original_size);
-    //     tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
-    //     tracing::info!(
-    //         "space saved: {} bytes",
-    //         total_original_size.saturating_sub(pack_size)
-    //     );
-    // }
+    #[tokio::test]
+    async fn test_pack_encoder_large_file() {
+        init_logger();
+        let entries = get_entries_for_test().await;
+        let entries_number = entries.lock().await.len();
+    
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+    
+        let start = Instant::now();
+        // encode entries
+        let (tx, mut rx) = mpsc::channel(100_000);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry,EntryMeta>>(100_000);
+    
+        let mut encoder = PackEncoder::new(entries_number, 0, tx);
+        tokio::spawn(async move {
+            time_it!("test encode no parallel", {
+                encoder.encode(entry_rx).await.unwrap();
+            });
+        });
+    
+        // spawn a task to send entries
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx.send(MetaAttached{inner:entry.clone(),meta:EntryMeta::new()}).await.unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+    
+        // // only receive data
+        // while (rx.recv().await).is_some() {
+        //     // do nothing
+        // }
+    
+        let mut result = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            result.extend(chunk);
+        }
+    
+        let pack_size = result.len();
+        let compression_rate = if total_original_size > 0 {
+            1.0 - (pack_size as f64 / total_original_size as f64)
+        } else {
+            0.0
+        };
+    
+        let duration = start.elapsed();
+        tracing::info!("test executed in: {:.2?}", duration);
+        tracing::info!("new pack file size: {}", pack_size);
+        tracing::info!("original total size: {}", total_original_size);
+        tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
+        tracing::info!(
+            "space saved: {} bytes",
+            total_original_size.saturating_sub(pack_size)
+        );
+    }
 
     #[tokio::test]
     async fn test_pack_encoder_with_zstdelta() {
@@ -823,60 +823,60 @@ mod tests {
         assert_eq!(result, value as u64);
     }
 
-    // #[tokio::test]
-    // async fn test_pack_encoder_large_file_with_delta() {
-    //     init_logger();
-    //     let entries = get_entries_for_test().await;
-    //     let entries_number = entries.lock().await.len();
-    // 
-    //     let total_original_size: usize = entries
-    //         .lock()
-    //         .await
-    //         .iter()
-    //         .map(|entry| entry.data.len())
-    //         .sum();
-    // 
-    //     let (tx, mut rx) = mpsc::channel(100_000);
-    //     let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry,EntryMeta>>(100_000);
-    // 
-    //     let encoder = PackEncoder::new(entries_number, 10, tx);
-    // 
-    //     let start = Instant::now(); // 开始时间
-    //     encoder.encode_async(entry_rx).await.unwrap();
-    // 
-    //     // spawn a task to send entries
-    //     tokio::spawn(async move {
-    //         let entries = entries.lock().await;
-    //         for entry in entries.iter() {
-    //             entry_tx.send(MetaAttached{inner:entry.clone(),meta:EntryMeta::new()}).await.unwrap();
-    //         }
-    //         drop(entry_tx);
-    //         tracing::info!("all entries sent");
-    //     });
-    // 
-    //     let mut result = Vec::new();
-    //     while let Some(chunk) = rx.recv().await {
-    //         result.extend(chunk);
-    //     }
-    // 
-    //     let pack_size = result.len();
-    //     let compression_rate = if total_original_size > 0 {
-    //         1.0 - (pack_size as f64 / total_original_size as f64)
-    //     } else {
-    //         0.0
-    //     };
-    // 
-    //     let duration = start.elapsed();
-    //     tracing::info!("test executed in: {:.2?}", duration);
-    //     tracing::info!("new pack file size: {}", pack_size);
-    //     tracing::info!("original total size: {}", total_original_size);
-    //     tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
-    //     tracing::info!(
-    //         "space saved: {} bytes",
-    //         total_original_size.saturating_sub(pack_size)
-    //     );
-    // 
-    //     // check format
-    //     check_format(&result);
-    // }
+    #[tokio::test]
+    async fn test_pack_encoder_large_file_with_delta() {
+        init_logger();
+        let entries = get_entries_for_test().await;
+        let entries_number = entries.lock().await.len();
+    
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+    
+        let (tx, mut rx) = mpsc::channel(100_000);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry,EntryMeta>>(100_000);
+    
+        let encoder = PackEncoder::new(entries_number, 10, tx);
+    
+        let start = Instant::now(); // 开始时间
+        encoder.encode_async(entry_rx).await.unwrap();
+    
+        // spawn a task to send entries
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx.send(MetaAttached{inner:entry.clone(),meta:EntryMeta::new()}).await.unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+    
+        let mut result = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            result.extend(chunk);
+        }
+    
+        let pack_size = result.len();
+        let compression_rate = if total_original_size > 0 {
+            1.0 - (pack_size as f64 / total_original_size as f64)
+        } else {
+            0.0
+        };
+    
+        let duration = start.elapsed();
+        tracing::info!("test executed in: {:.2?}", duration);
+        tracing::info!("new pack file size: {}", pack_size);
+        tracing::info!("original total size: {}", total_original_size);
+        tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
+        tracing::info!(
+            "space saved: {} bytes",
+            total_original_size.saturating_sub(pack_size)
+        );
+    
+        // check format
+        check_format(&result);
+    }
 }
