@@ -118,19 +118,19 @@ fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryM
     let path_a = a.meta.file_path.as_ref();
     let path_b = b.meta.file_path.as_ref();
 
-    // 1 处理路径存在性：有路径的排前
+    // 1. Handle path existence: entries with paths sort first
     match (path_a, path_b) {
         (Some(pa), Some(pb)) => {
             let pa = Path::new(pa);
             let pb = Path::new(pb);
 
-            // 1. 比较父目录路径
+            // 1. Compare parent directory paths
             let dir_ord = pa.parent().cmp(&pb.parent());
             if dir_ord != Ordering::Equal {
                 return dir_ord;
             }
 
-            // 2. 比较文件名（自然排序）
+            // 2. Compare filenames (natural sort)
             let name_a = pa.file_name().unwrap_or_default().to_string_lossy();
             let name_b = pb.file_name().unwrap_or_default().to_string_lossy();
             let name_ord = compare(&name_a, &name_b);
@@ -138,8 +138,8 @@ fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryM
                 return name_ord;
             }
         }
-        (Some(_), None) => return Ordering::Less, // 有路径的排前
-        (None, Some(_)) => return Ordering::Greater, // 无路径的排后
+        (Some(_), None) => return Ordering::Less, // entries with paths sort first
+        (None, Some(_)) => return Ordering::Greater, // entries without paths sort last
         (None, None) => {}
     }
 

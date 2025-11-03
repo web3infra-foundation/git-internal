@@ -8,7 +8,7 @@ pub trait MetadataExt {
     fn metadata(&self) -> Option<&Self::Meta>;
     fn metadata_mut(&mut self) -> Option<&mut Self::Meta>;
     fn set_metadata(&mut self, meta: Self::Meta);
-    fn clear_metadata(&mut self);
+    //fn clear_metadata(&mut self);
 }
 
 #[derive(Debug, Clone)]
@@ -35,10 +35,9 @@ where
         self.meta = meta;
     }
 
-    fn clear_metadata(&mut self) {
-        // 这里无法清除，因为meta不是Option
-        // 可考虑实现为no-op
-    }
+    // fn clear_metadata(&mut self) {
+    //
+    // }
 }
 
 impl<T, M> fmt::Display for MetaAttached<T, M>

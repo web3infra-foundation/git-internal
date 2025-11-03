@@ -333,10 +333,10 @@ impl Pack {
 
     /// Decodes a pack file from a given Read and BufRead source, for each object in the pack,
     /// it decodes the object and processes it using the provided callback function.
-    /// 
+    ///
     /// # Parameters
     /// * pack_id_callback: A callback that seed pack_file sha1 for updating database
-    /// 
+    ///
     pub fn decode<F, C>(
         &mut self,
         pack: &mut (impl BufRead + Send),
