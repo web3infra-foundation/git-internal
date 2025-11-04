@@ -256,12 +256,14 @@ mod test {
             data_decompressed: vec![0; 800],
             mem_recorder: None,
             offset: 0,
+            is_delta_in_pack: false,
         };
         let b = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, b_hash),
             data_decompressed: vec![0; 800],
             mem_recorder: None,
             offset: 0,
+            is_delta_in_pack: false,
         };
         // insert a
         cache.insert(a.offset, a_hash, a.clone());
@@ -281,6 +283,7 @@ mod test {
             data_decompressed: vec![0; 1700],
             mem_recorder: None,
             offset: 0,
+            is_delta_in_pack: false,
         };
         cache.insert(c.offset, c_hash, c.clone());
         assert!(cache.try_get(a_hash).is_none());

@@ -1,15 +1,16 @@
+use super::core::RepositoryAccess;
+use super::types::ProtocolError;
+use crate::hash::SHA1;
+use crate::internal::metadata::{EntryMeta, MetaAttached};
+use crate::internal::object::types::ObjectType;
+use crate::internal::object::{ObjectTrait, blob::Blob, commit::Commit, tree::Tree};
+use crate::internal::pack::{Pack, encode::PackEncoder, entry::Entry};
 use bytes::Bytes;
 use std::collections::{HashSet, VecDeque};
 use std::io::Cursor;
 use tokio;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-
-use super::core::RepositoryAccess;
-use super::types::ProtocolError;
-use crate::internal::object::types::ObjectType;
-use crate::internal::object::{ObjectTrait, blob::Blob, commit::Commit, tree::Tree};
-use crate::internal::pack::{Pack, encode::PackEncoder, entry::Entry};
 
 /// Pack generation service for Git protocol operations
 ///
@@ -99,32 +100,33 @@ where
         // Decode the pack and collect entries
         pack.decode(
             &mut cursor,
-            move |entry: Entry, _offset: usize| match entry.obj_type {
+            move |entry: MetaAttached<Entry, EntryMeta>| match entry.inner.obj_type {
                 ObjectType::Commit => {
-                    if let Ok(commit) = Commit::from_bytes(&entry.data, entry.hash) {
+                    if let Ok(commit) = Commit::from_bytes(&entry.inner.data, entry.inner.hash) {
                         commits_clone.lock().unwrap().push(commit);
                     } else {
                         tracing::warn!("Failed to parse commit from pack entry");
                     }
                 }
                 ObjectType::Tree => {
-                    if let Ok(tree) = Tree::from_bytes(&entry.data, entry.hash) {
+                    if let Ok(tree) = Tree::from_bytes(&entry.inner.data, entry.inner.hash) {
                         trees_clone.lock().unwrap().push(tree);
                     } else {
                         tracing::warn!("Failed to parse tree from pack entry");
                     }
                 }
                 ObjectType::Blob => {
-                    if let Ok(blob) = Blob::from_bytes(&entry.data, entry.hash) {
+                    if let Ok(blob) = Blob::from_bytes(&entry.inner.data, entry.inner.hash) {
                         blobs_clone.lock().unwrap().push(blob);
                     } else {
                         tracing::warn!("Failed to parse blob from pack entry");
                     }
                 }
                 _ => {
-                    tracing::warn!("Unknown object type in pack: {:?}", entry.obj_type);
+                    tracing::warn!("Unknown object type in pack: {:?}", entry.inner.obj_type);
                 }
             },
+            None::<fn(SHA1)>,
         )
         .map_err(|e| ProtocolError::invalid_request(&format!("Failed to decode pack: {}", e)))?;
 
@@ -318,7 +320,14 @@ where
         // Send entries to encoder
         tokio::spawn(async move {
             for entry in entries {
-                if entry_tx.send(entry).await.is_err() {
+                if entry_tx
+                    .send(MetaAttached {
+                        inner: entry,
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .is_err()
+                {
                     break; // Receiver dropped
                 }
             }
