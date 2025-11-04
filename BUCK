@@ -69,5 +69,6 @@ rust_library(
         "//third-party/rust/crates/tracing/0.1.41:tracing",
         "//third-party/rust/crates/uuid/1.18.1:uuid",
         "//third-party/rust/crates/zstd-sys/2.0.16+zstd.1.5.7:zstd-sys",
+        "//third-party/rust/crates/natord/1.0.9:natord",
     ],
 )
