@@ -64,6 +64,7 @@ rust_library(
         "//third-party/rust/crates/serde_json/1.0.145:serde_json",
         "//third-party/rust/crates/sha1/0.10.6:sha1",
         "//third-party/rust/crates/similar/2.7.0:similar",
+        "//third-party/rust/crates/tempfile/3.23.0:tempfile",
         "//third-party/rust/crates/thiserror/2.0.17:thiserror",
         "//third-party/rust/crates/threadpool/1.8.1:threadpool",
         "//third-party/rust/crates/tokio-stream/0.1.17:tokio-stream",
