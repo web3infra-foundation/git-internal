@@ -24,7 +24,7 @@ enum EditLine<'a> {
 }
 
 impl Diff {
-    const MAX_DIFF_LINES: usize = 200_000; // safety cap for pathological inputs
+    const MAX_DIFF_LINES: usize = 10_000; // safety cap for pathological inputs
     const LARGE_FILE_MARKER: &'static str = "<LargeFile>";
     const LARGE_FILE_END: &'static str = "</LargeFile>";
     const SHORT_HASH_LEN: usize = 7;
