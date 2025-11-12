@@ -51,6 +51,7 @@ rust_library(
         "//third-party/rust/crates/percent-encoding/2.3.2:percent-encoding",
         "//third-party/rust/crates/pin-project-lite/0.2.16:pin-project-lite",
         "//third-party/rust/crates/socket2/0.6.1:socket2",
+        "//third-party/rust/crates/system-configuration/0.6.1:system-configuration",
         "//third-party/rust/crates/tokio/1.48.0:tokio",
         "//third-party/rust/crates/tower-service/0.3.3:tower-service",
         "//third-party/rust/crates/tracing/0.1.41:tracing",
