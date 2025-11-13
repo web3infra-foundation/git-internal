@@ -26,5 +26,4 @@ rust_library(
     features = ["fallback"],
     rustc_flags = ["@$(location :iana-time-zone-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/core-foundation-sys/0.8.7:core-foundation-sys"],
 )
