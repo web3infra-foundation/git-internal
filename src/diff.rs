@@ -35,7 +35,7 @@ impl Diff {
     const SHORT_HASH_LEN: usize = 7;
 
     /// Compute diffs for a set of files, honoring an optional filter and emitting unified diffs.
-    pub async fn diff<F>(
+    pub fn diff<F>(
         old_blobs: Vec<(PathBuf, SHA1)>,
         new_blobs: Vec<(PathBuf, SHA1)>,
         filter: Vec<PathBuf>,
@@ -546,10 +546,6 @@ mod tests {
         fn collect(s: &str, prefix: char) -> Vec<String> {
             s.lines()
                 .filter(|l| l.starts_with(prefix))
-                .filter(|l| {
-                    let content = &l[1..];
-                    !content.trim().is_empty()
-                })
                 .map(|l| l.to_string())
                 .collect()
         }
