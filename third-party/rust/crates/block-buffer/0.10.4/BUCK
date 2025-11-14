@@ -25,5 +25,5 @@ rust_library(
     edition = "2018",
     rustc_flags = ["@$(location :block-buffer-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/generic-array/0.14.9:generic-array"],
+    deps = ["//third-party/rust/crates/generic-array/0.14.7:generic-array"],
 )

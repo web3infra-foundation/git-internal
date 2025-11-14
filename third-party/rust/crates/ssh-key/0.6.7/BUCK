@@ -38,7 +38,7 @@ rust_library(
     ],
     rustc_flags = ["@$(location :ssh-key-manifest[env_flags])"],
     named_deps = {
-        "bigint": "//third-party/rust/crates/num-bigint-dig/0.8.4:num-bigint-dig",
+        "bigint": "//third-party/rust/crates/num-bigint-dig/0.8.6:num-bigint-dig",
         "cipher": "//third-party/rust/crates/ssh-cipher/0.2.0:ssh-cipher",
         "encoding": "//third-party/rust/crates/ssh-encoding/0.2.0:ssh-encoding",
     },

@@ -1,0 +1,604 @@
+use crate::hash::SHA1;
+use path_absolutize::Absolutize;
+use similar::{Algorithm, ChangeTag, TextDiff};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write;
+use std::path::PathBuf;
+
+/// A single diff result item for a path
+pub struct DiffItem {
+    pub path: String,
+    pub data: String,
+}
+
+pub struct Diff;
+
+#[derive(Debug, Clone, Copy)]
+enum EditLine<'a> {
+    // old_line, new_line, text
+    Context(Option<usize>, Option<usize>, &'a str),
+    // old_line, text
+    Delete(usize, &'a str),
+    // new_line, text
+    Insert(usize, &'a str),
+}
+
+impl Diff {
+    const MAX_DIFF_LINES: usize = 10_000; // safety cap for pathological inputs
+    const LARGE_FILE_MARKER: &'static str = "<LargeFile>";
+    const LARGE_FILE_END: &'static str = "</LargeFile>";
+    const SHORT_HASH_LEN: usize = 7;
+
+    /// Compute diffs for a set of files, honoring an optional filter and emitting unified diffs.
+    pub async fn diff<F>(
+        old_blobs: Vec<(PathBuf, SHA1)>,
+        new_blobs: Vec<(PathBuf, SHA1)>,
+        filter: Vec<PathBuf>,
+        read_content: F,
+    ) -> Vec<DiffItem>
+    where
+        F: Fn(&PathBuf, &SHA1) -> Vec<u8>,
+    {
+        let (processed_files, old_blobs_map, new_blobs_map) =
+            Self::prepare_diff_data(old_blobs, new_blobs, &filter);
+
+        let mut diff_results: Vec<DiffItem> = Vec::with_capacity(processed_files.len());
+        for file in processed_files {
+            if let Some(large_file_marker) =
+                Self::is_large_file(&file, &old_blobs_map, &new_blobs_map, &read_content)
+            {
+                diff_results.push(DiffItem {
+                    path: file.to_string_lossy().to_string(),
+                    data: large_file_marker,
+                });
+            } else {
+                let diff = Self::diff_for_file_string(
+                    &file,
+                    &old_blobs_map,
+                    &new_blobs_map,
+                    &read_content,
+                );
+                diff_results.push(DiffItem {
+                    path: file.to_string_lossy().to_string(),
+                    data: diff,
+                });
+            }
+        }
+
+        diff_results
+    }
+
+    fn is_large_file<F>(
+        file: &PathBuf,
+        old_blobs: &HashMap<PathBuf, SHA1>,
+        new_blobs: &HashMap<PathBuf, SHA1>,
+        read_content: &F,
+    ) -> Option<String>
+    where
+        F: Fn(&PathBuf, &SHA1) -> Vec<u8>,
+    {
+        let old_hash = old_blobs.get(file);
+        let new_hash = new_blobs.get(file);
+
+        let old_bytes = old_hash.map_or_else(Vec::new, |h| read_content(file, h));
+        let new_bytes = new_hash.map_or_else(Vec::new, |h| read_content(file, h));
+
+        // line-count based detection
+        let old_lines = String::from_utf8_lossy(&old_bytes).lines().count();
+        let new_lines = String::from_utf8_lossy(&new_bytes).lines().count();
+        let total_lines = old_lines + new_lines;
+        if total_lines > Self::MAX_DIFF_LINES {
+            Some(format!(
+                "{}{}:{}:{}{}\n",
+                Self::LARGE_FILE_MARKER,
+                file.display(),
+                total_lines,
+                Self::MAX_DIFF_LINES,
+                Self::LARGE_FILE_END
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Build maps, union file set, and apply filter/path checks
+    fn prepare_diff_data(
+        old_blobs: Vec<(PathBuf, SHA1)>,
+        new_blobs: Vec<(PathBuf, SHA1)>,
+        filter: &[PathBuf],
+    ) -> (Vec<PathBuf>, HashMap<PathBuf, SHA1>, HashMap<PathBuf, SHA1>) {
+        let old_blobs_map: HashMap<PathBuf, SHA1> = old_blobs.into_iter().collect();
+        let new_blobs_map: HashMap<PathBuf, SHA1> = new_blobs.into_iter().collect();
+
+        // union set
+        let union_files: HashSet<PathBuf> = old_blobs_map
+            .keys()
+            .chain(new_blobs_map.keys())
+            .cloned()
+            .collect();
+
+        // filter files that should be processed
+        let processed_files: Vec<PathBuf> = union_files
+            .into_iter()
+            .filter(|file| Self::should_process(file, filter, &old_blobs_map, &new_blobs_map))
+            .collect();
+
+        (processed_files, old_blobs_map, new_blobs_map)
+    }
+
+    fn should_process(
+        file: &PathBuf,
+        filter: &[PathBuf],
+        old_blobs: &HashMap<PathBuf, SHA1>,
+        new_blobs: &HashMap<PathBuf, SHA1>,
+    ) -> bool {
+        if !filter.is_empty()
+            && !filter
+                .iter()
+                .any(|path| Self::sub_of(file, path).unwrap_or(false))
+        {
+            return false;
+        }
+
+        old_blobs.get(file) != new_blobs.get(file)
+    }
+
+    fn sub_of(path: &PathBuf, parent: &PathBuf) -> Result<bool, std::io::Error> {
+        let path_abs: PathBuf = path.absolutize()?.to_path_buf();
+        let parent_abs: PathBuf = parent.absolutize()?.to_path_buf();
+        Ok(path_abs.starts_with(parent_abs))
+    }
+
+    fn short_hash(hash: Option<&SHA1>) -> String {
+        hash.map(|h| {
+            let hex = h.to_string();
+            let take = Self::SHORT_HASH_LEN.min(hex.len());
+            hex[..take].to_string()
+        })
+        .unwrap_or_else(|| "0".repeat(Self::SHORT_HASH_LEN))
+    }
+
+    /// Format a single file's unified diff string.
+    pub fn diff_for_file_string(
+        file: &PathBuf,
+        old_blobs: &HashMap<PathBuf, SHA1>,
+        new_blobs: &HashMap<PathBuf, SHA1>,
+        read_content: &dyn Fn(&PathBuf, &SHA1) -> Vec<u8>,
+    ) -> String {
+        let mut out = String::new();
+
+        let new_hash = new_blobs.get(file);
+        let old_hash = old_blobs.get(file);
+
+        let old_bytes = old_hash.map_or_else(Vec::new, |h| read_content(file, h));
+        let new_bytes = new_hash.map_or_else(Vec::new, |h| read_content(file, h));
+
+        writeln!(out, "diff --git a/{} b/{}", file.display(), file.display()).unwrap();
+
+        if old_hash.is_none() {
+            writeln!(out, "new file mode 100644").unwrap();
+        } else if new_hash.is_none() {
+            writeln!(out, "deleted file mode 100644").unwrap();
+        }
+
+        let old_index = Self::short_hash(old_hash);
+        let new_index = Self::short_hash(new_hash);
+        writeln!(out, "index {old_index}..{new_index} 100644").unwrap();
+
+        match (String::from_utf8(old_bytes), String::from_utf8(new_bytes)) {
+            (Ok(old_text), Ok(new_text)) => {
+                let (old_pref, new_pref) = if old_text.is_empty() {
+                    ("/dev/null".to_string(), format!("b/{}", file.display()))
+                } else if new_text.is_empty() {
+                    (format!("a/{}", file.display()), "/dev/null".to_string())
+                } else {
+                    (
+                        format!("a/{}", file.display()),
+                        format!("b/{}", file.display()),
+                    )
+                };
+
+                writeln!(out, "--- {old_pref}").unwrap();
+                writeln!(out, "+++ {new_pref}").unwrap();
+
+                // 直接使用 Myers 生成统一 diff（包含 hunk 头与上下文）
+                let unified = Self::compute_unified_diff(&old_text, &new_text, 3);
+                out.push_str(&unified);
+            }
+            _ => {
+                writeln!(out, "Binary files differ").unwrap();
+            }
+        }
+
+        out
+    }
+}
+
+impl Diff {
+    /// Streaming unified diff that minimizes allocations by borrowing lines
+    fn compute_unified_diff(old_text: &str, new_text: &str, context: usize) -> String {
+            // Myers line diff
+            let diff = TextDiff::configure()
+                .algorithm(Algorithm::Myers)
+                .diff_lines(old_text, new_text);
+
+            // Reserve capacity heuristic to reduce allocations
+            let mut out = String::with_capacity(((old_text.len() + new_text.len()) / 16).max(4096));
+
+            // Rolling prefix context (last `context` equal lines when outside a hunk)
+            let mut prefix_ctx: VecDeque<EditLine> = VecDeque::with_capacity(context);
+            let mut cur_hunk: Vec<EditLine> = Vec::new();
+            let mut eq_run: Vec<EditLine> = Vec::new(); // accumulating equal lines while in hunk
+            let mut in_hunk = false;
+
+            let mut last_old_seen = 0usize;
+            let mut last_new_seen = 0usize;
+            let mut old_line_no = 1usize;
+            let mut new_line_no = 1usize;
+
+            for change in diff.iter_all_changes() {
+                let line = change.value().trim_end_matches(['\r', '\n']);
+                match change.tag() {
+                    ChangeTag::Equal => {
+                        let entry = EditLine::Context(Some(old_line_no), Some(new_line_no), line);
+                        old_line_no += 1;
+                        new_line_no += 1;
+                        if in_hunk {
+                            eq_run.push(entry);
+                            // Flush once trailing equal lines exceed 2*context
+                            if eq_run.len() > context * 2 {
+                                Self::flush_hunk_to_out(
+                                    &mut out,
+                                    &mut cur_hunk,
+                                    &mut eq_run,
+                                    &mut prefix_ctx,
+                                    context,
+                                    &mut last_old_seen,
+                                    &mut last_new_seen,
+                                );
+                                in_hunk = false;
+                            }
+                        } else {
+                            if prefix_ctx.len() == context {
+                                prefix_ctx.pop_front();
+                            }
+                            prefix_ctx.push_back(entry);
+                        }
+                    }
+                    ChangeTag::Delete => {
+                        let entry = EditLine::Delete(old_line_no, line);
+                        old_line_no += 1;
+                        if !in_hunk {
+                            cur_hunk.extend(prefix_ctx.iter().copied());
+                            prefix_ctx.clear();
+                            in_hunk = true;
+                        }
+                        if !eq_run.is_empty() {
+                            cur_hunk.extend(eq_run.drain(..));
+                        }
+                        cur_hunk.push(entry);
+                    }
+                    ChangeTag::Insert => {
+                        let entry = EditLine::Insert(new_line_no, line);
+                        new_line_no += 1;
+                        if !in_hunk {
+                            cur_hunk.extend(prefix_ctx.iter().copied());
+                            prefix_ctx.clear();
+                            in_hunk = true;
+                        }
+                        if !eq_run.is_empty() {
+                            cur_hunk.extend(eq_run.drain(..));
+                        }
+                        cur_hunk.push(entry);
+                    }
+                }
+            }
+
+            if in_hunk {
+                Self::flush_hunk_to_out(
+                    &mut out,
+                    &mut cur_hunk,
+                    &mut eq_run,
+                    &mut prefix_ctx,
+                    context,
+                    &mut last_old_seen,
+                    &mut last_new_seen,
+                );
+            }
+
+            out
+        }
+
+    // Flush the current hunk into the output; trailing context is in `eq_run`
+    fn flush_hunk_to_out<'a>(
+        out: &mut String,
+        cur_hunk: &mut Vec<EditLine<'a>>,
+        eq_run: &mut Vec<EditLine<'a>>,
+        prefix_ctx: &mut VecDeque<EditLine<'a>>,
+        context: usize,
+        last_old_seen: &mut usize,
+        last_new_seen: &mut usize,
+    ) {
+        // 1. Append up to `context` trailing equal lines to the current hunk.
+        let trail_to_take = eq_run.len().min(context);
+        for entry in eq_run.iter().take(trail_to_take) {
+            cur_hunk.push(*entry);
+        }
+
+        // 2.a No reclassification: keep equal blank lines as context so we don't
+        // accidentally mark surrounding blank lines as deletions. This mirrors git's
+        // behavior where removing a comment block preserves the surrounding blank
+        // lines (typically keeping the leading blank as context).
+
+        // 2.b Compute header numbers (line ranges/counts) by scanning the hunk.
+        let mut old_first: Option<usize> = None;
+        let mut old_count: usize = 0;
+        let mut new_first: Option<usize> = None;
+        let mut new_count: usize = 0;
+
+        for e in cur_hunk.iter() {
+            match *e {
+                EditLine::Context(o, n, _) => {
+                    if let Some(o) = o {
+                        if old_first.is_none() {
+                            old_first = Some(o);
+                        }
+                        old_count += 1;
+                    }
+                    if let Some(n) = n {
+                        if new_first.is_none() {
+                            new_first = Some(n);
+                        }
+                        new_count += 1;
+                    }
+                }
+                EditLine::Delete(o, _) => {
+                    if old_first.is_none() {
+                        old_first = Some(o);
+                    }
+                    old_count += 1;
+                }
+                EditLine::Insert(n, _) => {
+                    if new_first.is_none() {
+                        new_first = Some(n);
+                    }
+                    new_count += 1;
+                }
+            }
+        }
+
+        if old_count == 0 && new_count == 0 {
+            cur_hunk.clear();
+            eq_run.clear();
+            return;
+        }
+
+        let old_start = old_first.unwrap_or(*last_old_seen + 1);
+        let new_start = new_first.unwrap_or(*last_new_seen + 1);
+
+        writeln!(out, "@@ -{},{} +{},{} @@", old_start, old_count, new_start, new_count).unwrap();
+
+        // 3. 按 Myers 变更顺序直接输出（不再调换删/插顺序）
+        for &e in cur_hunk.iter() {
+            match e {
+                EditLine::Context(o, n, txt) => {
+                    writeln!(out, " {txt}").unwrap();
+                    if let Some(o) = o { *last_old_seen = (*last_old_seen).max(o); }
+                    if let Some(n) = n { *last_new_seen = (*last_new_seen).max(n); }
+                }
+                EditLine::Delete(o, txt) => {
+                    writeln!(out, "-{txt}").unwrap();
+                    *last_old_seen = (*last_old_seen).max(o);
+                }
+                EditLine::Insert(n, txt) => {
+                    writeln!(out, "+{txt}").unwrap();
+                    *last_new_seen = (*last_new_seen).max(n);
+                }
+            }
+        }
+
+        // 4. Preserve last `context` equal lines from eq_run for prefix of next hunk.
+        prefix_ctx.clear();
+        if context > 0 {
+            let keep_start = eq_run.len().saturating_sub(context);
+            for entry in eq_run.iter().skip(keep_start) {
+                prefix_ctx.push_back(*entry);
+            }
+        }
+
+        cur_hunk.clear();
+        eq_run.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Diff;
+    use crate::hash::SHA1;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::time::Instant;
+    use tempfile::tempdir;
+
+    fn run_diff(logical_path: &str, old_bytes: &[u8], new_bytes: &[u8]) -> (String, SHA1, SHA1) {
+        let file = PathBuf::from(logical_path);
+        let old_hash = SHA1::new(old_bytes);
+        let new_hash = SHA1::new(new_bytes);
+
+        let mut blob_store: HashMap<SHA1, Vec<u8>> = HashMap::new();
+        blob_store.insert(old_hash, old_bytes.to_vec());
+        blob_store.insert(new_hash, new_bytes.to_vec());
+
+        let mut old_map = HashMap::new();
+        let mut new_map = HashMap::new();
+        old_map.insert(file.clone(), old_hash);
+        new_map.insert(file.clone(), new_hash);
+
+        let reader =
+            |_: &PathBuf, h: &SHA1| -> Vec<u8> { blob_store.get(h).cloned().unwrap_or_default() };
+
+        let diff = Diff::diff_for_file_string(&file, &old_map, &new_map, &reader);
+        (diff, old_hash, new_hash)
+    }
+
+    fn short_hash(hash: &SHA1) -> String {
+        hash.to_string().chars().take(7).collect()
+    }
+
+    fn normalized_git_diff(
+        logical_path: &str,
+        old_bytes: &[u8],
+        new_bytes: &[u8],
+        old_hash: &SHA1,
+        new_hash: &SHA1,
+    ) -> Option<String> {
+        let temp_dir = tempdir().ok()?;
+        let old_file = temp_dir.path().join("old.txt");
+        let new_file = temp_dir.path().join("new.txt");
+
+        fs::write(&old_file, old_bytes).ok()?;
+        fs::write(&new_file, new_bytes).ok()?;
+
+        let output = Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["diff", "--no-index", "--unified=3", "old.txt", "new.txt"])
+            .output()
+            .ok()?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.is_empty() {
+            return None;
+        }
+
+        let short_old = short_hash(old_hash);
+        let short_new = short_hash(new_hash);
+
+        let mut normalized = Vec::new();
+        for line in stdout.lines() {
+            let rewritten = if line.starts_with("diff --git ") {
+                format!("diff --git a/{logical_path} b/{logical_path}")
+            } else if line.starts_with("index ") {
+                format!("index {short_old}..{short_new} 100644")
+            } else if line.starts_with("--- ") {
+                format!("--- a/{logical_path}")
+            } else if line.starts_with("+++ ") {
+                format!("+++ b/{logical_path}")
+            } else if line.starts_with("@@") {
+                // Strip trailing function context so headers compare byte-for-byte
+                match line.rfind("@@") {
+                    Some(pos) if pos + 2 <= line.len() => line[..pos + 2].to_string(),
+                    _ => line.to_string(),
+                }
+            } else {
+                line.to_string()
+            };
+            normalized.push(rewritten);
+        }
+
+        Some(normalized.join("\n") + "\n")
+    }
+
+    #[test]
+    fn unified_diff_basic_changes() {
+        let old = b"a\nb\nc\n" as &[u8];
+        let new = b"a\nB\nc\nd\n" as &[u8];
+        let (diff, _, _) = run_diff("foo.txt", old, new);
+
+        assert!(diff.contains("diff --git a/foo.txt b/foo.txt"));
+        assert!(diff.contains("index "));
+        assert!(diff.contains("--- a/foo.txt"));
+        assert!(diff.contains("+++ b/foo.txt"));
+        assert!(diff.contains("@@"));
+        assert!(diff.contains("-b"));
+        assert!(diff.contains("+B"));
+        assert!(diff.contains("+d"));
+    }
+
+    #[test]
+    fn binary_files_detection() {
+        let old_bytes = vec![0u8, 159, 146, 150];
+        let new_bytes = vec![0xFF, 0x00, 0x01];
+        let (diff, _, _) = run_diff("bin.dat", &old_bytes, &new_bytes);
+        assert!(diff.contains("Binary files differ"));
+    }
+
+    #[test]
+    fn diff_matches_git_for_fixture() {
+        let base: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "diff"]
+            .iter()
+            .collect();
+        let old_bytes = fs::read(base.join("old.txt")).expect("read old.txt");
+        let new_bytes = fs::read(base.join("new.txt")).expect("read new.txt");
+
+        let (diff_output, old_hash, new_hash) = run_diff("fixture.txt", &old_bytes, &new_bytes);
+        fs::write(base.join("diff.txt"), &diff_output).expect("write diff.txt");
+        let git_output =
+            normalized_git_diff("fixture.txt", &old_bytes, &new_bytes, &old_hash, &new_hash)
+                .expect("git diff output");
+        fs::write(base.join("git.txt"), &git_output).expect("write git.txt");
+
+        fn collect(s: &str, prefix: char) -> Vec<String> {
+            s.lines()
+                .filter(|l| l.starts_with(prefix))
+                .map(|l| l.to_string())
+                .collect()
+        }
+        let ours_del = collect(&diff_output, '-');
+        let ours_ins = collect(&diff_output, '+');
+        let git_del = collect(&git_output, '-');
+        let git_ins = collect(&git_output, '+');
+
+        use std::collections::HashSet;
+        let ours_del_set: HashSet<_> = ours_del.iter().collect();
+        let git_del_set: HashSet<_> = git_del.iter().collect();
+        let ours_ins_set: HashSet<_> = ours_ins.iter().collect();
+        let git_ins_set: HashSet<_> = git_ins.iter().collect();
+
+        assert_eq!(ours_del_set, git_del_set, "deleted lines differ from git output");
+        assert_eq!(ours_ins_set, git_ins_set, "inserted lines differ from git output");
+    }
+
+    #[test]
+    fn diff_matches_git_for_large_change() {
+        let old_lines: Vec<String> = (0..5_000).map(|i| format!("line {i}")).collect();
+        let mut new_lines = old_lines.clone();
+        for idx in [10, 499, 1_234, 3_210, 4_999] {
+            new_lines[idx] = format!("updated line {idx}");
+        }
+        new_lines.insert(2_500, "inserted middle line".into());
+        new_lines.push("new tail line".into());
+
+        let old_text = old_lines.join("\n") + "\n";
+        let new_text = new_lines.join("\n") + "\n";
+
+        let (diff_output, old_hash, new_hash) = run_diff(
+            "large_fixture.txt",
+            old_text.as_bytes(),
+            new_text.as_bytes(),
+        );
+        let git_output = normalized_git_diff(
+            "large_fixture.txt",
+            old_text.as_bytes(),
+            new_text.as_bytes(),
+            &old_hash,
+            &new_hash,
+        )
+        .expect("git diff output");
+
+        fn collect(s: &str, prefix: char) -> Vec<String> {
+            s.lines()
+                .filter(|l| l.starts_with(prefix))
+                .map(|l| l.to_string())
+                .collect()
+        }
+        use std::collections::HashSet;
+        let ours_del: HashSet<_> = collect(&diff_output, '-').into_iter().collect();
+        let ours_ins: HashSet<_> = collect(&diff_output, '+').into_iter().collect();
+        let git_del: HashSet<_> = collect(&git_output, '-').into_iter().collect();
+        let git_ins: HashSet<_> = collect(&git_output, '+').into_iter().collect();
+        assert_eq!(ours_del, git_del, "deleted lines differ from git output");
+        assert_eq!(ours_ins, git_ins, "inserted lines differ from git output");
+    }
+}

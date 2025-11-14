@@ -36,7 +36,7 @@ rust_library(
     visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/aes/0.8.4:aes",
-        "//third-party/rust/crates/aws-lc-rs/1.14.1:aws-lc-rs",
+        "//third-party/rust/crates/aws-lc-rs/1.15.0:aws-lc-rs",
         "//third-party/rust/crates/base64ct/1.6.0:base64ct",
         "//third-party/rust/crates/bitflags/2.10.0:bitflags",
         "//third-party/rust/crates/block-padding/0.3.3:block-padding",
@@ -55,7 +55,7 @@ rust_library(
         "//third-party/rust/crates/enum_dispatch/0.3.13:enum_dispatch",
         "//third-party/rust/crates/flate2/1.1.5:flate2",
         "//third-party/rust/crates/futures/0.3.31:futures",
-        "//third-party/rust/crates/generic-array/0.14.9:generic-array",
+        "//third-party/rust/crates/generic-array/0.14.7:generic-array",
         "//third-party/rust/crates/getrandom/0.2.16:getrandom",
         "//third-party/rust/crates/hex-literal/0.4.1:hex-literal",
         "//third-party/rust/crates/hmac/0.12.1:hmac",

@@ -27,7 +27,7 @@ rust_library(
     proc_macro = True,
     visibility = ["PUBLIC"],
     deps = [
-        "//third-party/rust/crates/quote/1.0.41:quote",
+        "//third-party/rust/crates/quote/1.0.42:quote",
         "//third-party/rust/crates/wasm-bindgen-macro-support/0.2.105:wasm-bindgen-macro-support",
     ],
 )

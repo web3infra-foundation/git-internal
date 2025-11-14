@@ -56,7 +56,7 @@ rust_binary(
     ],
     rustc_flags = ["@$(location :ring-manifest[env_flags])"],
     visibility = [],
-    deps = ["//third-party/rust/crates/cc/1.2.43:cc"],
+    deps = ["//third-party/rust/crates/cc/1.2.45:cc"],
 )
 
 buildscript_run(
