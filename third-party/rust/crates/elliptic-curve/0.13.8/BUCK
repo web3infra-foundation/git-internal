@@ -44,7 +44,7 @@ rust_library(
         "//third-party/rust/crates/crypto-bigint/0.5.5:crypto-bigint",
         "//third-party/rust/crates/digest/0.10.7:digest",
         "//third-party/rust/crates/ff/0.13.1:ff",
-        "//third-party/rust/crates/generic-array/0.14.9:generic-array",
+        "//third-party/rust/crates/generic-array/0.14.7:generic-array",
         "//third-party/rust/crates/group/0.13.0:group",
         "//third-party/rust/crates/hkdf/0.12.4:hkdf",
         "//third-party/rust/crates/pem-rfc7468/0.7.0:pem-rfc7468",

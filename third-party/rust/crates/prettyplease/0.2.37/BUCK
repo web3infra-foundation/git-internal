@@ -34,7 +34,7 @@ rust_library(
     visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/proc-macro2/1.0.103:proc-macro2",
-        "//third-party/rust/crates/syn/2.0.108:syn",
+        "//third-party/rust/crates/syn/2.0.110:syn",
     ],
 )
 

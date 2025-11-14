@@ -26,5 +26,5 @@ rust_library(
     features = ["std"],
     rustc_flags = ["@$(location :block-padding-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/generic-array/0.14.9:generic-array"],
+    deps = ["//third-party/rust/crates/generic-array/0.14.7:generic-array"],
 )
