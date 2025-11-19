@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "git-internal"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
