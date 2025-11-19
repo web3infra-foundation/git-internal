@@ -18,6 +18,14 @@ pub struct DiffItem {
 
 pub struct Diff;
 
+/// Diff line operation types primarily used by blame computation to map parent/child lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffOperation {
+    Insert { line: usize, content: String },
+    Delete { line: usize },
+    Equal { old_line: usize, new_line: usize },
+}
+
 #[derive(Debug, Clone, Copy)]
 enum EditLine<'a> {
     // old_line, new_line, text
@@ -29,6 +37,49 @@ enum EditLine<'a> {
 }
 
 impl Diff {
+    fn compute_line_operations(old_lines: &[String], new_lines: &[String]) -> Vec<DiffOperation> {
+        if old_lines.is_empty() && new_lines.is_empty() {
+            return Vec::new();
+        }
+
+        let old_refs: Vec<&str> = old_lines.iter().map(|s| s.as_str()).collect();
+        let new_refs: Vec<&str> = new_lines.iter().map(|s| s.as_str()).collect();
+
+        let diff = TextDiff::configure()
+            .algorithm(Algorithm::Myers)
+            .diff_slices(&old_refs, &new_refs);
+
+        let mut operations = Vec::with_capacity(old_lines.len() + new_lines.len());
+        let mut old_line_no = 1usize;
+        let mut new_line_no = 1usize;
+
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Equal => {
+                    operations.push(DiffOperation::Equal {
+                        old_line: old_line_no,
+                        new_line: new_line_no,
+                    });
+                    old_line_no += 1;
+                    new_line_no += 1;
+                }
+                ChangeTag::Delete => {
+                    operations.push(DiffOperation::Delete { line: old_line_no });
+                    old_line_no += 1;
+                }
+                ChangeTag::Insert => {
+                    operations.push(DiffOperation::Insert {
+                        line: new_line_no,
+                        content: change.value().to_string(),
+                    });
+                    new_line_no += 1;
+                }
+            }
+        }
+
+        operations
+    }
+
     const MAX_DIFF_LINES: usize = 10_000; // safety cap for pathological inputs
     const LARGE_FILE_MARKER: &'static str = "<LargeFile>";
     const LARGE_FILE_END: &'static str = "</LargeFile>";
@@ -419,9 +470,14 @@ impl Diff {
     }
 }
 
+/// Compute Myers diff operations for blame/line-mapping scenarios.
+pub fn compute_diff(old_lines: &[String], new_lines: &[String]) -> Vec<DiffOperation> {
+    Diff::compute_line_operations(old_lines, new_lines)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Diff;
+    use super::{Diff, DiffOperation, compute_diff};
     use crate::hash::SHA1;
     use std::collections::HashMap;
     use std::fs;
@@ -610,5 +666,40 @@ mod tests {
         let git_ins: HashSet<_> = collect(&git_output, '+').into_iter().collect();
         assert_eq!(ours_del, git_del, "deleted lines differ from git output");
         assert_eq!(ours_ins, git_ins, "inserted lines differ from git output");
+    }
+
+    #[test]
+    fn compute_diff_operations_basic_mapping() {
+        let old_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let new_lines = vec![
+            "a".to_string(),
+            "B".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
+
+        let ops = compute_diff(&old_lines, &new_lines);
+
+        let expected = vec![
+            DiffOperation::Equal {
+                old_line: 1,
+                new_line: 1,
+            },
+            DiffOperation::Delete { line: 2 },
+            DiffOperation::Insert {
+                line: 2,
+                content: "B".to_string(),
+            },
+            DiffOperation::Equal {
+                old_line: 3,
+                new_line: 3,
+            },
+            DiffOperation::Insert {
+                line: 4,
+                content: "d".to_string(),
+            },
+        ];
+
+        assert_eq!(ops, expected);
     }
 }
