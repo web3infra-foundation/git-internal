@@ -1,8 +1,10 @@
 [package]
 name = "git-internal"
-version = "0.1.0"
+version = "0.2.2"
 edition = "2024"
 license = "MIT"
+description = "Git-Internal is a high-performance Rust library for encoding and decoding Git internal objects and Pack files."
+exclude = ["tests"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -55,7 +57,6 @@ natord = "1.0.9"
 tempfile = "3.23.0"
 path-absolutize = "3.1.1"
 similar = "2.7.0"
-
 
 
 [dev-dependencies]
