@@ -5,7 +5,7 @@
 //!
 //! Each commit object in Git contains the following information:
 //!
-//! - A unique SHA-1 hash that identifies the commit.
+//! - A unique SHA-1/ SHA-256 hash that identifies the commit.
 //! - The author and committer of the commit (which may be different people).
 //! - The date and time the commit was made.
 //! - A commit message that describes the changes made in the commit.
@@ -15,7 +15,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use crate::errors::GitError;
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::object::ObjectTrait;
 use crate::internal::object::ObjectType;
 use crate::internal::object::signature::Signature;
@@ -36,9 +36,9 @@ use serde::Serialize;
 /// - The message field contains the commit message, which maybe include signed or DCO.
 #[derive(Eq, Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub struct Commit {
-    pub id: SHA1,
-    pub tree_id: SHA1,
-    pub parent_commit_ids: Vec<SHA1>,
+    pub id: ObjectHash,
+    pub tree_id: ObjectHash,
+    pub parent_commit_ids: Vec<ObjectHash>,
     pub author: Signature,
     pub committer: Signature,
     pub message: String,
@@ -65,12 +65,12 @@ impl Commit {
     pub fn new(
         author: Signature,
         committer: Signature,
-        tree_id: SHA1,
-        parent_commit_ids: Vec<SHA1>,
+        tree_id: ObjectHash,
+        parent_commit_ids: Vec<ObjectHash>,
         message: &str,
     ) -> Commit {
         let mut commit = Commit {
-            id: SHA1::default(),
+            id: ObjectHash::default(),
             tree_id,
             parent_commit_ids,
             author,
@@ -79,7 +79,7 @@ impl Commit {
         };
         // Calculate the hash of the commit object
         // The hash is calculated from the type and data of the commit object
-        let hash = SHA1::from_type_and_data(ObjectType::Commit, &commit.to_data().unwrap());
+        let hash = ObjectHash::from_type_and_data(ObjectType::Commit, &commit.to_data().unwrap());
         commit.id = hash;
         commit
     }
@@ -89,13 +89,17 @@ impl Commit {
     /// and a fixed email address.
     /// It also sets the commit message to the provided string.
     /// # Arguments
-    /// - `tree_id`: The SHA1 hash of the tree object that this commit points to.
-    /// - `parent_commit_ids`: A vector of SHA1 hashes of the parent commits.
+    /// - `tree_id`: The SHA1/ SHA-256 hash of the tree object that this commit points to.
+    /// - `parent_commit_ids`: A vector of SHA1/ SHA-256 hashes of the parent commits.
     /// - `message`: A string containing the commit message.
     /// # Returns
     /// A new `Commit` object with the specified tree ID, parent commit IDs, and commit message.
     /// The author and committer signatures are generated using the current time and a fixed email address.
-    pub fn from_tree_id(tree_id: SHA1, parent_commit_ids: Vec<SHA1>, message: &str) -> Commit {
+    pub fn from_tree_id(
+        tree_id: ObjectHash,
+        parent_commit_ids: Vec<ObjectHash>,
+        message: &str,
+    ) -> Commit {
         let author = Signature::from_data(
             format!(
                 "author mega <admin@mega.org> {} +0800",
@@ -149,14 +153,14 @@ impl Commit {
 }
 
 impl ObjectTrait for Commit {
-    fn from_bytes(data: &[u8], hash: SHA1) -> Result<Self, GitError>
+    fn from_bytes(data: &[u8], hash: ObjectHash) -> Result<Self, GitError>
     where
         Self: Sized,
     {
         let mut commit = data;
         // Find the tree id and remove it from the data
         let tree_end = commit.find_byte(0x0a).unwrap();
-        let tree_id: SHA1 = SHA1::from_str(
+        let tree_id: ObjectHash = ObjectHash::from_str(
             String::from_utf8(commit[5..tree_end].to_owned()) // 5 is the length of "tree "
                 .unwrap()
                 .as_str(),
@@ -170,12 +174,12 @@ impl ObjectTrait for Commit {
         // Find all parent commit ids
         // The parent commit ids are all the lines that start with "parent "
         // We can use find_iter to find all occurrences of "parent "
-        // and then extract the SHA1 hashes from them.
-        let parent_commit_ids: Vec<SHA1> = commit[..author_begin]
+        // and then extract the SHA1/ SHA-256 hashes from them.
+        let parent_commit_ids: Vec<ObjectHash> = commit[..author_begin]
             .find_iter("parent")
             .map(|parent| {
                 let parent_end = commit[parent..].find_byte(0x0a).unwrap();
-                SHA1::from_str(
+                ObjectHash::from_str(
                     // 7 is the length of "parent "
                     String::from_utf8(commit[parent + 7..parent + parent_end].to_owned())
                         .unwrap()
@@ -249,9 +253,11 @@ impl ObjectTrait for Commit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::{HashKind, set_hash_kind_for_test};
     use std::str::FromStr;
 
     fn basic_commit() -> Commit {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let raw_commit = br#"tree 341e54913a3a43069f2927cc0f703e5a9f730df1
 author benjamin.747 <benjamin.747@outlook.com> 1757467768 +0800
 committer benjamin.747 <benjamin.747@outlook.com> 1757491219 +0800
@@ -276,22 +282,52 @@ gpgsig -----BEGIN PGP SIGNATURE-----
 test parse commit from bytes
 "#;
 
-        let hash = SHA1::from_str("57d7685c60213a9da465cf900f31933be3a7ee39").unwrap();
+        let hash = ObjectHash::from_str("57d7685c60213a9da465cf900f31933be3a7ee39").unwrap();
         Commit::from_bytes(raw_commit, hash).unwrap()
     }
 
+    fn basic_commit_sha256() -> Commit {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let raw_commit = br#"tree 0250024cf99636335fff1070e4220c5d8f67cb8633572d54b304629ad5382760
+parent 33324c6819589e8eed81d6c72f216469151a0f2dbe7f42ba021d8b63049eb754
+author jackieismpc <jackieismpc@gmail.com> 1764061895 +0800
+committer jackieismpc <jackieismpc@gmail.com> 1764061895 +0800
+gpgsig-sha256 -----BEGIN PGP SIGNATURE-----
+
+ iQIzBAABCAAdFiEEzW/BI6wDXimDk/4lItD7G/h4TUsFAmklcscACgkQItD7G/h4
+ TUtKFRAAtJq9tdl9XdND1ef2dXVQYCkQQlSdNHe2AR/QRVOPI39ZjD5aajRmZoE2
+ rKDenNML1ruiGEm+K3ntRDjus+3QF5Xkhj1D6eImQt6RXyOlo64I+GLRKlzw80Sl
+ hrd+l1eeuS4n46Z0U9fo1Qgc/crSn2VhUtLHJjvRntJoOb1vNreI2Y42Zmal3oVT
+ fQNQ7mqzh3KuWoa8T6nVrLaLH1vl9qhRgkPcIRbFf+ECbB96qykHqcbdHuneSgfx
+ +REpr1cedilkQlX81JrQ8Ntf4QFUPPHALl27/G6oPLT714cflEbvcFw7rNR+ktcD
+ ZJIMu5Cl7X3/v5e0od/hF9uPfiLHckUsOXiMFLfqRdZx/5XeQFWRpq4eYcW7e89e
+ 3wJoBA2lCk8SHTBfsprKMpAweXJF9FCjRT5f9Zse2grqH81aQeNJnpSOoCq86oc/
+ nxhi8+rbIbClLCGQoGF7sE/fvmKqcex++JnXHcHTtK002Gnh3oHX07sbahlcGuYY
+ kg4QhXiLTQ5GfXnEnTPdFqbOVG02vEEsNeRgkmOz4c8Pm1FTDyOkuXd/Igvy7A9R
+ MZwQcJ6E4MnsMnoH8FKswGqCD7ftwtJtRzryORBVzvPKALufIXDVLyBbae9dxdej
+ bcpUK1bGtDljlwNtbLIOu+F1y2OVh7Tn3zxaQLcEhbUe2tP6rGk=
+ =nJMO
+ -----END PGP SIGNATURE-----
+
+signed sha256 commit for test"#;
+        let hash = ObjectHash::from_str(
+            "ed43b50437e260a4d8fedacbaa38bad28b54cc424925e4180d9f186afaa0508c",
+        )
+        .unwrap();
+        Commit::from_bytes(raw_commit.as_bytes(), hash).unwrap()
+    }
     #[test]
     fn test_from_bytes_with_gpgsig() {
         let commit = basic_commit();
 
         assert_eq!(
             commit.id,
-            SHA1::from_str("57d7685c60213a9da465cf900f31933be3a7ee39").unwrap()
+            ObjectHash::from_str("57d7685c60213a9da465cf900f31933be3a7ee39").unwrap()
         );
 
         assert_eq!(
             commit.tree_id,
-            SHA1::from_str("341e54913a3a43069f2927cc0f703e5a9f730df1").unwrap()
+            ObjectHash::from_str("341e54913a3a43069f2927cc0f703e5a9f730df1").unwrap()
         );
 
         assert_eq!(commit.author.name, "benjamin.747");
@@ -304,10 +340,41 @@ test parse commit from bytes
         assert!(commit.message.contains("-----END PGP SIGNATURE-----"));
         assert!(commit.message.contains("test parse commit from bytes"));
     }
-
+    #[test]
+    fn test_from_bytes_with_gpgsig_sha256() {
+        let commit = basic_commit_sha256();
+        assert_eq!(
+            commit.id,
+            ObjectHash::from_str(
+                "ed43b50437e260a4d8fedacbaa38bad28b54cc424925e4180d9f186afaa0508c"
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            commit.tree_id,
+            ObjectHash::from_str(
+                "0250024cf99636335fff1070e4220c5d8f67cb8633572d54b304629ad5382760"
+            )
+            .unwrap()
+        );
+        assert_eq!(commit.author.name, "jackieismpc");
+        assert_eq!(commit.author.email, "jackieismpc@gmail.com");
+        assert_eq!(commit.committer.name, "jackieismpc");
+        // check message content（must contains gpgsig-sha256 and content）
+        assert!(commit.message.contains("-----BEGIN PGP SIGNATURE-----"));
+        assert!(commit.message.contains("-----END PGP SIGNATURE-----"));
+        assert!(commit.message.contains("signed sha256 commit for test"));
+    }
     #[test]
     fn test_format_message_with_pgp_signature() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let commit = basic_commit();
         assert_eq!(commit.format_message(), "test parse commit from bytes");
+    }
+    #[test]
+    fn test_format_message_with_pgp_signature_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let commit = basic_commit_sha256();
+        assert_eq!(commit.format_message(), "signed sha256 commit for test");
     }
 }

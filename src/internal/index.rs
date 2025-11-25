@@ -12,7 +12,7 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use sha1::{Digest, Sha1};
 
 use crate::errors::GitError;
-use crate::hash::SHA1;
+use crate::hash::{SHA1, get_hash_kind};
 use crate::internal::pack::wrapper::Wrapper;
 use crate::utils;
 
@@ -287,7 +287,7 @@ impl Index {
         }
 
         // Extensions
-        while file.bytes_read() + SHA1::SIZE < total_size as usize {
+        while file.bytes_read() + get_hash_kind().size() < total_size as usize {
             // The remaining 20 bytes must be checksum
             let sign = utils::read_bytes(file, 4)?;
             println!(
@@ -341,7 +341,7 @@ impl Index {
             entry_bytes.write_u32::<BigEndian>(entry.uid)?;
             entry_bytes.write_u32::<BigEndian>(entry.gid)?;
             entry_bytes.write_u32::<BigEndian>(entry.size)?;
-            entry_bytes.write_all(&entry.hash.0)?;
+            entry_bytes.write_all(&entry.hash.as_ref())?;
             entry_bytes.write_u16::<BigEndian>((&entry.flags).try_into().unwrap())?;
             entry_bytes.write_all(entry.name.as_bytes())?;
             let padding = 8 - ((22 + entry.name.len()) % 8);
@@ -385,7 +385,7 @@ impl Index {
             let mut file = File::open(&abs_path)?;
             let mut hasher = Sha1::new();
             io::copy(&mut file, &mut hasher)?;
-            let new_hash = SHA1::from_bytes(&hasher.finalize());
+            let new_hash = SHA1::from_bytes(&hasher.finalize()).unwrap();
 
             // refresh index
             if entry.ctime != new_ctime
@@ -592,7 +592,7 @@ mod tests {
         source.push("Cargo.toml");
 
         let file = Path::new(source.as_path()); // use as a normal file
-        let hash = SHA1::from_bytes(&[0; 20]);
+        let hash = SHA1::from_bytes(&[0; 20]).unwrap();
         let workdir = Path::new("../");
         let entry = IndexEntry::new_from_file(file, hash, workdir).unwrap();
         println!("{entry}");

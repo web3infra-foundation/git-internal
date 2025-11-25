@@ -10,7 +10,7 @@ use bincode::{Decode, Encode};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use sha1::Digest;
-
+pub type SHA1 = ObjectHash;
 /// The [`SHA1`] struct, encapsulating a `[u8; 20]` array, is specifically designed to represent Git hash IDs.
 /// In Git's context, these IDs are 40-character hexadecimal strings generated via the SHA-1 algorithm.
 /// Each Git object receives a unique hash ID based on its content, serving as an identifier for its location
@@ -264,6 +264,22 @@ pub fn set_hash_kind(kind: HashKind) {
 pub fn get_hash_kind() -> HashKind {
     CURRENT_HASH_KIND.with(|h| *h.borrow())
 }
+/// A guard to reset the hash kind after the test
+pub struct HashKindGuard {
+    prev: HashKind,
+}
+/// Implementation of the `Drop` trait for the `HashKindGuard` struct.
+impl Drop for HashKindGuard {
+    fn drop(&mut self) {
+        set_hash_kind(self.prev);
+    }
+}
+/// Sets the hash kind for the current thread and returns a guard to reset it later.
+pub fn set_hash_kind_for_test(kind: HashKind) -> HashKindGuard {
+    let prev = get_hash_kind();
+    set_hash_kind(kind);
+    HashKindGuard { prev }
+}
 #[cfg(test)]
 mod tests {
 
@@ -274,21 +290,7 @@ mod tests {
     use std::str::FromStr;
     use std::{env, path::PathBuf};
 
-    use crate::hash::{HashKind, ObjectHash, get_hash_kind, set_hash_kind};
-    // A guard to reset the hash kind after the test
-    struct HashKindGuard {
-        prev: HashKind,
-    }
-    impl Drop for HashKindGuard {
-        fn drop(&mut self) {
-            set_hash_kind(self.prev);
-        }
-    }
-    fn set_hash_kind_for_test(kind: HashKind) -> HashKindGuard {
-        let prev = get_hash_kind();
-        set_hash_kind(kind);
-        HashKindGuard { prev }
-    }
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 
     #[test]
     fn test_sha1_new() {

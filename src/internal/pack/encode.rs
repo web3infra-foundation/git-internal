@@ -341,7 +341,7 @@ impl PackEncoder {
 
         // Hash signature
         let hash_result = self.inner_hash.clone().finalize();
-        self.final_hash = Some(SHA1::from_bytes(&hash_result));
+        self.final_hash = Some(SHA1::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result.to_vec()).await;
 
         self.drop_sender();
@@ -535,7 +535,7 @@ impl PackEncoder {
 
         // hash signature
         let hash_result = self.inner_hash.clone().finalize();
-        self.final_hash = Some(SHA1::from_bytes(&hash_result));
+        self.final_hash = Some(SHA1::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result.to_vec()).await;
         self.drop_sender();
         Ok(())

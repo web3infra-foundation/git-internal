@@ -14,7 +14,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 use crate::errors::GitError;
-use crate::hash::SHA1;
+use crate::hash::{SHA1, get_hash_kind};
 
 use crate::internal::metadata::{EntryMeta, MetaAttached};
 use crate::zstdelta;
@@ -312,7 +312,7 @@ impl Pack {
                 // Read 20 bytes to get the reference object SHA1 hash
                 let ref_sha1 = SHA1::from_stream(pack).unwrap();
                 // Offset is incremented by 20 bytes
-                *offset += SHA1::SIZE;
+                *offset += get_hash_kind().size();
 
                 let (data, raw_size) = Pack::decompress_data(pack, size)?;
                 *offset += raw_size;

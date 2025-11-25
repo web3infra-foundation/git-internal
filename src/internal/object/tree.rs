@@ -15,7 +15,7 @@
 //! operations like merging and rebasing more quickly and accurately.
 //!
 use crate::errors::GitError;
-use crate::hash::SHA1;
+use crate::hash::{ObjectHash, get_hash_kind};
 use crate::internal::object::ObjectTrait;
 use crate::internal::object::ObjectType;
 use bincode::{Decode, Encode};
@@ -133,7 +133,7 @@ impl TreeItemMode {
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash, Encode, Decode)]
 pub struct TreeItem {
     pub mode: TreeItemMode,
-    pub id: SHA1,
+    pub id: ObjectHash,
     pub name: String,
 }
 
@@ -151,7 +151,7 @@ impl Display for TreeItem {
 
 impl TreeItem {
     // Create a new TreeItem from a mode, id and name
-    pub fn new(mode: TreeItemMode, id: SHA1, name: String) -> Self {
+    pub fn new(mode: TreeItemMode, id: ObjectHash, name: String) -> Self {
         TreeItem { mode, id, name }
     }
 
@@ -183,7 +183,7 @@ impl TreeItem {
         };
         Ok(TreeItem {
             mode: TreeItemMode::tree_item_type_from_bytes(mode)?,
-            id: SHA1::from_bytes(id),
+            id: ObjectHash::from_bytes(id).unwrap(),
             name,
         })
     }
@@ -227,7 +227,7 @@ impl TreeItem {
 /// for each file or directory in the tree.
 #[derive(Eq, Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct Tree {
-    pub id: SHA1,
+    pub id: ObjectHash,
     pub tree_items: Vec<TreeItem>,
 }
 
@@ -262,7 +262,7 @@ impl Tree {
         }
 
         Ok(Tree {
-            id: SHA1::from_type_and_data(ObjectType::Tree, &data),
+            id: ObjectHash::from_type_and_data(ObjectType::Tree, &data),
             tree_items,
         })
     }
@@ -273,19 +273,19 @@ impl Tree {
         for item in &self.tree_items {
             data.extend_from_slice(item.to_data().as_slice());
         }
-        self.id = SHA1::from_type_and_data(ObjectType::Tree, &data);
+        self.id = ObjectHash::from_type_and_data(ObjectType::Tree, &data);
     }
 }
 
 impl TryFrom<&[u8]> for Tree {
     type Error = GitError;
     fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let h = SHA1::from_type_and_data(ObjectType::Tree, data);
+        let h = ObjectHash::from_type_and_data(ObjectType::Tree, data);
         Tree::from_bytes(data, h)
     }
 }
 impl ObjectTrait for Tree {
-    fn from_bytes(data: &[u8], hash: SHA1) -> Result<Self, GitError>
+    fn from_bytes(data: &[u8], hash: ObjectHash) -> Result<Self, GitError>
     where
         Self: Sized,
     {
@@ -295,8 +295,10 @@ impl ObjectTrait for Tree {
             // Find the position of the null byte (0x00)
             if let Some(index) = memchr::memchr(0x00, &data[i..]) {
                 // Calculate the next position
-                let next = i + index + 21;
-
+                let next = i + index + get_hash_kind().size() + 1; // +1 for the null byte
+                if next > data.len() {
+                    return Err(GitError::InvalidTreeObject);
+                } //check bounds TreeItem::from_bytes will panic if out of bounds
                 // Extract the bytes and create a TreeItem
                 let item_data = &data[i..next];
                 let tree_item = TreeItem::from_bytes(item_data)?;
@@ -339,16 +341,16 @@ impl ObjectTrait for Tree {
 #[cfg(test)]
 mod tests {
 
-    use std::str::FromStr;
-
-    use crate::hash::SHA1;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
     use crate::internal::object::tree::{Tree, TreeItem, TreeItemMode};
+    use std::str::FromStr;
 
     #[test]
     fn test_tree_item_new() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let tree_item = TreeItem::new(
             TreeItemMode::Blob,
-            SHA1::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
+            ObjectHash::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
             "hello-world".to_string(),
         );
 
@@ -358,12 +360,32 @@ mod tests {
             "8ab686eafeb1f44702738c8b0f24f2567c36da6d"
         );
     }
+    #[test]
+    fn test_tree_item_new_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let tree_item = TreeItem::new(
+            TreeItemMode::Blob,
+            ObjectHash::from_str(
+                "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+            )
+            .unwrap(),
+            "hello-world".to_string(),
+        );
+
+        assert_eq!(tree_item.mode, TreeItemMode::Blob);
+        assert_eq!(
+            tree_item.id.to_string(),
+            "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4"
+        );
+        assert_eq!(tree_item.name, "hello-world");
+    }
 
     #[test]
     fn test_tree_item_to_bytes() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let tree_item = TreeItem::new(
             TreeItemMode::Blob,
-            SHA1::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
+            ObjectHash::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
             "hello-world".to_string(),
         );
 
@@ -377,12 +399,46 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn test_tree_item_to_bytes_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let tree_item = TreeItem::new(
+            TreeItemMode::Blob,
+            ObjectHash::from_str(
+                "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+            )
+            .unwrap(),
+            "hello-world".to_string(),
+        );
+
+        let bytes = tree_item.to_data();
+
+        // 一个小 helper：把十六进制字符串转成字节序列
+        fn hex_to_bytes(s: &str) -> Vec<u8> {
+            assert!(s.len() % 2 == 0);
+            let mut out = Vec::with_capacity(s.len() / 2);
+            for i in (0..s.len()).step_by(2) {
+                let byte = u8::from_str_radix(&s[i..i + 2], 16).unwrap();
+                out.push(byte);
+            }
+            out
+        }
+
+        // 期望的编码：`"100644 hello-world\0" + <32字节的blob哈希>`
+        let mut expected = b"100644 hello-world\0".to_vec();
+        expected.extend_from_slice(&hex_to_bytes(
+            "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+        ));
+
+        assert_eq!(bytes, expected);
+    }
 
     #[test]
     fn test_tree_item_from_bytes() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let item = TreeItem::new(
             TreeItemMode::Blob,
-            SHA1::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
+            ObjectHash::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
             "hello-world".to_string(),
         );
 
@@ -392,18 +448,88 @@ mod tests {
         assert_eq!(tree_item.mode, TreeItemMode::Blob);
         assert_eq!(tree_item.id.to_string(), item.id.to_string());
     }
+    #[test]
+    fn test_tree_item_from_bytes_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let item = TreeItem::new(
+            TreeItemMode::Blob,
+            ObjectHash::from_str(
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .unwrap(),
+            "hello-world".to_string(),
+        );
+        let bytes = item.to_data();
+        let tree_item = TreeItem::from_bytes(bytes.as_slice()).unwrap();
+
+        assert_eq!(tree_item.mode, TreeItemMode::Blob);
+        assert_eq!(tree_item.id.to_string(), item.id.to_string());
+    }
 
     #[test]
     fn test_from_tree_items() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let item = TreeItem::new(
             TreeItemMode::Blob,
-            SHA1::from_str("17288789afffb273c8c394bc65e87d899b92897b").unwrap(),
+            ObjectHash::from_str("17288789afffb273c8c394bc65e87d899b92897b").unwrap(),
             "hello-world".to_string(),
         );
         let tree = Tree::from_tree_items(vec![item]).unwrap();
         println!("{}", tree.id);
         assert_eq!(
             "cf99336fa61439a2f074c7e6de1c1a05579550e2",
+            tree.id.to_string()
+        );
+    }
+    #[test]
+    fn test_from_tree_items_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let items = vec![
+            TreeItem::new(
+                TreeItemMode::Blob,
+                ObjectHash::from_str(
+                    "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+                )
+                .unwrap(),
+                "a.txt".to_string(),
+            ),
+            TreeItem::new(
+                TreeItemMode::Blob,
+                ObjectHash::from_str(
+                    "fc2593998f8e1dec9c3a8be11557888134dad90ef5c7a2d6236ed75534c7698e",
+                )
+                .unwrap(),
+                "b.txt".to_string(),
+            ),
+            TreeItem::new(
+                TreeItemMode::Blob,
+                ObjectHash::from_str(
+                    "21513dcb4d6f9eb247db3b4c52158395d94f809cbaa2630bd2a7a474d9b39fab",
+                )
+                .unwrap(),
+                "c.txt".to_string(),
+            ),
+            TreeItem::new(
+                TreeItemMode::Blob,
+                ObjectHash::from_str(
+                    "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+                )
+                .unwrap(),
+                "hello-world".to_string(),
+            ),
+            TreeItem::new(
+                TreeItemMode::Blob,
+                ObjectHash::from_str(
+                    "9ba9ae56288652bf32f074f922e37d3e95df8920b3cdfc053309595b8f86cbc6",
+                )
+                .unwrap(),
+                "message.txt".to_string(),
+            ),
+        ];
+        let tree = Tree::from_tree_items(items).unwrap();
+        println!("{}", tree.id);
+        assert_eq!(
+            "d712a36aadfb47cabc7aaa90cf9e515773ba3bfc1fe3783730b387ce15c49261",
             tree.id.to_string()
         );
     }

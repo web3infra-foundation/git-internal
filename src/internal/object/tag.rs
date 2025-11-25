@@ -42,7 +42,7 @@ use std::str::FromStr;
 use bstr::ByteSlice;
 
 use crate::errors::GitError;
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::object::ObjectTrait;
 use crate::internal::object::ObjectType;
 use crate::internal::object::signature::Signature;
@@ -50,8 +50,8 @@ use crate::internal::object::signature::Signature;
 /// The tag object is used to Annotated tag
 #[derive(Eq, Debug, Clone)]
 pub struct Tag {
-    pub id: SHA1,
-    pub object_hash: SHA1,
+    pub id: ObjectHash,
+    pub object_hash: ObjectHash,
     pub object_type: ObjectType,
     pub tag_name: String,
     pub tagger: Signature,
@@ -85,7 +85,7 @@ impl Tag {
     // }
 
     pub fn new(
-        object_hash: SHA1,
+        object_hash: ObjectHash,
         object_type: ObjectType,
         tag_name: String,
         tagger: Signature,
@@ -96,7 +96,7 @@ impl Tag {
             "object {}\ntype {}\ntag {}\ntagger {}\n\n{}",
             object_hash, object_type, tag_name, tagger, message
         );
-        let id = SHA1::from_type_and_data(ObjectType::Tag, data.as_bytes());
+        let id = ObjectHash::from_type_and_data(ObjectType::Tag, data.as_bytes());
 
         Self {
             id,
@@ -119,7 +119,7 @@ impl ObjectTrait for Tag {
     /// tagger <tagger> 0x0a # The name, email address, and date of the person who created the annotated tag
     /// <message>
     /// ```
-    fn from_bytes(row_data: &[u8], hash: SHA1) -> Result<Self, GitError>
+    fn from_bytes(row_data: &[u8], hash: ObjectHash) -> Result<Self, GitError>
     where
         Self: Sized,
     {
@@ -131,7 +131,7 @@ impl ObjectTrait for Tag {
             headers = &headers[..pos];
         }
 
-        let mut object_hash: Option<SHA1> = None;
+        let mut object_hash: Option<ObjectHash> = None;
         let mut object_type: Option<ObjectType> = None;
         let mut tag_name: Option<String> = None;
         let mut tagger: Option<Signature> = None;
@@ -141,7 +141,7 @@ impl ObjectTrait for Tag {
                 let hash_str = s.to_str().map_err(|_| {
                     GitError::InvalidTagObject("Invalid UTF-8 in object hash".to_string())
                 })?;
-                object_hash = Some(SHA1::from_str(hash_str).map_err(|_| {
+                object_hash = Some(ObjectHash::from_str(hash_str).map_err(|_| {
                     GitError::InvalidTagObject("Invalid object hash format".to_string())
                 })?);
             } else if let Some(s) = line.strip_prefix(b"type ") {
@@ -189,12 +189,13 @@ impl ObjectTrait for Tag {
 
     ///
     /// ```bash
-    /// object <object_hash> 0x0a # The SHA-1 hash of the object that the annotated tag is attached to (usually a commit)
+    /// object <object_hash> 0x0a # The SHA-1/ SHA-256 hash of the object that the annotated tag is attached to (usually a commit)
     /// type <object_type> 0x0a #The type of Git object that the annotated tag is attached to (usually 'commit')
     /// tag <tag_name> 0x0a # The name of the annotated tag(in UTF-8 encoding)
     /// tagger <tagger> 0x0a # The name, email address, and date of the person who created the annotated tag
     /// <message>
     /// ```
+    /// When using SHA-1, `<object_hash>` is 40 hex chars; when using SHA-256, it is 64 hex chars.
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
         let mut data = Vec::new();
 

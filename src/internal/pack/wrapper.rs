@@ -44,7 +44,7 @@ where
     /// This is a clone of the internal hash state finalized into a SHA1 hash.
     pub fn final_hash(&self) -> SHA1 {
         let re: [u8; 20] = self.hash.clone().finalize().into(); // Clone, finalize, and convert the hash into bytes
-        SHA1(re)
+        SHA1::from_bytes(&re).unwrap()
     }
 }
 
@@ -126,7 +126,7 @@ mod tests {
         hasher.update(data);
         let expected_hash: [u8; 20] = hasher.finalize().into();
 
-        assert_eq!(hash_result.0, expected_hash);
+        assert_eq!(hash_result.as_ref(), expected_hash);
         Ok(())
     }
 }

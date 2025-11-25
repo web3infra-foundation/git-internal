@@ -270,7 +270,7 @@ pub fn calculate_object_hash(obj_type: ObjectType, data: &Vec<u8>) -> SHA1 {
     hash.update(data);
 
     let re: [u8; 20] = hash.finalize().into();
-    SHA1(re)
+    SHA1::from_bytes(&re).unwrap()
 }
 /// Create an empty directory or clear the existing directory.
 pub fn create_empty_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {

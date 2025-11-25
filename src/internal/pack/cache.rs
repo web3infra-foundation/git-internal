@@ -10,7 +10,7 @@ use dashmap::{DashMap, DashSet};
 use lru_mem::LruCache;
 use threadpool::ThreadPool;
 
-use crate::hash::SHA1;
+use crate::hash::{SHA1, get_hash_kind};
 use crate::internal::pack::cache_object::{
     ArcWrapper, CacheObject, FileLoadStore, MemSizeRecorder,
 };
@@ -90,7 +90,8 @@ impl Caches {
     /// generate the temp file path, hex string of the hash
     fn generate_temp_path(&self, tmp_path: &Path, hash: SHA1) -> PathBuf {
         // This is enough for the original path, 2 chars directory, 40 chars hash, and extra slashes
-        let mut path = PathBuf::with_capacity(self.tmp_path.capacity() + SHA1::SIZE * 2 + 5);
+        let mut path =
+            PathBuf::with_capacity(self.tmp_path.capacity() + get_hash_kind().size() * 2 + 5);
         path.push(tmp_path);
         let hash_str = hash._to_string();
         path.push(&hash_str[..2]); // use first 2 chars as the directory
