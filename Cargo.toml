@@ -45,7 +45,7 @@ axum = { version = "0.8.7", features = ["macros", "json"] }
 async-trait = "0.1.83"
 futures = "0.3.31"
 tokio-stream = "0.1.17"
-http = "1.2.0"
+http = "1.4.0"
 base64 = "0.22.1"
 # SSH server dependencies
 russh = "0.54.6"
