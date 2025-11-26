@@ -1,4 +1,4 @@
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use std::io;
 use std::io::{BufRead, Read};
 
@@ -8,8 +8,8 @@ pub fn read_bytes(file: &mut impl Read, len: usize) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-pub fn read_sha1(file: &mut impl Read) -> io::Result<SHA1> {
-    SHA1::from_stream(file)
+pub fn read_sha(file: &mut impl Read) -> io::Result<ObjectHash> {
+    ObjectHash::from_stream(file)
 }
 
 /// A lightweight wrapper that counts bytes read from the underlying reader.

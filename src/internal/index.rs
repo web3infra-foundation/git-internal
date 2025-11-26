@@ -12,9 +12,46 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use sha1::{Digest, Sha1};
 
 use crate::errors::GitError;
-use crate::hash::{SHA1, get_hash_kind};
+use crate::hash::{ObjectHash, get_hash_kind, HashKind};
 use crate::internal::pack::wrapper::Wrapper;
 use crate::utils;
+
+/// Different hash algorithm enum
+#[derive(Clone)]
+enum Hashalgorithm {
+    Sha1(Sha1),
+    Sha256(sha2::Sha256),
+    // Future: support other hash algorithms
+}
+impl Hashalgorithm {
+    /// Update hash with data
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            Hashalgorithm::Sha1(hasher) => hasher.update(data),
+            Hashalgorithm::Sha256(hasher) => hasher.update(data),
+        }
+    }
+    /// Finalize and get hash result
+    fn finalize(self) -> Vec<u8> {
+        match self {
+            Hashalgorithm::Sha1(hasher) => hasher.finalize().to_vec(),
+            Hashalgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
+        }
+    }
+    fn new() -> Self {
+        match get_hash_kind() {
+            HashKind::Sha1 => Hashalgorithm::Sha1(Sha1::new()),
+            HashKind::Sha256 => Hashalgorithm::Sha256(sha2::Sha256::new()),
+        }
+    }
+}
+impl std::io::Write for Hashalgorithm {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.update(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Time {
@@ -112,7 +149,7 @@ pub struct IndexEntry {
     pub uid: u32,  // 0 for windows
     pub gid: u32,  // 0 for windows
     pub size: u32,
-    pub hash: SHA1,
+    pub hash: ObjectHash,
     pub flags: Flags,
     pub name: String,
 }
@@ -138,7 +175,7 @@ impl Display for IndexEntry {
 
 impl IndexEntry {
     /** Metadata must be got by [fs::symlink_metadata] to avoid following symlink */
-    pub fn new(meta: &fs::Metadata, hash: SHA1, name: String) -> Self {
+    pub fn new(meta: &fs::Metadata, hash: ObjectHash, name: String) -> Self {
         let mut entry = IndexEntry {
             ctime: Time::from_system_time(meta.created().unwrap()),
             mtime: Time::from_system_time(meta.modified().unwrap()),
@@ -181,7 +218,7 @@ impl IndexEntry {
 
     /// - `file`: **to workdir path**
     /// - `workdir`: absolute or relative path
-    pub fn new_from_file(file: &Path, hash: SHA1, workdir: &Path) -> io::Result<Self> {
+    pub fn new_from_file(file: &Path, hash: ObjectHash, workdir: &Path) -> io::Result<Self> {
         let name = file.to_str().unwrap().to_string();
         let file_abs = workdir.join(file);
         let meta = fs::symlink_metadata(file_abs)?; // without following symlink
@@ -189,7 +226,7 @@ impl IndexEntry {
         Ok(index)
     }
 
-    pub fn new_from_blob(name: String, hash: SHA1, size: u32) -> Self {
+    pub fn new_from_blob(name: String, hash: ObjectHash, size: u32) -> Self {
         IndexEntry {
             ctime: Time {
                 seconds: 0,
@@ -266,7 +303,7 @@ impl Index {
                 uid: file.read_u32::<BigEndian>()?,
                 gid: file.read_u32::<BigEndian>()?,
                 size: file.read_u32::<BigEndian>()?,
-                hash: utils::read_sha1(file)?,
+                hash: utils::read_sha(file)?,
                 flags: Flags::from(file.read_u16::<BigEndian>()?),
                 name: String::new(),
             };
@@ -282,7 +319,8 @@ impl Index {
 
             // 1-8 nul bytes as necessary to pad the entry to a multiple of eight bytes
             // while keeping the name NUL-terminated. // so at least 1 byte nul
-            let padding = 8 - ((22 + name_len) % 8); // 22 = sha1 + flags, others are 40 % 8 == 0
+            let hash_len = get_hash_kind().size();
+            let padding = (8 - ((hash_len + 2 + name_len) % 8)) % 8; // 2 for flags
             utils::read_bytes(file, padding)?;
         }
 
@@ -310,7 +348,7 @@ impl Index {
 
         // check sum
         let file_hash = file.final_hash();
-        let check_sum = utils::read_sha1(file)?;
+        let check_sum = utils::read_sha(file)?;
         if file_hash != check_sum {
             return Err(GitError::InvalidIndexFile("Check sum failed".to_string()));
         }
@@ -381,11 +419,11 @@ impl Index {
             ));
             let new_size = meta.len() as u32;
 
-            // re-calculate SHA1
+            // re-calculate SHA1/SHA256
             let mut file = File::open(&abs_path)?;
-            let mut hasher = Sha1::new();
+            let mut hasher = Hashalgorithm::new();
             io::copy(&mut file, &mut hasher)?;
-            let new_hash = SHA1::from_bytes(&hasher.finalize()).unwrap();
+            let new_hash = ObjectHash::from_bytes(&hasher.finalize()).unwrap();
 
             // refresh index
             if entry.ctime != new_ctime
@@ -456,11 +494,11 @@ impl Index {
         self.entries.contains_key(&(name.to_string(), stage))
     }
 
-    pub fn get_hash(&self, file: &str, stage: u8) -> Option<SHA1> {
+    pub fn get_hash(&self, file: &str, stage: u8) -> Option<ObjectHash> {
         self.get(file, stage).map(|entry| entry.hash)
     }
 
-    pub fn verify_hash(&self, file: &str, stage: u8, hash: &SHA1) -> bool {
+    pub fn verify_hash(&self, file: &str, stage: u8, hash: &ObjectHash) -> bool {
         let inner_hash = self.get_hash(file, stage);
         if let Some(inner_hash) = inner_hash {
             &inner_hash == hash
@@ -541,7 +579,7 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::hash::{set_hash_kind_for_test,HashKind};
     #[test]
     fn test_time() {
         let time = Time {
@@ -565,11 +603,24 @@ mod tests {
 
     #[test]
     fn test_index() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/index/index-760");
 
         let index = Index::from_file(source).unwrap();
         assert_eq!(index.size(), 760);
+        for (_, entry) in index.entries.iter() {
+            println!("{entry}");
+        }
+    }
+    #[test]
+    fn test_index_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/index/index-9-256");
+
+        let index = Index::from_file(source).unwrap();//index-里有文件名不是 UTF‑8，Index::from_file 里用 String::from_utf8(name)? 直接就报错了
+        assert_eq!(index.size(), 9);
         for (_, entry) in index.entries.iter() {
             println!("{entry}");
         }
@@ -592,7 +643,7 @@ mod tests {
         source.push("Cargo.toml");
 
         let file = Path::new(source.as_path()); // use as a normal file
-        let hash = SHA1::from_bytes(&[0; 20]).unwrap();
+        let hash = ObjectHash::from_bytes(&[0; 20]).unwrap();
         let workdir = Path::new("../");
         let entry = IndexEntry::new_from_file(file, hash, workdir).unwrap();
         println!("{entry}");
