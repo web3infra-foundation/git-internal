@@ -12,46 +12,9 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use sha1::{Digest, Sha1};
 
 use crate::errors::GitError;
-use crate::hash::{ObjectHash, get_hash_kind, HashKind};
+use crate::hash::{ObjectHash, get_hash_kind};
 use crate::internal::pack::wrapper::Wrapper;
-use crate::utils;
-
-/// Different hash algorithm enum
-#[derive(Clone)]
-enum Hashalgorithm {
-    Sha1(Sha1),
-    Sha256(sha2::Sha256),
-    // Future: support other hash algorithms
-}
-impl Hashalgorithm {
-    /// Update hash with data
-    fn update(&mut self, data: &[u8]) {
-        match self {
-            Hashalgorithm::Sha1(hasher) => hasher.update(data),
-            Hashalgorithm::Sha256(hasher) => hasher.update(data),
-        }
-    }
-    /// Finalize and get hash result
-    fn finalize(self) -> Vec<u8> {
-        match self {
-            Hashalgorithm::Sha1(hasher) => hasher.finalize().to_vec(),
-            Hashalgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
-        }
-    }
-    fn new() -> Self {
-        match get_hash_kind() {
-            HashKind::Sha1 => Hashalgorithm::Sha1(Sha1::new()),
-            HashKind::Sha256 => Hashalgorithm::Sha256(sha2::Sha256::new()),
-        }
-    }
-}
-impl std::io::Write for Hashalgorithm {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.update(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
-}
+use crate::utils::{self, Hashalgorithm};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Time {
@@ -579,7 +542,7 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::{set_hash_kind_for_test,HashKind};
+    use crate::hash::{HashKind, set_hash_kind_for_test};
     #[test]
     fn test_time() {
         let time = Time {
@@ -619,7 +582,7 @@ mod tests {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/index/index-9-256");
 
-        let index = Index::from_file(source).unwrap();//index-里有文件名不是 UTF‑8，Index::from_file 里用 String::from_utf8(name)? 直接就报错了
+        let index = Index::from_file(source).unwrap();
         assert_eq!(index.size(), 9);
         for (_, entry) in index.entries.iter() {
             println!("{entry}");
@@ -639,11 +602,24 @@ mod tests {
 
     #[test]
     fn test_index_entry_create() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("Cargo.toml");
 
         let file = Path::new(source.as_path()); // use as a normal file
         let hash = ObjectHash::from_bytes(&[0; 20]).unwrap();
+        let workdir = Path::new("../");
+        let entry = IndexEntry::new_from_file(file, hash, workdir).unwrap();
+        println!("{entry}");
+    }
+    #[test]
+    fn test_index_entry_create_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("Cargo.toml");
+
+        let file = Path::new(source.as_path());
+        let hash = ObjectHash::from_bytes(&[0u8; 32]).unwrap();
         let workdir = Path::new("../");
         let entry = IndexEntry::new_from_file(file, hash, workdir).unwrap();
         println!("{entry}");

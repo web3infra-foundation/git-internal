@@ -1,4 +1,4 @@
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use path_absolutize::Absolutize;
 use similar::{Algorithm, ChangeTag, TextDiff};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -87,13 +87,13 @@ impl Diff {
 
     /// Compute diffs for a set of files, honoring an optional filter and emitting unified diffs.
     pub fn diff<F>(
-        old_blobs: Vec<(PathBuf, SHA1)>,
-        new_blobs: Vec<(PathBuf, SHA1)>,
+        old_blobs: Vec<(PathBuf, ObjectHash)>,
+        new_blobs: Vec<(PathBuf, ObjectHash)>,
         filter: Vec<PathBuf>,
         read_content: F,
     ) -> Vec<DiffItem>
     where
-        F: Fn(&PathBuf, &SHA1) -> Vec<u8>,
+        F: Fn(&PathBuf, &ObjectHash) -> Vec<u8>,
     {
         let (processed_files, old_blobs_map, new_blobs_map) =
             Self::prepare_diff_data(old_blobs, new_blobs, &filter);
@@ -148,13 +148,16 @@ impl Diff {
 
     /// Build maps, union file set, and apply filter/path checks
     fn prepare_diff_data(
-        old_blobs: Vec<(PathBuf, SHA1)>,
-        new_blobs: Vec<(PathBuf, SHA1)>,
+        old_blobs: Vec<(PathBuf, ObjectHash)>,
+        new_blobs: Vec<(PathBuf, ObjectHash)>,
         filter: &[PathBuf],
-    ) -> (Vec<PathBuf>, HashMap<PathBuf, SHA1>, HashMap<PathBuf, SHA1>) {
-        let old_blobs_map: HashMap<PathBuf, SHA1> = old_blobs.into_iter().collect();
-        let new_blobs_map: HashMap<PathBuf, SHA1> = new_blobs.into_iter().collect();
-
+    ) -> (
+        Vec<PathBuf>,
+        HashMap<PathBuf, ObjectHash>,
+        HashMap<PathBuf, ObjectHash>,
+    ) {
+        let old_blobs_map: HashMap<PathBuf, ObjectHash> = old_blobs.into_iter().collect();
+        let new_blobs_map: HashMap<PathBuf, ObjectHash> = new_blobs.into_iter().collect();
         // union set
         let union_files: HashSet<PathBuf> = old_blobs_map
             .keys()
@@ -174,8 +177,8 @@ impl Diff {
     fn should_process(
         file: &PathBuf,
         filter: &[PathBuf],
-        old_blobs: &HashMap<PathBuf, SHA1>,
-        new_blobs: &HashMap<PathBuf, SHA1>,
+        old_blobs: &HashMap<PathBuf, ObjectHash>,
+        new_blobs: &HashMap<PathBuf, ObjectHash>,
     ) -> bool {
         if !filter.is_empty()
             && !filter
@@ -194,7 +197,7 @@ impl Diff {
         Ok(path_abs.starts_with(parent_abs))
     }
 
-    fn short_hash(hash: Option<&SHA1>) -> String {
+    fn short_hash(hash: Option<&ObjectHash>) -> String {
         hash.map(|h| {
             let hex = h.to_string();
             let take = Self::SHORT_HASH_LEN.min(hex.len());
@@ -206,9 +209,9 @@ impl Diff {
     /// Format a single file's unified diff string.
     pub fn diff_for_file_string(
         file: &PathBuf,
-        old_blobs: &HashMap<PathBuf, SHA1>,
-        new_blobs: &HashMap<PathBuf, SHA1>,
-        read_content: &dyn Fn(&PathBuf, &SHA1) -> Vec<u8>,
+        old_blobs: &HashMap<PathBuf, ObjectHash>,
+        new_blobs: &HashMap<PathBuf, ObjectHash>,
+        read_content: &dyn Fn(&PathBuf, &ObjectHash) -> Vec<u8>,
     ) -> String {
         let new_hash = new_blobs.get(file);
         let old_hash = old_blobs.get(file);
@@ -221,8 +224,8 @@ impl Diff {
     /// Format a single file's unified diff using preloaded bytes to avoid re-reading.
     fn diff_for_file_preloaded(
         file: &Path,
-        old_hash: Option<&SHA1>,
-        new_hash: Option<&SHA1>,
+        old_hash: Option<&ObjectHash>,
+        new_hash: Option<&ObjectHash>,
         old_bytes: &[u8],
         new_bytes: &[u8],
     ) -> String {
@@ -478,19 +481,23 @@ pub fn compute_diff(old_lines: &[String], new_lines: &[String]) -> Vec<DiffOpera
 #[cfg(test)]
 mod tests {
     use super::{Diff, DiffOperation, compute_diff};
-    use crate::hash::SHA1;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::tempdir;
 
-    fn run_diff(logical_path: &str, old_bytes: &[u8], new_bytes: &[u8]) -> (String, SHA1, SHA1) {
+    fn run_diff(
+        logical_path: &str,
+        old_bytes: &[u8],
+        new_bytes: &[u8],
+    ) -> (String, ObjectHash, ObjectHash) {
         let file = PathBuf::from(logical_path);
-        let old_hash = SHA1::new(old_bytes);
-        let new_hash = SHA1::new(new_bytes);
+        let old_hash = ObjectHash::new(old_bytes);
+        let new_hash = ObjectHash::new(new_bytes);
 
-        let mut blob_store: HashMap<SHA1, Vec<u8>> = HashMap::new();
+        let mut blob_store: HashMap<ObjectHash, Vec<u8>> = HashMap::new();
         blob_store.insert(old_hash, old_bytes.to_vec());
         blob_store.insert(new_hash, new_bytes.to_vec());
 
@@ -499,14 +506,15 @@ mod tests {
         old_map.insert(file.clone(), old_hash);
         new_map.insert(file.clone(), new_hash);
 
-        let reader =
-            |_: &PathBuf, h: &SHA1| -> Vec<u8> { blob_store.get(h).cloned().unwrap_or_default() };
+        let reader = |_: &PathBuf, h: &ObjectHash| -> Vec<u8> {
+            blob_store.get(h).cloned().unwrap_or_default()
+        };
 
         let diff = Diff::diff_for_file_string(&file, &old_map, &new_map, &reader);
         (diff, old_hash, new_hash)
     }
 
-    fn short_hash(hash: &SHA1) -> String {
+    fn short_hash(hash: &ObjectHash) -> String {
         hash.to_string().chars().take(7).collect()
     }
 
@@ -514,8 +522,8 @@ mod tests {
         logical_path: &str,
         old_bytes: &[u8],
         new_bytes: &[u8],
-        old_hash: &SHA1,
-        new_hash: &SHA1,
+        old_hash: &ObjectHash,
+        new_hash: &ObjectHash,
     ) -> Option<String> {
         let temp_dir = tempdir().ok()?;
         let old_file = temp_dir.path().join("old.txt");
@@ -564,6 +572,7 @@ mod tests {
 
     #[test]
     fn unified_diff_basic_changes() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let old = b"a\nb\nc\n" as &[u8];
         let new = b"a\nB\nc\nd\n" as &[u8];
         let (diff, _, _) = run_diff("foo.txt", old, new);
@@ -580,6 +589,7 @@ mod tests {
 
     #[test]
     fn binary_files_detection() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let old_bytes = vec![0u8, 159, 146, 150];
         let new_bytes = vec![0xFF, 0x00, 0x01];
         let (diff, _, _) = run_diff("bin.dat", &old_bytes, &new_bytes);
@@ -588,6 +598,7 @@ mod tests {
 
     #[test]
     fn diff_matches_git_for_fixture() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256); //use it to test SHA1/SHA-256 diffs as well
         let base: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "diff"]
             .iter()
             .collect();
@@ -628,6 +639,7 @@ mod tests {
 
     #[test]
     fn diff_matches_git_for_large_change() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let old_lines: Vec<String> = (0..5_000).map(|i| format!("line {i}")).collect();
         let mut new_lines = old_lines.clone();
         for idx in [10, 499, 1_234, 3_210, 4_999] {
@@ -670,6 +682,7 @@ mod tests {
 
     #[test]
     fn compute_diff_operations_basic_mapping() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let old_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let new_lines = vec![
             "a".to_string(),

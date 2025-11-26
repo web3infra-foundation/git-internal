@@ -1,7 +1,7 @@
-use crate::hash::ObjectHash;
+use crate::hash::{HashKind, ObjectHash, get_hash_kind};
+use sha1::{Digest, Sha1};
 use std::io;
 use std::io::{BufRead, Read};
-
 pub fn read_bytes(file: &mut impl Read, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = vec![0; len];
     file.read_exact(&mut buf)?;
@@ -45,5 +45,43 @@ impl<R: BufRead> BufRead for CountingReader<R> {
     fn consume(&mut self, amt: usize) {
         self.bytes_read += amt as u64;
         self.inner.consume(amt);
+    }
+}
+/// Different hash algorithm enum
+#[derive(Clone)]
+pub enum Hashalgorithm {
+    Sha1(Sha1),
+    Sha256(sha2::Sha256),
+    // Future: support other hash algorithms
+}
+impl Hashalgorithm {
+    /// Update hash with data
+    pub fn update(&mut self, data: &[u8]) {
+        match self {
+            Hashalgorithm::Sha1(hasher) => hasher.update(data),
+            Hashalgorithm::Sha256(hasher) => hasher.update(data),
+        }
+    }
+    /// Finalize and get hash result
+    pub fn finalize(self) -> Vec<u8> {
+        match self {
+            Hashalgorithm::Sha1(hasher) => hasher.finalize().to_vec(),
+            Hashalgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
+        }
+    }
+    pub fn new() -> Self {
+        match get_hash_kind() {
+            HashKind::Sha1 => Hashalgorithm::Sha1(Sha1::new()),
+            HashKind::Sha256 => Hashalgorithm::Sha256(sha2::Sha256::new()),
+        }
+    }
+}
+impl std::io::Write for Hashalgorithm {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.update(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }

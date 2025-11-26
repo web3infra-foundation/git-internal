@@ -8,15 +8,13 @@ use crate::internal::object::types::ObjectType;
 use crate::time_it;
 use crate::zstdelta;
 use crate::{
-    errors::GitError,
-    hash::{HashKind, ObjectHash, get_hash_kind},
-    internal::pack::entry::Entry,
+    errors::GitError, hash::ObjectHash, internal::pack::entry::Entry, utils::Hashalgorithm,
 };
 use ahash::AHasher;
 use flate2::write::ZlibEncoder;
 use natord::compare;
 use rayon::prelude::*;
-use sha1::{Digest, Sha1};
+
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -26,35 +24,6 @@ const MAX_CHAIN_LEN: usize = 50;
 const MIN_DELTA_RATE: f64 = 0.5; // minimum delta rate
 //const MAX_ZSTDELTA_CHAIN_LEN: usize = 50;
 
-/// Different hash algorithm enum
-#[derive(Clone)]
-enum Hashalgorithm {
-    Sha1(Sha1),
-    Sha256(sha2::Sha256),
-    // Future: support other hash algorithms
-}
-impl Hashalgorithm {
-    /// Update hash with data
-    fn update(&mut self, data: &[u8]) {
-        match self {
-            Hashalgorithm::Sha1(hasher) => hasher.update(data),
-            Hashalgorithm::Sha256(hasher) => hasher.update(data),
-        }
-    }
-    /// Finalize and get hash result
-    fn finalize(self) -> Vec<u8> {
-        match self {
-            Hashalgorithm::Sha1(hasher) => hasher.finalize().to_vec(),
-            Hashalgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
-        }
-    }
-    fn new() -> Self {
-        match get_hash_kind() {
-            HashKind::Sha1 => Hashalgorithm::Sha1(Sha1::new()),
-            HashKind::Sha256 => Hashalgorithm::Sha256(sha2::Sha256::new()),
-        }
-    }
-}
 /// A encoder for generating pack files with delta objects.
 pub struct PackEncoder {
     object_number: usize,
