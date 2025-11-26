@@ -7,7 +7,11 @@ use crate::internal::metadata::{EntryMeta, MetaAttached};
 use crate::internal::object::types::ObjectType;
 use crate::time_it;
 use crate::zstdelta;
-use crate::{errors::GitError, hash::SHA1, internal::pack::entry::Entry};
+use crate::{
+    errors::GitError,
+    hash::{HashKind, ObjectHash, get_hash_kind},
+    internal::pack::entry::Entry,
+};
 use ahash::AHasher;
 use flate2::write::ZlibEncoder;
 use natord::compare;
@@ -22,6 +26,35 @@ const MAX_CHAIN_LEN: usize = 50;
 const MIN_DELTA_RATE: f64 = 0.5; // minimum delta rate
 //const MAX_ZSTDELTA_CHAIN_LEN: usize = 50;
 
+/// Different hash algorithm enum
+#[derive(Clone)]
+enum Hashalgorithm {
+    Sha1(Sha1),
+    Sha256(sha2::Sha256),
+    // Future: support other hash algorithms
+}
+impl Hashalgorithm {
+    /// Update hash with data
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            Hashalgorithm::Sha1(hasher) => hasher.update(data),
+            Hashalgorithm::Sha256(hasher) => hasher.update(data),
+        }
+    }
+    /// Finalize and get hash result
+    fn finalize(self) -> Vec<u8> {
+        match self {
+            Hashalgorithm::Sha1(hasher) => hasher.finalize().to_vec(),
+            Hashalgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
+        }
+    }
+    fn new() -> Self {
+        match get_hash_kind() {
+            HashKind::Sha1 => Hashalgorithm::Sha1(Sha1::new()),
+            HashKind::Sha256 => Hashalgorithm::Sha256(sha2::Sha256::new()),
+        }
+    }
+}
 /// A encoder for generating pack files with delta objects.
 pub struct PackEncoder {
     object_number: usize,
@@ -29,9 +62,9 @@ pub struct PackEncoder {
     window_size: usize,
     // window: VecDeque<(Entry, usize)>, // entry and offset
     sender: Option<mpsc::Sender<Vec<u8>>>,
-    inner_offset: usize, // offset of current entry
-    inner_hash: Sha1,    // Not SHA1 because need update trait
-    final_hash: Option<SHA1>,
+    inner_offset: usize,       // offset of current entry
+    inner_hash: Hashalgorithm, // introduce different hash algorithm
+    final_hash: Option<ObjectHash>,
     start_encoding: bool,
 }
 
@@ -184,8 +217,8 @@ impl PackEncoder {
             process_index: 0,
             // window: VecDeque::with_capacity(window_size),
             sender: Some(sender),
-            inner_offset: 12, // 12 bytes header
-            inner_hash: Sha1::new(),
+            inner_offset: 12,                 // 12 bytes header
+            inner_hash: Hashalgorithm::new(), // introduce different hash algorithm
             final_hash: None,
             start_encoding: false,
         }
@@ -202,7 +235,7 @@ impl PackEncoder {
     }
 
     /// Get the hash of the pack file. if the pack file is not finished, return None
-    pub fn get_hash(&self) -> Option<SHA1> {
+    pub fn get_hash(&self) -> Option<ObjectHash> {
         self.final_hash
     }
 
@@ -341,7 +374,7 @@ impl PackEncoder {
 
         // Hash signature
         let hash_result = self.inner_hash.clone().finalize();
-        self.final_hash = Some(SHA1::from_bytes(&hash_result).unwrap());
+        self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result.to_vec()).await;
 
         self.drop_sender();
@@ -535,7 +568,7 @@ impl PackEncoder {
 
         // hash signature
         let hash_result = self.inner_hash.clone().finalize();
-        self.final_hash = Some(SHA1::from_bytes(&hash_result).unwrap());
+        self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result.to_vec()).await;
         self.drop_sender();
         Ok(())
@@ -585,12 +618,12 @@ mod tests {
     use std::{io::Cursor, path::PathBuf};
     use tokio::sync::Mutex;
 
+    use super::*;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
     use crate::internal::object::blob::Blob;
     use crate::internal::pack::utils::read_offset_encoding;
     use crate::internal::pack::{Pack, tests::init_logger};
     use crate::time_it;
-
-    use super::*;
 
     fn check_format(data: &Vec<u8>) {
         let mut p = Pack::new(
@@ -601,12 +634,13 @@ mod tests {
         );
         let mut reader = Cursor::new(data);
         tracing::debug!("start check format");
-        p.decode(&mut reader, |_| {}, None::<fn(SHA1)>)
+        p.decode(&mut reader, |_| {}, None::<fn(ObjectHash)>)
             .expect("pack file format error");
     }
 
     #[tokio::test]
     async fn test_pack_encoder() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         async fn encode_once(window_size: usize) -> Vec<u8> {
             let (tx, mut rx) = mpsc::channel(100);
             let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(1);
@@ -646,6 +680,48 @@ mod tests {
         assert!(pack_with_delta.len() <= pack_without_delta_size);
         check_format(&pack_with_delta);
     }
+    #[tokio::test]
+    async fn test_pack_encoder_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+
+        async fn encode_once(window_size: usize) -> Vec<u8> {
+            let (tx, mut rx) = mpsc::channel(100);
+            let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(1);
+
+            let str_vec = vec!["hello, word", "hello, world.", "!", "123141251251"];
+            let encoder = PackEncoder::new(str_vec.len(), window_size, tx);
+            encoder.encode_async(entry_rx).await.unwrap();
+
+            for s in str_vec {
+                let blob = Blob::from_content(s);
+                let entry: Entry = blob.into();
+                entry_tx
+                    .send(MetaAttached {
+                        inner: entry,
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(entry_tx);
+
+            let mut result = Vec::new();
+            while let Some(chunk) = rx.recv().await {
+                result.extend(chunk);
+            }
+            result
+        }
+
+        // without delta
+        let pack_without_delta = encode_once(0).await;
+        let pack_without_delta_size = pack_without_delta.len();
+        check_format(&pack_without_delta);
+
+        // with delta
+        let pack_with_delta = encode_once(4).await;
+        assert!(pack_with_delta.len() <= pack_without_delta_size);
+        check_format(&pack_with_delta);
+    }
 
     async fn get_entries_for_test() -> Arc<Mutex<Vec<Entry>>> {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -664,7 +740,33 @@ mod tests {
                 let mut entries = entries_clone.blocking_lock();
                 entries.push(entry.inner);
             },
-            None::<fn(SHA1)>,
+            None::<fn(ObjectHash)>,
+        )
+        .unwrap();
+        assert_eq!(p.number, entries.lock().await.len());
+        tracing::info!("total entries: {}", p.number);
+        drop(p);
+
+        entries
+    }
+    async fn get_entries_for_test_sha256() -> Arc<Mutex<Vec<Entry>>> {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data/packs/pack-78047853c60a1a3bb587f59598bdeb773fefc821f6f60f4f4797644ad43dad3d.pack");
+
+        let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
+
+        let f = std::fs::File::open(&source).unwrap();
+        tracing::info!("pack file size: {}", f.metadata().unwrap().len());
+        let mut reader = std::io::BufReader::new(f);
+        let entries = Arc::new(Mutex::new(Vec::new()));
+        let entries_clone = entries.clone();
+        p.decode(
+            &mut reader,
+            move |entry| {
+                let mut entries = entries_clone.blocking_lock();
+                entries.push(entry.inner);
+            },
+            None::<fn(ObjectHash)>,
         )
         .unwrap();
         assert_eq!(p.number, entries.lock().await.len());
@@ -676,6 +778,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pack_encoder_parallel_large_file() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
 
         let start = Instant::now();
@@ -735,9 +838,70 @@ mod tests {
         // check format
         check_format(&result);
     }
+    #[tokio::test]
+    async fn test_pack_encoder_parallel_large_file_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        init_logger();
+
+        let start = Instant::now();
+        // use sha256 pack file for testing
+        let entries = get_entries_for_test_sha256().await;
+        let entries_number = entries.lock().await.len();
+
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+
+        let (tx, mut rx) = mpsc::channel(1_000_000);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(1_000_000);
+
+        let mut encoder = PackEncoder::new(entries_number, 0, tx);
+        tokio::spawn(async move {
+            time_it!("test parallel encode sha256", {
+                encoder.parallel_encode(entry_rx).await.unwrap();
+            });
+        });
+
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx
+                    .send(MetaAttached {
+                        inner: entry.clone(),
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+
+        let mut result = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            result.extend(chunk);
+        }
+
+        let pack_size = result.len();
+        let compression_rate = if total_original_size > 0 {
+            1.0 - (pack_size as f64 / total_original_size as f64)
+        } else {
+            0.0
+        };
+
+        let duration = start.elapsed();
+        tracing::info!("sha256 test executed in: {:.2?}", duration);
+        tracing::info!("new pack file size: {}", result.len());
+        tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
+        check_format(&result);
+    }
 
     #[tokio::test]
     async fn test_pack_encoder_large_file() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
         let entries = get_entries_for_test().await;
         let entries_number = entries.lock().await.len();
@@ -804,11 +968,143 @@ mod tests {
             total_original_size.saturating_sub(pack_size)
         );
     }
+    #[tokio::test]
+    async fn test_pack_encoder_large_file_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        init_logger();
+        let entries = get_entries_for_test_sha256().await;
+        let entries_number = entries.lock().await.len();
+
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+
+        let start = Instant::now();
+        // encode entries
+        let (tx, mut rx) = mpsc::channel(100_000);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(100_000);
+
+        let mut encoder = PackEncoder::new(entries_number, 0, tx);
+        tokio::spawn(async move {
+            time_it!("test encode no parallel sha256", {
+                encoder.encode(entry_rx).await.unwrap();
+            });
+        });
+
+        // spawn a task to send entries
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx
+                    .send(MetaAttached {
+                        inner: entry.clone(),
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+
+        // // only receive data
+        // while (rx.recv().await).is_some() {
+        //     // do nothing
+        // }
+
+        let mut result = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            result.extend(chunk);
+        }
+
+        let pack_size = result.len();
+        let compression_rate = if total_original_size > 0 {
+            1.0 - (pack_size as f64 / total_original_size as f64)
+        } else {
+            0.0
+        };
+
+        let duration = start.elapsed();
+        tracing::info!("test executed in: {:.2?}", duration);
+        tracing::info!("new pack file size: {}", pack_size);
+        tracing::info!("original total size: {}", total_original_size);
+        tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
+        tracing::info!(
+            "space saved: {} bytes",
+            total_original_size.saturating_sub(pack_size)
+        );
+    }
 
     #[tokio::test]
     async fn test_pack_encoder_with_zstdelta() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
         let entries = get_entries_for_test().await;
+        let entries_number = entries.lock().await.len();
+
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+
+        let start = Instant::now();
+        let (tx, mut rx) = mpsc::channel(100_000);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(100_000);
+
+        let encoder = PackEncoder::new(entries_number, 10, tx);
+        encoder.encode_async_with_zstdelta(entry_rx).await.unwrap();
+
+        // spawn a task to send entries
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx
+                    .send(MetaAttached {
+                        inner: entry.clone(),
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+
+        let mut result = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            result.extend(chunk);
+        }
+
+        let pack_size = result.len();
+        let compression_rate = if total_original_size > 0 {
+            1.0 - (pack_size as f64 / total_original_size as f64)
+        } else {
+            0.0
+        };
+
+        let duration = start.elapsed();
+        tracing::info!("test executed in: {:.2?}", duration);
+        tracing::info!("new pack file size: {}", pack_size);
+        tracing::info!("original total size: {}", total_original_size);
+        tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
+        tracing::info!(
+            "space saved: {} bytes",
+            total_original_size.saturating_sub(pack_size)
+        );
+
+        // check format
+        check_format(&result);
+    }
+    #[tokio::test]
+    async fn test_pack_encoder_with_zstdelta_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        init_logger();
+        let entries = get_entries_for_test_sha256().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -882,8 +1178,72 @@ mod tests {
 
     #[tokio::test]
     async fn test_pack_encoder_large_file_with_delta() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
         let entries = get_entries_for_test().await;
+        let entries_number = entries.lock().await.len();
+
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+
+        let (tx, mut rx) = mpsc::channel(100_000);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(100_000);
+
+        let encoder = PackEncoder::new(entries_number, 10, tx);
+
+        let start = Instant::now(); // 开始时间
+        encoder.encode_async(entry_rx).await.unwrap();
+
+        // spawn a task to send entries
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx
+                    .send(MetaAttached {
+                        inner: entry.clone(),
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+
+        let mut result = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            result.extend(chunk);
+        }
+
+        let pack_size = result.len();
+        let compression_rate = if total_original_size > 0 {
+            1.0 - (pack_size as f64 / total_original_size as f64)
+        } else {
+            0.0
+        };
+
+        let duration = start.elapsed();
+        tracing::info!("test executed in: {:.2?}", duration);
+        tracing::info!("new pack file size: {}", pack_size);
+        tracing::info!("original total size: {}", total_original_size);
+        tracing::info!("compression rate: {:.2}%", compression_rate * 100.0);
+        tracing::info!(
+            "space saved: {} bytes",
+            total_original_size.saturating_sub(pack_size)
+        );
+
+        // check format
+        check_format(&result);
+    }
+    #[tokio::test]
+    async fn test_pack_encoder_large_file_with_delta_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        init_logger();
+        let entries = get_entries_for_test_sha256().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
