@@ -3,7 +3,7 @@
 //! location in the Git internal and mega database.
 //!
 
-use std::{cell::RefCell, fmt::Display, io, str::FromStr};
+use std::{cell::RefCell, fmt::Display, hash::Hash, io, str::FromStr};
 
 use crate::internal::object::types::ObjectType;
 use bincode::{Decode, Encode};
@@ -145,6 +145,16 @@ impl FromStr for ObjectHash {
 /// - `_to_string`: Converts the hash to a hexadecimal string representation.
 ///
 impl ObjectHash {
+    /// returns a zeroed hash value for the given hash kind
+    pub fn zero_str(kind: HashKind) -> String {
+        match kind {
+            HashKind::Sha1 => "0000000000000000000000000000000000000000".to_string(),
+            HashKind::Sha256 => {
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string()
+            }
+        }
+    }
+
     /// returns the kind of hash
     pub fn kind(&self) -> HashKind {
         match self {
