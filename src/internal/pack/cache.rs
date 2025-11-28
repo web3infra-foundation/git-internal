@@ -10,7 +10,7 @@ use dashmap::{DashMap, DashSet};
 use lru_mem::LruCache;
 use threadpool::ThreadPool;
 
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::pack::cache_object::{
     ArcWrapper, CacheObject, FileLoadStore, MemSizeRecorder,
 };
@@ -20,29 +20,29 @@ pub trait _Cache {
     fn new(mem_size: Option<usize>, tmp_path: PathBuf, thread_num: usize) -> Self
     where
         Self: Sized;
-    fn get_hash(&self, offset: usize) -> Option<SHA1>;
-    fn insert(&self, offset: usize, hash: SHA1, obj: CacheObject) -> Arc<CacheObject>;
+    fn get_hash(&self, offset: usize) -> Option<ObjectHash>;
+    fn insert(&self, offset: usize, hash: ObjectHash, obj: CacheObject) -> Arc<CacheObject>;
     fn get_by_offset(&self, offset: usize) -> Option<Arc<CacheObject>>;
-    fn get_by_hash(&self, h: SHA1) -> Option<Arc<CacheObject>>;
+    fn get_by_hash(&self, h: ObjectHash) -> Option<Arc<CacheObject>>;
     fn total_inserted(&self) -> usize;
     fn memory_used(&self) -> usize;
     fn clear(&self);
 }
 
-impl lru_mem::HeapSize for SHA1 {
+impl lru_mem::HeapSize for ObjectHash {
     fn heap_size(&self) -> usize {
         0
     }
 }
 
 pub struct Caches {
-    map_offset: DashMap<usize, SHA1>, // offset to hash
-    hash_set: DashSet<SHA1>,          // item in the cache
+    map_offset: DashMap<usize, ObjectHash>, // offset to hash
+    hash_set: DashSet<ObjectHash>,          // item in the cache
     // dropping large lru cache will take a long time on Windows without multi-thread IO
     // because "multi-thread IO" clone Arc<CacheObject>, so it won't be dropped in the main thread,
     // and `CacheObjects` will be killed by OS after Process ends abnormally
     // Solution: use `mimalloc`
-    lru_cache: Mutex<LruCache<SHA1, ArcWrapper<CacheObject>>>,
+    lru_cache: Mutex<LruCache<ObjectHash, ArcWrapper<CacheObject>>>,
     mem_size: Option<usize>,
     tmp_path: PathBuf,
     path_prefixes: [Once; 256],
@@ -52,14 +52,14 @@ pub struct Caches {
 
 impl Caches {
     /// only get object from memory, not from tmp file
-    fn try_get(&self, hash: SHA1) -> Option<Arc<CacheObject>> {
+    fn try_get(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
         let mut map = self.lru_cache.lock().unwrap();
         map.get(&hash).map(|x| x.data.clone())
     }
 
     /// !IMPORTANT: because of the process of pack, the file must be written / be writing before, so it won't be dead lock
     /// fall back to temp to get item. **invoker should ensure the hash is in the cache, or it will block forever**
-    fn get_fallback(&self, hash: SHA1) -> io::Result<Arc<CacheObject>> {
+    fn get_fallback(&self, hash: ObjectHash) -> io::Result<Arc<CacheObject>> {
         let path = self.generate_temp_path(&self.tmp_path, hash);
         // read from tmp file
         let obj = {
@@ -88,9 +88,10 @@ impl Caches {
     }
 
     /// generate the temp file path, hex string of the hash
-    fn generate_temp_path(&self, tmp_path: &Path, hash: SHA1) -> PathBuf {
-        // This is enough for the original path, 2 chars directory, 40 chars hash, and extra slashes
-        let mut path = PathBuf::with_capacity(self.tmp_path.capacity() + SHA1::SIZE * 2 + 5);
+    fn generate_temp_path(&self, tmp_path: &Path, hash: ObjectHash) -> PathBuf {
+        // Reserve capacity for base path, 2-char subdir, hex hash string, and separators
+        let mut path =
+            PathBuf::with_capacity(self.tmp_path.capacity() + hash.to_string().len() + 5);
         path.push(tmp_path);
         let hash_str = hash._to_string();
         path.push(&hash_str[..2]); // use first 2 chars as the directory
@@ -118,8 +119,9 @@ impl Caches {
 
     /// memory used by the index (exclude lru_cache which is contained in CacheObject::get_mem_size())
     pub fn memory_used_index(&self) -> usize {
-        self.map_offset.capacity() * (std::mem::size_of::<usize>() + std::mem::size_of::<SHA1>())
-            + self.hash_set.capacity() * (std::mem::size_of::<SHA1>())
+        self.map_offset.capacity()
+            * (std::mem::size_of::<usize>() + std::mem::size_of::<ObjectHash>())
+            + self.hash_set.capacity() * (std::mem::size_of::<ObjectHash>())
     }
 
     /// remove the tmp dir
@@ -156,11 +158,11 @@ impl _Cache for Caches {
         }
     }
 
-    fn get_hash(&self, offset: usize) -> Option<SHA1> {
+    fn get_hash(&self, offset: usize) -> Option<ObjectHash> {
         self.map_offset.get(&offset).map(|x| *x)
     }
 
-    fn insert(&self, offset: usize, hash: SHA1, obj: CacheObject) -> Arc<CacheObject> {
+    fn insert(&self, offset: usize, hash: ObjectHash, obj: CacheObject) -> Arc<CacheObject> {
         let obj_arc = Arc::new(obj);
         {
             // ? whether insert to cache directly or only write to tmp file
@@ -189,7 +191,7 @@ impl _Cache for Caches {
         }
     }
 
-    fn get_by_hash(&self, hash: SHA1) -> Option<Arc<CacheObject>> {
+    fn get_by_hash(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
         // check if the hash is in the cache( lru or tmp file)
         if self.hash_set.contains(&hash) {
             match self.try_get(hash) {
@@ -235,12 +237,15 @@ mod test {
 
     use super::*;
     use crate::{
-        hash::SHA1,
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::{object::types::ObjectType, pack::cache_object::CacheObjectInfo},
     };
+    use std::sync::Arc;
+    use std::thread;
 
     #[test]
     fn test_cache_single_thread() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
         let tmp_path = source.clone().join("tests/.cache_tmp");
 
@@ -249,8 +254,8 @@ mod test {
         }
 
         let cache = Caches::new(Some(2048), tmp_path, 1);
-        let a_hash = SHA1::new(String::from("a").as_bytes());
-        let b_hash = SHA1::new(String::from("b").as_bytes());
+        let a_hash = ObjectHash::new(String::from("a").as_bytes());
+        let b_hash = ObjectHash::new(String::from("b").as_bytes());
         let a = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, a_hash),
             data_decompressed: vec![0; 800],
@@ -276,7 +281,7 @@ mod test {
         assert!(cache.try_get(b_hash).is_some());
         assert!(cache.try_get(a_hash).is_some());
 
-        let c_hash = SHA1::new(String::from("c").as_bytes());
+        let c_hash = ObjectHash::new(String::from("c").as_bytes());
         // insert c which will evict both a and b
         let c = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, c_hash),
@@ -290,5 +295,103 @@ mod test {
         assert!(cache.try_get(b_hash).is_none());
         assert!(cache.try_get(c_hash).is_some());
         assert!(cache.get_by_hash(c_hash).is_some());
+    }
+    #[test]
+    fn test_cache_single_thread_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let tmp_path = source.clone().join("tests/.cache_tmp_sha256");
+
+        if tmp_path.exists() {
+            fs::remove_dir_all(&tmp_path).unwrap();
+        }
+        let cache = Caches::new(Some(4096), tmp_path, 1);
+        let a_hash = ObjectHash::new(String::from("a").as_bytes());
+        let b_hash = ObjectHash::new(String::from("b").as_bytes());
+        let a = CacheObject {
+            info: CacheObjectInfo::BaseObject(ObjectType::Blob, a_hash),
+            data_decompressed: vec![0; 1500],
+            mem_recorder: None,
+            offset: 0,
+            is_delta_in_pack: false,
+        };
+        let b = CacheObject {
+            info: CacheObjectInfo::BaseObject(ObjectType::Blob, b_hash),
+            data_decompressed: vec![0; 1500],
+            mem_recorder: None,
+            offset: 0,
+            is_delta_in_pack: false,
+        };
+        // insert a
+        cache.insert(a.offset, a_hash, a.clone());
+        assert!(cache.hash_set.contains(&a_hash));
+        assert!(cache.try_get(a_hash).is_some());
+        // insert b, a should still be in cache
+        cache.insert(b.offset, b_hash, b.clone());
+        assert!(cache.hash_set.contains(&b_hash));
+        assert!(cache.try_get(b_hash).is_some());
+        assert!(cache.try_get(a_hash).is_some());
+        let c_hash = ObjectHash::new(String::from("c").as_bytes());
+        // insert c which will evict both a and b
+        let c = CacheObject {
+            info: CacheObjectInfo::BaseObject(ObjectType::Blob, c_hash),
+            data_decompressed: vec![0; 3000],
+            mem_recorder: None,
+            offset: 0,
+            is_delta_in_pack: false,
+        };
+        cache.insert(c.offset, c_hash, c.clone());
+        assert!(cache.try_get(a_hash).is_none());
+        assert!(cache.try_get(b_hash).is_none());
+        assert!(cache.try_get(c_hash).is_some());
+        assert!(cache.get_by_hash(c_hash).is_some());
+    }
+    #[test]
+    /// consider the multi-threaded scenario where different threads use different hash kinds
+    fn test_cache_multi_thread_mixed_hash_kinds() {
+        let base = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let tmp_path = base.join("tests/.cache_tmp_mixed");
+        if tmp_path.exists() {
+            fs::remove_dir_all(&tmp_path).unwrap();
+        }
+
+        let cache = Arc::new(Caches::new(Some(4096), tmp_path, 2));
+
+        let cache_sha1 = Arc::clone(&cache);
+        let handle_sha1 = thread::spawn(move || {
+            let _g = set_hash_kind_for_test(HashKind::Sha1);
+            let hash = ObjectHash::new(b"sha1-entry");
+            let obj = CacheObject {
+                info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash),
+                data_decompressed: vec![0; 800],
+                mem_recorder: None,
+                offset: 1,
+                is_delta_in_pack: false,
+            };
+            cache_sha1.insert(obj.offset, hash, obj.clone());
+            assert!(cache_sha1.hash_set.contains(&hash));
+            assert!(cache_sha1.try_get(hash).is_some());
+        });
+
+        let cache_sha256 = Arc::clone(&cache);
+        let handle_sha256 = thread::spawn(move || {
+            let _g = set_hash_kind_for_test(HashKind::Sha256);
+            let hash = ObjectHash::new(b"sha256-entry");
+            let obj = CacheObject {
+                info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash),
+                data_decompressed: vec![0; 1500],
+                mem_recorder: None,
+                offset: 2,
+                is_delta_in_pack: false,
+            };
+            cache_sha256.insert(obj.offset, hash, obj.clone());
+            assert!(cache_sha256.hash_set.contains(&hash));
+            assert!(cache_sha256.try_get(hash).is_some());
+        });
+
+        handle_sha1.join().unwrap();
+        handle_sha256.join().unwrap();
+
+        assert_eq!(cache.total_inserted(), 2);
     }
 }

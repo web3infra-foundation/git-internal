@@ -2,19 +2,20 @@ use std::io::{self, BufRead, Read};
 
 use sha1::{Digest, Sha1};
 
-use crate::hash::SHA1;
-
-/// [`Wrapper`] is a wrapper around a reader that also computes the SHA1 hash of the data read.
+use crate::hash::{HashKind, ObjectHash, get_hash_kind};
+use crate::utils::HashAlgorithm;
+/// [`Wrapper`] is a wrapper around a reader that also computes the SHA1/ SHA256 hash of the data read.
 ///
 /// It is designed to work with any reader that implements `BufRead`.
 ///
 /// Fields:
 /// * `inner`: The inner reader.
-/// * `hash`: The SHA1 hash state.
+/// * `hash`: The  hash state.
 /// * `count_hash`: A flag to indicate whether to compute the hash while reading.
+///
 pub struct Wrapper<R> {
     inner: R,
-    hash: Sha1,
+    hash: HashAlgorithm,
     bytes_read: usize,
 }
 
@@ -30,7 +31,10 @@ where
     pub fn new(inner: R) -> Self {
         Self {
             inner,
-            hash: Sha1::new(), // Initialize a new SHA1 hasher
+            hash: match get_hash_kind() {
+                HashKind::Sha1 => HashAlgorithm::Sha1(Sha1::new()),
+                HashKind::Sha256 => HashAlgorithm::Sha256(sha2::Sha256::new()),
+            }, // Initialize a new SHA1/ SHA256 hasher
             bytes_read: 0,
         }
     }
@@ -39,12 +43,20 @@ where
         self.bytes_read
     }
 
-    /// Returns the final SHA1 hash of the data read so far.
+    /// Returns the final SHA1/ SHA256 hash of the data read so far.
     ///
-    /// This is a clone of the internal hash state finalized into a SHA1 hash.
-    pub fn final_hash(&self) -> SHA1 {
-        let re: [u8; 20] = self.hash.clone().finalize().into(); // Clone, finalize, and convert the hash into bytes
-        SHA1(re)
+    /// This is a clone of the internal hash state finalized into a SHA1/ SHA256 hash.
+    pub fn final_hash(&self) -> ObjectHash {
+        match &self.hash.clone() {
+            HashAlgorithm::Sha1(hasher) => {
+                let re: [u8; 20] = hasher.clone().finalize().into(); // Clone, finalize, and convert the hash into bytes
+                ObjectHash::from_bytes(&re).unwrap()
+            }
+            HashAlgorithm::Sha256(hasher) => {
+                let re: [u8; 32] = hasher.clone().finalize().into(); // Clone, finalize, and convert the hash into bytes
+                ObjectHash::from_bytes(&re).unwrap()
+            }
+        }
     }
 }
 
@@ -63,7 +75,10 @@ where
     /// * `amt`: The amount of data to consume from the buffer.
     fn consume(&mut self, amt: usize) {
         let buffer = self.inner.fill_buf().expect("Failed to fill buffer");
-        self.hash.update(&buffer[..amt]); // Update hash with the data being consumed
+        match &mut self.hash {
+            HashAlgorithm::Sha1(hasher) => hasher.update(&buffer[..amt]), // Update SHA1 hash with the data being consumed
+            HashAlgorithm::Sha256(hasher) => hasher.update(&buffer[..amt]), // Update SHA256 hash with the data being consumed
+        }
         self.inner.consume(amt); // Consume the data from the inner reader
         self.bytes_read += amt;
     }
@@ -83,7 +98,10 @@ where
     /// Returns the number of bytes read.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let o = self.inner.read(buf)?; // Read data into the buffer
-        self.hash.update(&buf[..o]); // Update hash with the data being read
+        match &mut self.hash {
+            HashAlgorithm::Sha1(hasher) => hasher.update(&buf[..o]), // Update SHA1 hash with the data being read
+            HashAlgorithm::Sha256(hasher) => hasher.update(&buf[..o]), // Update SHA256 hash with the data being read
+        }
         self.bytes_read += o;
         Ok(o) // Return the number of bytes read
     }
@@ -95,10 +113,25 @@ mod tests {
 
     use sha1::{Digest, Sha1};
 
+    use crate::hash::{HashKind, set_hash_kind};
     use crate::internal::pack::wrapper::Wrapper;
-
     #[test]
     fn test_wrapper_read() -> io::Result<()> {
+        let _guard = set_hash_kind(HashKind::Sha1);
+        let data = b"Hello, world!"; // Sample data
+        let cursor = Cursor::new(data.as_ref());
+        let buf_reader = BufReader::new(cursor);
+        let mut wrapper = Wrapper::new(buf_reader);
+
+        let mut buffer = vec![0; data.len()];
+        wrapper.read_exact(&mut buffer)?;
+
+        assert_eq!(buffer, data);
+        Ok(())
+    }
+    #[test]
+    fn test_wrapper_read_sha256() -> io::Result<()> {
+        let _guard = set_hash_kind(HashKind::Sha256);
         let data = b"Hello, world!"; // Sample data
         let cursor = Cursor::new(data.as_ref());
         let buf_reader = BufReader::new(cursor);
@@ -113,6 +146,7 @@ mod tests {
 
     #[test]
     fn test_wrapper_hash() -> io::Result<()> {
+        let _guard = set_hash_kind(HashKind::Sha1);
         let data = b"Hello, world!";
         let cursor = Cursor::new(data.as_ref());
         let buf_reader = BufReader::new(cursor);
@@ -126,7 +160,26 @@ mod tests {
         hasher.update(data);
         let expected_hash: [u8; 20] = hasher.finalize().into();
 
-        assert_eq!(hash_result.0, expected_hash);
+        assert_eq!(hash_result.as_ref(), expected_hash);
+        Ok(())
+    }
+    #[test]
+    fn test_wrapper_hash_sha256() -> io::Result<()> {
+        let _guard = set_hash_kind(HashKind::Sha256);
+        let data = b"Hello, world!";
+        let cursor = Cursor::new(data.as_ref());
+        let buf_reader = BufReader::new(cursor);
+        let mut wrapper = Wrapper::new(buf_reader);
+
+        let mut buffer = vec![0; data.len()];
+        wrapper.read_exact(&mut buffer)?;
+
+        let hash_result = wrapper.final_hash();
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(data);
+        let expected_hash: [u8; 32] = hasher.finalize().into();
+
+        assert_eq!(hash_result.as_ref(), &expected_hash);
         Ok(())
     }
 }

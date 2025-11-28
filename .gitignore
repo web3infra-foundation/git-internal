@@ -7,3 +7,5 @@ buck-out/
 .vscode/
 
 
+src/.DS_Store
+.DS_Store

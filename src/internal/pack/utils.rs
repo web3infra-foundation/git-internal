@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 
-use crate::hash::SHA1;
+use crate::hash::{ObjectHash, get_hash_kind};
 use crate::internal::object::types::ObjectType;
 
 /// Checks if the reader has reached EOF (end of file).
@@ -258,19 +258,36 @@ pub fn read_delta_object_size<R: Read>(stream: &mut R) -> io::Result<(usize, usi
 /// Calculate the SHA1 hash of the given object.
 /// <br> "`<type> <size>\0<content>`"
 /// <br> data: The decompressed content of the object
-pub fn calculate_object_hash(obj_type: ObjectType, data: &Vec<u8>) -> SHA1 {
-    let mut hash = Sha1::new();
-    // Header: "<type> <size>\0"
-    hash.update(obj_type.to_bytes());
-    hash.update(b" ");
-    hash.update(data.len().to_string());
-    hash.update(b"\0");
+pub fn calculate_object_hash(obj_type: ObjectType, data: &Vec<u8>) -> ObjectHash {
+    match get_hash_kind() {
+        crate::hash::HashKind::Sha1 => {
+            let mut hash = Sha1::new();
+            // Header: "<type> <size>\0"
+            hash.update(obj_type.to_bytes());
+            hash.update(b" ");
+            hash.update(data.len().to_string());
+            hash.update(b"\0");
 
-    // Decompressed data(raw content)
-    hash.update(data);
+            // Decompressed data(raw content)
+            hash.update(data);
 
-    let re: [u8; 20] = hash.finalize().into();
-    SHA1(re)
+            let re: [u8; 20] = hash.finalize().into();
+            ObjectHash::Sha1(re)
+        }
+        crate::hash::HashKind::Sha256 => {
+            let mut hash = sha2::Sha256::new();
+            // Header: "<type> <size>\0"
+            hash.update(obj_type.to_bytes());
+            hash.update(b" ");
+            hash.update(data.len().to_string());
+            hash.update(b"\0");
+
+            // Decompressed data(raw content)
+            hash.update(data);
+            let re: [u8; 32] = hash.finalize().into();
+            ObjectHash::Sha256(re)
+        }
+    }
 }
 /// Create an empty directory or clear the existing directory.
 pub fn create_empty_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
@@ -314,6 +331,7 @@ macro_rules! time_it {
 
 #[cfg(test)]
 mod tests {
+    use crate::hash::{HashKind, set_hash_kind_for_test};
     use crate::internal::object::types::ObjectType;
     use std::io;
     use std::io::Cursor;
@@ -323,8 +341,18 @@ mod tests {
 
     #[test]
     fn test_calc_obj_hash() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let hash = calculate_object_hash(ObjectType::Blob, &b"a".to_vec());
         assert_eq!(hash.to_string(), "2e65efe2a145dda7ee51d1741299f848e5bf752e");
+    }
+    #[test]
+    fn test_calc_obj_hash_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let hash = calculate_object_hash(ObjectType::Blob, &b"a".to_vec());
+        assert_eq!(
+            hash.to_string(),
+            "eb337bcee2061c5313c9a1392116b6c76039e9e30d71467ae359b36277e17dc7"
+        );
     }
 
     #[test]

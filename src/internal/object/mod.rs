@@ -17,11 +17,11 @@ use sha1::Digest;
 
 use crate::internal::object::types::ObjectType;
 use crate::internal::zlib::stream::inflate::ReadBoxed;
-use crate::{errors::GitError, hash::SHA1};
+use crate::{errors::GitError, hash::ObjectHash};
 
 pub trait ObjectTrait: Send + Sync + Display {
     /// Creates a new object from a byte slice.
-    fn from_bytes(data: &[u8], hash: SHA1) -> Result<Self, GitError>
+    fn from_bytes(data: &[u8], hash: ObjectHash) -> Result<Self, GitError>
     where
         Self: Sized;
 
@@ -36,7 +36,11 @@ pub trait ObjectTrait: Send + Sync + Display {
         read.read_to_end(&mut content).unwrap();
         let h = read.hash.clone();
         let hash_str = h.finalize();
-        Self::from_bytes(&content, SHA1::from_str(&format!("{hash_str:x}")).unwrap()).unwrap()
+        Self::from_bytes(
+            &content,
+            ObjectHash::from_str(&format!("{hash_str:x}")).unwrap(),
+        )
+        .unwrap()
     }
 
     /// Returns the type of the object.

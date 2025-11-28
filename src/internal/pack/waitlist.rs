@@ -1,4 +1,4 @@
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::pack::cache_object::CacheObject;
 use dashmap::DashMap;
 
@@ -8,7 +8,7 @@ use dashmap::DashMap;
 pub struct Waitlist {
     //TODO Memory Control!
     pub map_offset: DashMap<usize, Vec<CacheObject>>,
-    pub map_ref: DashMap<SHA1, Vec<CacheObject>>,
+    pub map_ref: DashMap<ObjectHash, Vec<CacheObject>>,
 }
 
 impl Waitlist {
@@ -20,13 +20,13 @@ impl Waitlist {
         self.map_offset.entry(offset).or_default().push(obj);
     }
 
-    pub fn insert_ref(&self, hash: SHA1, obj: CacheObject) {
+    pub fn insert_ref(&self, hash: ObjectHash, obj: CacheObject) {
         self.map_ref.entry(hash).or_default().push(obj);
     }
 
     /// Take objects out (get & remove)
     /// <br> Return Vec::new() if None
-    pub fn take(&self, offset: usize, hash: SHA1) -> Vec<CacheObject> {
+    pub fn take(&self, offset: usize, hash: ObjectHash) -> Vec<CacheObject> {
         let mut res = Vec::new();
         if let Some((_, vec)) = self.map_offset.remove(&offset) {
             res.extend(vec);

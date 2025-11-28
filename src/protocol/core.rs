@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::StreamExt;
 
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::object::ObjectTrait;
 
 use crate::protocol::smart::SmartProtocol;
@@ -63,7 +63,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
         object_hash: &str,
     ) -> Result<crate::internal::object::blob::Blob, ProtocolError> {
         let data = self.get_object(object_hash).await?;
-        let hash = SHA1::from_str(object_hash)
+        let hash = ObjectHash::from_str(object_hash)
             .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
 
         crate::internal::object::blob::Blob::from_bytes(&data, hash)
@@ -79,7 +79,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
         commit_hash: &str,
     ) -> Result<crate::internal::object::commit::Commit, ProtocolError> {
         let data = self.get_object(commit_hash).await?;
-        let hash = SHA1::from_str(commit_hash)
+        let hash = ObjectHash::from_str(commit_hash)
             .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
 
         crate::internal::object::commit::Commit::from_bytes(&data, hash)
@@ -95,7 +95,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
         tree_hash: &str,
     ) -> Result<crate::internal::object::tree::Tree, ProtocolError> {
         let data = self.get_object(tree_hash).await?;
-        let hash = SHA1::from_str(tree_hash)
+        let hash = ObjectHash::from_str(tree_hash)
             .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
 
         crate::internal::object::tree::Tree::from_bytes(&data, hash)

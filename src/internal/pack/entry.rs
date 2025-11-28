@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::object::ObjectTrait;
 use crate::internal::object::blob::Blob;
 use crate::internal::object::commit::Commit;
@@ -17,7 +17,7 @@ use crate::internal::object::types::ObjectType;
 pub struct Entry {
     pub obj_type: ObjectType,
     pub data: Vec<u8>,
-    pub hash: SHA1,
+    pub hash: ObjectHash,
     pub chain_len: usize,
 }
 
