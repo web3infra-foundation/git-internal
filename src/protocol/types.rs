@@ -364,9 +364,6 @@ pub enum CommandType {
     Delete,
 }
 
-/// Zero object ID constant
-pub const ZERO_ID: &str = "0000000000000000000000000000000000000000";
-
 /// Protocol constants
 pub const LF: char = '\n';
 pub const SP: char = ' ';

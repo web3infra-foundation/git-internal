@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use threadpool::ThreadPool;
 
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::object::ObjectTrait;
 use crate::internal::pack::cache::Caches;
 use crate::internal::pack::waitlist::Waitlist;
@@ -24,7 +24,7 @@ use crate::internal::pack::waitlist::Waitlist;
 const DEFAULT_TMP_DIR: &str = "./.cache_temp";
 pub struct Pack {
     pub number: usize,
-    pub signature: SHA1,
+    pub signature: ObjectHash,
     pub objects: Vec<Box<dyn ObjectTrait>>,
     pub pool: Arc<ThreadPool>,
     pub waitlist: Arc<Waitlist>,

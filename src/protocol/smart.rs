@@ -8,10 +8,9 @@ use super::types::ProtocolError;
 use super::types::{
     COMMON_CAP_LIST, Capability, LF, NUL, PKT_LINE_END_MARKER, ProtocolStream, RECEIVE_CAP_LIST,
     RefCommand, RefTypeEnum, SP, ServiceType, SideBand, TransportProtocol, UPLOAD_CAP_LIST,
-    ZERO_ID,
 };
 use super::utils::{add_pkt_line_string, build_smart_reply, read_pkt_line, read_until_white_space};
-
+use crate::hash::{HashKind, ObjectHash, get_hash_kind};
 /// Smart Git Protocol implementation
 ///
 /// This struct handles the Git smart protocol operations for both HTTP and SSH transports.
@@ -25,7 +24,9 @@ where
     pub capabilities: Vec<Capability>,
     pub side_band: Option<SideBand>,
     pub command_list: Vec<RefCommand>,
-
+    pub wire_hash_kind: HashKind,
+    pub local_hash_kind: HashKind,
+    pub zero_id: String,
     // Trait-based dependencies
     repo_storage: R,
     auth_service: A,
@@ -36,6 +37,11 @@ where
     R: RepositoryAccess,
     A: AuthenticationService,
 {
+    pub fn set_wire_hash_kind(&mut self, kind: HashKind) {
+        self.wire_hash_kind = kind;
+        self.zero_id = ObjectHash::zero_str(kind);
+    }
+
     /// Create a new SmartProtocol instance
     pub fn new(transport_protocol: TransportProtocol, repo_storage: R, auth_service: A) -> Self {
         Self {
@@ -45,6 +51,9 @@ where
             command_list: Vec::new(),
             repo_storage,
             auth_service,
+            wire_hash_kind: HashKind::default(), // Default to SHA-1
+            local_hash_kind: get_hash_kind(),
+            zero_id: ObjectHash::zero_str(HashKind::default()),
         }
     }
 
@@ -81,7 +90,17 @@ where
             self.repo_storage.get_repository_refs().await.map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to get refs: {}", e))
             })?;
-
+        let hex_len = self.wire_hash_kind.hex_len();
+        for (name, h) in &refs {
+            if h.len() != hex_len {
+                return Err(ProtocolError::invalid_request(&format!(
+                    "Hash length mismatch for ref {}: expected {}, got {}",
+                    name,
+                    hex_len,
+                    h.len()
+                )));
+            }
+        } // Ensure refs match the expected wire hash kind
         // Convert to the expected format (head_hash, git_refs)
         let head_hash = refs
             .iter()
@@ -89,21 +108,25 @@ where
                 name == "HEAD" || name.ends_with("/main") || name.ends_with("/master")
             })
             .map(|(_, hash)| hash.clone())
-            .unwrap_or_else(|| "0000000000000000000000000000000000000000".to_string());
+            .unwrap_or_else(|| self.zero_id.clone());
 
         let git_refs: Vec<super::types::GitRef> = refs
             .into_iter()
             .map(|(name, hash)| super::types::GitRef { name, hash })
             .collect();
-
+        // capability add object-format，declare the wire hash kind
+        let format_cap = match self.wire_hash_kind {
+            HashKind::Sha1 => " object-format=sha1",
+            HashKind::Sha256 => " object-format=sha256",
+        };
         // Determine capabilities based on service type
         let cap_list = match service_type {
-            ServiceType::UploadPack => format!("{UPLOAD_CAP_LIST}{COMMON_CAP_LIST}"),
-            ServiceType::ReceivePack => format!("{RECEIVE_CAP_LIST}{COMMON_CAP_LIST}"),
+            ServiceType::UploadPack => format!("{UPLOAD_CAP_LIST}{COMMON_CAP_LIST}{format_cap}"),
+            ServiceType::ReceivePack => format!("{RECEIVE_CAP_LIST}{COMMON_CAP_LIST}{format_cap}"),
         };
 
         // The stream MUST include capability declarations behind a NUL on the first ref.
-        let name = if head_hash == ZERO_ID {
+        let name = if head_hash == self.zero_id {
             "capabilities^{}"
         } else {
             "HEAD"
@@ -275,8 +298,8 @@ where
         for command in &mut self.command_list {
             if command.ref_type == RefTypeEnum::Tag {
                 // Just update if refs type is tag
-                // Convert ZERO_ID to None for old hash
-                let old_hash = if command.old_hash == ZERO_ID {
+                // Convert zero_id to None for old hash
+                let old_hash = if command.old_hash == self.zero_id {
                     None
                 } else {
                     Some(command.old_hash.as_str())
@@ -294,8 +317,8 @@ where
                     command.default_branch = true;
                     default_exist = true;
                 }
-                // Convert ZERO_ID to None for old hash
-                let old_hash = if command.old_hash == ZERO_ID {
+                // Convert zero_id to None for old hash
+                let old_hash = if command.old_hash == self.zero_id {
                     None
                 } else {
                     Some(command.old_hash.as_str())
@@ -339,6 +362,16 @@ where
     /// Parse capabilities from capability string
     pub fn parse_capabilities(&mut self, cap_str: &str) {
         for cap in cap_str.split_whitespace() {
+            if let Some(fmt) = cap.strip_prefix("object-format=") {
+                match fmt {
+                    "sha1" => self.set_wire_hash_kind(HashKind::Sha1),
+                    "sha256" => self.set_wire_hash_kind(HashKind::Sha256),
+                    _ => {
+                        tracing::warn!("Unknown object-format capability: {}", fmt);
+                    }
+                }
+                continue;
+            }
             if let Ok(capability) = cap.parse::<Capability>() {
                 self.capabilities.push(capability);
             }
@@ -359,13 +392,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::{HashKind, set_hash_kind_for_test};
     use crate::internal::metadata::{EntryMeta, MetaAttached};
     use crate::internal::object::blob::Blob;
     use crate::internal::object::commit::Commit;
     use crate::internal::object::signature::{Signature, SignatureType};
     use crate::internal::object::tree::{Tree, TreeItem, TreeItemMode};
     use crate::internal::pack::{encode::PackEncoder, entry::Entry};
-    use crate::protocol::types::{RefCommand, ZERO_ID}; // import sibling types
+    use crate::protocol::types::RefCommand; // import sibling types
     use crate::protocol::utils; // import sibling module
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -493,6 +527,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_receive_pack_stream_status_report() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         // Build simple objects
         let blob1 = Blob::from_content("hello");
         let blob2 = Blob::from_content("world");
@@ -565,8 +600,9 @@ mod tests {
         let repo_access = TestRepoAccess::new();
         let auth = TestAuth;
         let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access.clone(), auth);
+        smart.set_wire_hash_kind(HashKind::Sha1);
         smart.command_list.push(RefCommand::new(
-            ZERO_ID.to_string(),
+            smart.zero_id.to_string(),
             commit.id.to_string(),
             "refs/heads/main".to_string(),
         ));
@@ -598,5 +634,25 @@ mod tests {
         // Verify side effects
         assert_eq!(repo_access.updates_len(), 1);
         assert!(repo_access.post_hook_called());
+    }
+
+    #[tokio::test]
+    async fn info_refs_rejects_sha256_with_sha1_refs() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1); // avoid thread-local contamination
+        let repo_access = TestRepoAccess::new(); // still returns 40-char strings
+        let auth = TestAuth;
+        let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access, auth);
+        smart.set_wire_hash_kind(HashKind::Sha256); // claims wire uses SHA-256
+        // expect failure because refs are SHA-1
+        let res = smart.git_info_refs(ServiceType::UploadPack).await;
+        assert!(res.is_err(), "expected failure when hash lengths mismatch");
+
+        smart.set_wire_hash_kind(HashKind::Sha1);
+
+        let res = smart.git_info_refs(ServiceType::UploadPack).await;
+        assert!(
+            res.is_ok(),
+            "expected SHA1 refs to be accepted when wire is SHA1"
+        );
     }
 }

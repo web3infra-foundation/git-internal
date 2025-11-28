@@ -17,7 +17,7 @@
 //! $ echo "Hello, world!" | git hash-object -w --stdin
 //! ```
 //!
-//! This will output an SHA-1 hash, which is the ID of the newly created blob object.
+//! This will output an SHA-1/ SHA-256 hash, which is the ID of the newly created blob object.
 //! The contents of the blob object would look something like this:
 //!
 //! ```bash
@@ -30,14 +30,14 @@
 use std::fmt::Display;
 
 use crate::errors::GitError;
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::object::ObjectTrait;
 use crate::internal::object::types::ObjectType;
 
 /// **The Blob Object**
 #[derive(Eq, Debug, Clone)]
 pub struct Blob {
-    pub id: SHA1,
+    pub id: ObjectHash,
     pub data: Vec<u8>,
 }
 
@@ -57,7 +57,7 @@ impl Display for Blob {
 
 impl ObjectTrait for Blob {
     /// Creates a new object from a byte slice.
-    fn from_bytes(data: &[u8], hash: SHA1) -> Result<Self, GitError>
+    fn from_bytes(data: &[u8], hash: ObjectHash) -> Result<Self, GitError>
     where
         Self: Sized,
     {
@@ -94,8 +94,8 @@ impl Blob {
     /// - some file content can't be represented as a string (UTF-8), so we need to use bytes.
     pub fn from_content_bytes(content: Vec<u8>) -> Self {
         Blob {
-            // Calculate the SHA1 hash from the type and content
-            id: SHA1::from_type_and_data(ObjectType::Blob, &content),
+            // Calculate the hash from the type and content
+            id: ObjectHash::from_type_and_data(ObjectType::Blob, &content),
             data: content,
         }
     }
@@ -104,13 +104,25 @@ impl Blob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::{HashKind, set_hash_kind_for_test};
     #[test]
     fn test_blob_from_content() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let content = "Hello, world!";
         let blob = Blob::from_content(content);
         assert_eq!(
             blob.id.to_string(),
             "5dd01c177f5d7d1be5346a5bc18a569a7410c2ef"
+        );
+    }
+    #[test]
+    fn test_blob_from_content_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let content = "Hello, world!";
+        let blob = Blob::from_content(content);
+        assert_eq!(
+            blob.id.to_string(),
+            "178b5fbed164aee269fee7323badf7269cca0eed0875717b0d2d4f9819164c3f"
         );
     }
 }

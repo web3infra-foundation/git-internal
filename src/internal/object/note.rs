@@ -16,7 +16,7 @@ use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::GitError;
-use crate::hash::SHA1;
+use crate::hash::ObjectHash;
 use crate::internal::object::ObjectTrait;
 use crate::internal::object::ObjectType;
 
@@ -27,10 +27,10 @@ use crate::internal::object::ObjectType;
 /// association managed through Git's reference system.
 #[derive(Eq, Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub struct Note {
-    /// The SHA-1 hash of this Note object (same as the underlying Blob)
-    pub id: SHA1,
-    /// The SHA-1 hash of the object this Note annotates (usually a commit)
-    pub target_object_id: SHA1,
+    /// The ObjectHash of this Note object (same as the underlying Blob)
+    pub id: ObjectHash,
+    /// The ObjectHash of the object this Note annotates (usually a commit)
+    pub target_object_id: ObjectHash,
     /// The textual content of the Note
     pub content: String,
 }
@@ -53,15 +53,15 @@ impl Note {
     /// Create a new Note for the specified target object with the given content
     ///
     /// # Arguments
-    /// * `target_object_id` - The SHA-1 hash of the object to annotate
+    /// * `target_object_id` - The ObjectHash of the object to annotate
     /// * `content` - The textual content of the note
     ///
     /// # Returns
     /// A new Note instance with calculated ID based on the content
-    pub fn new(target_object_id: SHA1, content: String) -> Self {
-        // Calculate the SHA-1 hash for this Note's content
+    pub fn new(target_object_id: ObjectHash, content: String) -> Self {
+        // Calculate the SHA-1/ SHA-256 hash for this Note's content
         // Notes are stored as Blob objects in Git
-        let id = SHA1::from_type_and_data(ObjectType::Blob, content.as_bytes());
+        let id = ObjectHash::from_type_and_data(ObjectType::Blob, content.as_bytes());
 
         Self {
             id,
@@ -81,7 +81,7 @@ impl Note {
     /// # Returns
     /// A new Note instance with default target object ID
     pub fn from_content(content: &str) -> Self {
-        Self::new(SHA1::default(), content.to_string())
+        Self::new(ObjectHash::default(), content.to_string())
     }
 
     /// Get the size of the Note content in bytes
@@ -100,8 +100,8 @@ impl Note {
     /// without changing the Note's content or ID.
     ///
     /// # Arguments
-    /// * `new_target` - The new target object SHA-1 hash
-    pub fn set_target(&mut self, new_target: SHA1) {
+    /// * `new_target` - The new target object SHA-1/ SHA-256 hash
+    pub fn set_target(&mut self, new_target: ObjectHash) {
         self.target_object_id = new_target;
     }
 
@@ -112,15 +112,15 @@ impl Note {
     ///
     /// # Arguments
     /// * `data` - The raw byte data (UTF-8 encoded text content)
-    /// * `hash` - The SHA-1 hash of this Note object
-    /// * `target_object_id` - The SHA-1 hash of the object this Note annotates
+    /// * `hash` - The SHA-1/ SHA-256 hash of this Note object
+    /// * `target_object_id` - The SHA-1/ SHA-256 hash of the object this Note annotates
     ///
     /// # Returns
     /// A Result containing the Note object with complete association info
     pub fn from_bytes_with_target(
         data: &[u8],
-        hash: SHA1,
-        target_object_id: SHA1,
+        hash: ObjectHash,
+        target_object_id: ObjectHash,
     ) -> Result<Self, GitError> {
         let content = String::from_utf8(data.to_vec())
             .map_err(|e| GitError::InvalidNoteObject(format!("Invalid UTF-8 content: {}", e)))?;
@@ -139,7 +139,7 @@ impl Note {
     ///
     /// # Returns
     /// A tuple of (object_data, target_object_id)
-    pub fn to_data_with_target(&self) -> Result<(Vec<u8>, SHA1), GitError> {
+    pub fn to_data_with_target(&self) -> Result<(Vec<u8>, ObjectHash), GitError> {
         let data = self.to_data()?;
         Ok((data, self.target_object_id))
     }
@@ -150,11 +150,11 @@ impl ObjectTrait for Note {
     ///
     /// # Arguments
     /// * `data` - The raw byte data (UTF-8 encoded text content)
-    /// * `hash` - The SHA-1 hash of this Note object
+    /// * `hash` - The SHA-1/ SHA-256 hash of this Note object
     ///
     /// # Returns
     /// A Result containing the Note object or an error
-    fn from_bytes(data: &[u8], hash: SHA1) -> Result<Self, GitError>
+    fn from_bytes(data: &[u8], hash: ObjectHash) -> Result<Self, GitError>
     where
         Self: Sized,
     {
@@ -164,7 +164,7 @@ impl ObjectTrait for Note {
 
         Ok(Note {
             id: hash,
-            target_object_id: SHA1::default(), // Target association managed externally
+            target_object_id: ObjectHash::default(), // Target association managed externally
             content,
         })
     }
@@ -193,17 +193,39 @@ impl ObjectTrait for Note {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
     use std::str::FromStr;
 
     #[test]
     fn test_note_creation_and_serialization() {
-        let target_id = SHA1::from_str("1234567890abcdef1234567890abcdef12345678").unwrap();
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let target_id = ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap();
         let content = "This commit needs review".to_string();
         let note = Note::new(target_id, content.clone());
 
         assert_eq!(note.target_object_id, target_id);
         assert_eq!(note.content, content);
-        assert_ne!(note.id, SHA1::default());
+        assert_ne!(note.id, ObjectHash::default());
+        assert_eq!(note.get_type(), ObjectType::Blob);
+
+        // Test serialization
+        let data = note.to_data().unwrap();
+        assert_eq!(data, content.as_bytes());
+        assert_eq!(note.get_size(), content.len());
+    }
+    #[test]
+    fn test_note_creation_and_serialization_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let target_id = ObjectHash::from_str(
+            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        )
+        .unwrap();
+        let content = "This commit needs review".to_string();
+        let note = Note::new(target_id, content.clone());
+
+        assert_eq!(note.target_object_id, target_id);
+        assert_eq!(note.content, content);
+        assert_ne!(note.id, ObjectHash::default());
         assert_eq!(note.get_type(), ObjectType::Blob);
 
         // Test serialization
@@ -214,15 +236,42 @@ mod tests {
 
     #[test]
     fn test_note_deserialization() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let content = "Deserialization test content";
-        let hash = SHA1::from_str("fedcba0987654321fedcba0987654321fedcba09").unwrap();
-        let target_id = SHA1::from_str("abcdef1234567890abcdef1234567890abcdef12").unwrap();
+        let hash = ObjectHash::from_str("fedcba0987654321fedcba0987654321fedcba09").unwrap();
+        let target_id = ObjectHash::from_str("abcdef1234567890abcdef1234567890abcdef12").unwrap();
 
         // Test basic deserialization
         let note = Note::from_bytes(content.as_bytes(), hash).unwrap();
         assert_eq!(note.content, content);
         assert_eq!(note.id, hash);
-        assert_eq!(note.target_object_id, SHA1::default());
+        assert_eq!(note.target_object_id, ObjectHash::default());
+
+        // Test deserialization with target
+        let note_with_target =
+            Note::from_bytes_with_target(content.as_bytes(), hash, target_id).unwrap();
+        assert_eq!(note_with_target.content, content);
+        assert_eq!(note_with_target.id, hash);
+        assert_eq!(note_with_target.target_object_id, target_id);
+    }
+    #[test]
+    fn test_note_deserialization_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let content = "Deserialization test content";
+        let hash = ObjectHash::from_str(
+            "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+        )
+        .unwrap();
+        let target_id = ObjectHash::from_str(
+            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        )
+        .unwrap();
+
+        // Test basic deserialization
+        let note = Note::from_bytes(content.as_bytes(), hash).unwrap();
+        assert_eq!(note.content, content);
+        assert_eq!(note.id, hash);
+        assert_eq!(note.target_object_id, ObjectHash::default());
 
         // Test deserialization with target
         let note_with_target =
@@ -234,7 +283,29 @@ mod tests {
 
     #[test]
     fn test_note_with_target_methods() {
-        let target_id = SHA1::from_str("1234567890abcdef1234567890abcdef12345678").unwrap();
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let target_id = ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap();
+        let content = "Test note with target methods";
+        let note = Note::new(target_id, content.to_string());
+
+        // Test serialization with target
+        let (data, returned_target) = note.to_data_with_target().unwrap();
+        assert_eq!(data, content.as_bytes());
+        assert_eq!(returned_target, target_id);
+
+        // Test deserialization with target
+        let restored_note = Note::from_bytes_with_target(&data, note.id, target_id).unwrap();
+        assert_eq!(restored_note, note);
+        assert_eq!(restored_note.target_object_id, target_id);
+        assert_eq!(restored_note.content, content);
+    }
+    #[test]
+    fn test_note_with_target_methods_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let target_id = ObjectHash::from_str(
+            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        )
+        .unwrap();
         let content = "Test note with target methods";
         let note = Note::new(target_id, content.to_string());
 
@@ -252,26 +323,103 @@ mod tests {
 
     #[test]
     fn test_note_error_handling() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         // Test invalid UTF-8
         let invalid_utf8 = vec![0xFF, 0xFE, 0xFD];
-        let hash = SHA1::from_str("3333333333333333333333333333333333333333").unwrap();
-        let target = SHA1::from_str("4444444444444444444444444444444444444444").unwrap();
-
+        let hash = ObjectHash::from_str("3333333333333333333333333333333333333333").unwrap();
+        let target = ObjectHash::from_str("4444444444444444444444444444444444444444").unwrap();
         let result = Note::from_bytes(&invalid_utf8, hash);
         assert!(result.is_err());
 
         let result_with_target = Note::from_bytes_with_target(&invalid_utf8, hash, target);
         assert!(result_with_target.is_err());
     }
+    #[test]
+    fn test_note_error_handling_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        // Test invalid UTF-8
+        let invalid_utf8 = vec![0xFF, 0xFE, 0xFD];
+        let hash = ObjectHash::from_str(
+            "3333333333333333333333333333333333333333333333333333333333333333",
+        )
+        .unwrap();
+        let target = ObjectHash::from_str(
+            "4444444444444444444444444444444444444444444444444444444444444444",
+        )
+        .unwrap();
+        let result = Note::from_bytes(&invalid_utf8, hash);
+        assert!(result.is_err());
 
+        let result_with_target = Note::from_bytes_with_target(&invalid_utf8, hash, target);
+        assert!(result_with_target.is_err());
+    }
     #[test]
     fn test_note_demo_functionality() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         // This is a demonstration test that shows the complete functionality
         // It's kept separate from unit tests for clarity
         println!("\n🚀 Git Note Object Demo - Best Practices");
         println!("==========================================");
 
-        let commit_id = SHA1::from_str("a1b2c3d4e5f6789012345678901234567890abcd").unwrap();
+        let commit_id = ObjectHash::from_str("a1b2c3d4e5f6789012345678901234567890abcd").unwrap();
+
+        println!("\n1️⃣ Creating a new Note object:");
+        let note = Note::new(
+            commit_id,
+            "Code review: LGTM! Great implementation.".to_string(),
+        );
+        println!("   Target Commit: {}", note.target_object_id);
+        println!("   Note ID: {}", note.id);
+        println!("   Content: {}", note.content);
+        println!("   Size: {} bytes", note.get_size());
+
+        println!("\n2️⃣ Serializing Note with target association:");
+        let (serialized_data, target_id) = note.to_data_with_target().unwrap();
+        println!("   Serialized size: {} bytes", serialized_data.len());
+        println!("   Target object ID: {}", target_id);
+        println!(
+            "   Git object format: blob {}\\0<content>",
+            note.content.len()
+        );
+        println!(
+            "   Raw data preview: {:?}...",
+            &serialized_data[..std::cmp::min(30, serialized_data.len())]
+        );
+
+        println!("\n3️⃣ Basic deserialization (ObjectTrait):");
+        let basic_note = Note::from_bytes(&serialized_data, note.id).unwrap();
+        println!("   Successfully deserialized!");
+        println!(
+            "   Target Commit: {} (default - target managed externally)",
+            basic_note.target_object_id
+        );
+        println!("   Content: {}", basic_note.content);
+        println!("   Content matches: {}", note.content == basic_note.content);
+
+        println!("\n4️⃣ Best practice deserialization (with target):");
+        let complete_note =
+            Note::from_bytes_with_target(&serialized_data, note.id, target_id).unwrap();
+        println!("   Successfully deserialized with target!");
+        println!("   Target Commit: {}", complete_note.target_object_id);
+        println!("   Content: {}", complete_note.content);
+        println!("   Complete objects are equal: {}", note == complete_note);
+
+        // Basic assertions to ensure demo works
+        assert_eq!(note, complete_note);
+        assert_eq!(target_id, commit_id);
+    }
+    #[test]
+    fn test_note_demo_functionality_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        // This is a demonstration test that shows the complete functionality
+        // It's kept separate from unit tests for clarity
+        println!("\n🚀 Git Note Object Demo - Best Practices");
+        println!("==========================================");
+
+        let commit_id = ObjectHash::from_str(
+            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        )
+        .unwrap();
 
         println!("\n1️⃣ Creating a new Note object:");
         let note = Note::new(
