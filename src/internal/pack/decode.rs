@@ -309,8 +309,8 @@ impl Pack {
                 })
             }
             ObjectType::HashDelta => {
-                // Read 20/32 bytes to get the reference object SHA1/SHA256 hash
-                let ref_sha1 = ObjectHash::from_stream(pack).unwrap();
+                // Read hash bytes to get the reference object hash(size depends on hash kind,e.g.,20 for SHA1,32 for SHA256)
+                let ref_sha = ObjectHash::from_stream(pack).unwrap();
                 // Offset is incremented by 20/32 bytes
                 *offset += get_hash_kind().size();
 
@@ -321,7 +321,7 @@ impl Pack {
                 let (_, final_size) = utils::read_delta_object_size(&mut reader)?;
 
                 Ok(CacheObject {
-                    info: CacheObjectInfo::HashDelta(ref_sha1, final_size),
+                    info: CacheObjectInfo::HashDelta(ref_sha, final_size),
                     offset: init_offset,
                     data_decompressed: data,
                     mem_recorder: None,
@@ -881,7 +881,7 @@ mod tests {
         let mut buffered = BufReader::new(f);
         let mut p = Pack::new(
             Some(20),
-            Some(1024 * 1024 * 1024 * 2),
+            Some(1024 * 1024 * 1024 * 1), //try to avoid dead lock on CI servers with low memory
             Some(tmp.clone()),
             true,
         );
@@ -933,7 +933,7 @@ mod tests {
         let stream = ReaderStream::new(f).map_err(axum::Error::new);
         let p = Pack::new(
             Some(20),
-            Some(1024 * 1024 * 1024 * 4),
+            Some(1024 * 1024 * 1024 * 1),
             Some(tmp.clone()),
             true,
         );
@@ -997,7 +997,7 @@ mod tests {
         let buffered = BufReader::new(f);
         let p = Pack::new(
             Some(20),
-            Some(1024 * 1024 * 1024 * 2),
+            Some(1024 * 1024 * 1024 * 1),
             Some(tmp.clone()),
             true,
         );

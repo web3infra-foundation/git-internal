@@ -360,7 +360,7 @@ signed sha256 commit for test"#;
         assert_eq!(commit.author.name, "jackieismpc");
         assert_eq!(commit.author.email, "jackieismpc@gmail.com");
         assert_eq!(commit.committer.name, "jackieismpc");
-        // check message content（must contains gpgsig-sha256 and content）
+        // // check message content (must contain gpgsig-sha256 and content)
         assert!(commit.message.contains("-----BEGIN PGP SIGNATURE-----"));
         assert!(commit.message.contains("-----END PGP SIGNATURE-----"));
         assert!(commit.message.contains("signed sha256 commit for test"));

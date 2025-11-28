@@ -89,7 +89,7 @@ impl Caches {
 
     /// generate the temp file path, hex string of the hash
     fn generate_temp_path(&self, tmp_path: &Path, hash: ObjectHash) -> PathBuf {
-        // This is enough for the original path, 2 chars directory, 40/64 chars hash, and extra slashes
+        // Reserve capacity for base path, 2-char subdir, hex hash string, and separators
         let mut path =
             PathBuf::with_capacity(self.tmp_path.capacity() + hash.to_string().len() + 5);
         path.push(tmp_path);

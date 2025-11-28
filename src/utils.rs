@@ -47,41 +47,48 @@ impl<R: BufRead> BufRead for CountingReader<R> {
         self.inner.consume(amt);
     }
 }
-/// Different hash algorithm enum
+/// a hash abstraction to support both SHA1 and SHA256
+/// which for stream hashing handle use (e.g. Sha1::new())
+/// `std::io::Write` trait to update the hash state
 #[derive(Clone)]
-pub enum Hashalgorithm {
+pub enum HashAlgorithm {
     Sha1(Sha1),
     Sha256(sha2::Sha256),
     // Future: support other hash algorithms
 }
-impl Hashalgorithm {
+impl HashAlgorithm {
     /// Update hash with data
     pub fn update(&mut self, data: &[u8]) {
         match self {
-            Hashalgorithm::Sha1(hasher) => hasher.update(data),
-            Hashalgorithm::Sha256(hasher) => hasher.update(data),
+            HashAlgorithm::Sha1(hasher) => hasher.update(data),
+            HashAlgorithm::Sha256(hasher) => hasher.update(data),
         }
     }
     /// Finalize and get hash result
     pub fn finalize(self) -> Vec<u8> {
         match self {
-            Hashalgorithm::Sha1(hasher) => hasher.finalize().to_vec(),
-            Hashalgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
+            HashAlgorithm::Sha1(hasher) => hasher.finalize().to_vec(),
+            HashAlgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
         }
     }
     pub fn new() -> Self {
         match get_hash_kind() {
-            HashKind::Sha1 => Hashalgorithm::Sha1(Sha1::new()),
-            HashKind::Sha256 => Hashalgorithm::Sha256(sha2::Sha256::new()),
+            HashKind::Sha1 => HashAlgorithm::Sha1(Sha1::new()),
+            HashKind::Sha256 => HashAlgorithm::Sha256(sha2::Sha256::new()),
         }
     }
 }
-impl std::io::Write for Hashalgorithm {
+impl std::io::Write for HashAlgorithm {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.update(buf);
         Ok(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+impl Default for HashAlgorithm {
+    fn default() -> Self {
+        Self::new()
     }
 }

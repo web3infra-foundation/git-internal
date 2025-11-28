@@ -8,7 +8,7 @@ use crate::internal::object::types::ObjectType;
 use crate::time_it;
 use crate::zstdelta;
 use crate::{
-    errors::GitError, hash::ObjectHash, internal::pack::entry::Entry, utils::Hashalgorithm,
+    errors::GitError, hash::ObjectHash, internal::pack::entry::Entry, utils::HashAlgorithm,
 };
 use ahash::AHasher;
 use flate2::write::ZlibEncoder;
@@ -32,7 +32,7 @@ pub struct PackEncoder {
     // window: VecDeque<(Entry, usize)>, // entry and offset
     sender: Option<mpsc::Sender<Vec<u8>>>,
     inner_offset: usize,       // offset of current entry
-    inner_hash: Hashalgorithm, // introduce different hash algorithm
+    inner_hash: HashAlgorithm, // introduce different hash algorithm
     final_hash: Option<ObjectHash>,
     start_encoding: bool,
 }
@@ -186,8 +186,8 @@ impl PackEncoder {
             process_index: 0,
             // window: VecDeque::with_capacity(window_size),
             sender: Some(sender),
-            inner_offset: 12,                 // 12 bytes header
-            inner_hash: Hashalgorithm::new(), // introduce different hash algorithm
+            inner_offset: 12, // start  after 12 bytes pack header(signature + version + object count).
+            inner_hash: HashAlgorithm::new(), // introduce different hash algorithm
             final_hash: None,
             start_encoding: false,
         }

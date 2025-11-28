@@ -413,7 +413,7 @@ mod tests {
 
         let bytes = tree_item.to_data();
 
-        // 一个小 helper：把十六进制字符串转成字节序列
+        // a small helper: convert hex string to byte sequence
         fn hex_to_bytes(s: &str) -> Vec<u8> {
             assert!(s.len() % 2 == 0);
             let mut out = Vec::with_capacity(s.len() / 2);
@@ -424,7 +424,7 @@ mod tests {
             out
         }
 
-        // 期望的编码：`"100644 hello-world\0" + <32字节的blob哈希>`
+        // expected encoding: `"100644 hello-world\0" + <32-byte blob hash>`
         let mut expected = b"100644 hello-world\0".to_vec();
         expected.extend_from_slice(&hex_to_bytes(
             "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",

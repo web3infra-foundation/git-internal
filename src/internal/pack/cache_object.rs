@@ -478,11 +478,11 @@ mod test {
             );
             assert!(r.is_err());
             if let Err(lru_mem::TryInsertError::WouldEjectLru { .. }) = r {
-                // 匹配到指定错误，不需要额外操作
+                // match the specified error, no extra action needed
             } else {
                 panic!("Expected WouldEjectLru error");
             }
-            // 使用不同的键插入b，这样a会被驱逐
+            // insert b with a different key, so a will be ejected
             let r = cache.insert(
                 hash_b.to_string(),
                 ArcWrapper::new(Arc::new(b.clone()), Arc::new(AtomicBool::new(true)), None),

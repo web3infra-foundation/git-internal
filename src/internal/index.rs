@@ -9,12 +9,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use sha1::{Digest, Sha1};
 
 use crate::errors::GitError;
 use crate::hash::{ObjectHash, get_hash_kind};
 use crate::internal::pack::wrapper::Wrapper;
-use crate::utils::{self, Hashalgorithm};
+use crate::utils::{self, HashAlgorithm};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Time {
@@ -281,15 +280,16 @@ impl Index {
                 .insert((entry.name.clone(), entry.flags.stage), entry);
 
             // 1-8 nul bytes as necessary to pad the entry to a multiple of eight bytes
-            // while keeping the name NUL-terminated. // so at least 1 byte nul
+            // while keeping the name NUL-terminated.
             let hash_len = get_hash_kind().size();
-            let padding = (8 - ((hash_len + 2 + name_len) % 8)) % 8; // 2 for flags
+            let entry_len = hash_len + 2 + name_len;
+            let padding = 1 + ((8 - ((entry_len + 1) % 8)) % 8); // at least 1 byte nul
             utils::read_bytes(file, padding)?;
         }
 
         // Extensions
         while file.bytes_read() + get_hash_kind().size() < total_size as usize {
-            // The remaining 20 bytes must be checksum
+            // The remaining bytes must be the pack checksum (size = get_hash_kind().size())
             let sign = utils::read_bytes(file, 4)?;
             println!(
                 "{:?}",
@@ -321,7 +321,7 @@ impl Index {
 
     pub fn to_file(&self, path: impl AsRef<Path>) -> Result<(), GitError> {
         let mut file = File::create(path)?;
-        let mut hash = Sha1::new();
+        let mut hash = HashAlgorithm::new();
 
         let mut header = Vec::new();
         header.write_all(b"DIRC")?;
@@ -342,12 +342,13 @@ impl Index {
             entry_bytes.write_u32::<BigEndian>(entry.uid)?;
             entry_bytes.write_u32::<BigEndian>(entry.gid)?;
             entry_bytes.write_u32::<BigEndian>(entry.size)?;
-            entry_bytes.write_all(&entry.hash.as_ref())?;
+            entry_bytes.write_all(entry.hash.as_ref())?;
             entry_bytes.write_u16::<BigEndian>((&entry.flags).try_into().unwrap())?;
             entry_bytes.write_all(entry.name.as_bytes())?;
-            let padding = 8 - ((22 + entry.name.len()) % 8);
+            let hash_len = get_hash_kind().size();
+            let entry_len = hash_len + 2 + entry.name.len();
+            let padding = 1 + ((8 - ((entry_len + 1) % 8)) % 8); // at least 1 byte nul
             entry_bytes.write_all(&vec![0; padding])?;
-
             file.write_all(&entry_bytes)?;
             hash.update(&entry_bytes);
         }
@@ -355,8 +356,9 @@ impl Index {
         // Extensions
 
         // check sum
-        let file_hash: [u8; 20] = hash.finalize().into();
-        file.write_all(&file_hash)?;
+        let file_hash =
+            ObjectHash::from_bytes(&hash.finalize()).map_err(GitError::InvalidIndexFile)?;
+        file.write_all(file_hash.as_ref())?;
         Ok(())
     }
 
@@ -384,7 +386,7 @@ impl Index {
 
             // re-calculate SHA1/SHA256
             let mut file = File::open(&abs_path)?;
-            let mut hasher = Hashalgorithm::new();
+            let mut hasher = HashAlgorithm::new();
             io::copy(&mut file, &mut hasher)?;
             let new_hash = ObjectHash::from_bytes(&hasher.finalize()).unwrap();
 

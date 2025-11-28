@@ -3,7 +3,7 @@ use std::io::{self, BufRead, Read};
 use sha1::{Digest, Sha1};
 
 use crate::hash::{HashKind, ObjectHash, get_hash_kind};
-
+use crate::utils::HashAlgorithm;
 /// [`Wrapper`] is a wrapper around a reader that also computes the SHA1/ SHA256 hash of the data read.
 ///
 /// It is designed to work with any reader that implements `BufRead`.
@@ -13,15 +13,9 @@ use crate::hash::{HashKind, ObjectHash, get_hash_kind};
 /// * `hash`: The  hash state.
 /// * `count_hash`: A flag to indicate whether to compute the hash while reading.
 ///
-/// we abstract the hasher to support both SHA1 and SHA256 Now.
-#[derive(Clone)]
-enum Hasher {
-    Sha1(Sha1),
-    Sha256(sha2::Sha256),
-}
 pub struct Wrapper<R> {
     inner: R,
-    hash: Hasher,
+    hash: HashAlgorithm,
     bytes_read: usize,
 }
 
@@ -38,8 +32,8 @@ where
         Self {
             inner,
             hash: match get_hash_kind() {
-                HashKind::Sha1 => Hasher::Sha1(Sha1::new()),
-                HashKind::Sha256 => Hasher::Sha256(sha2::Sha256::new()),
+                HashKind::Sha1 => HashAlgorithm::Sha1(Sha1::new()),
+                HashKind::Sha256 => HashAlgorithm::Sha256(sha2::Sha256::new()),
             }, // Initialize a new SHA1/ SHA256 hasher
             bytes_read: 0,
         }
@@ -54,11 +48,11 @@ where
     /// This is a clone of the internal hash state finalized into a SHA1/ SHA256 hash.
     pub fn final_hash(&self) -> ObjectHash {
         match &self.hash.clone() {
-            Hasher::Sha1(hasher) => {
+            HashAlgorithm::Sha1(hasher) => {
                 let re: [u8; 20] = hasher.clone().finalize().into(); // Clone, finalize, and convert the hash into bytes
                 ObjectHash::from_bytes(&re).unwrap()
             }
-            Hasher::Sha256(hasher) => {
+            HashAlgorithm::Sha256(hasher) => {
                 let re: [u8; 32] = hasher.clone().finalize().into(); // Clone, finalize, and convert the hash into bytes
                 ObjectHash::from_bytes(&re).unwrap()
             }
@@ -82,8 +76,8 @@ where
     fn consume(&mut self, amt: usize) {
         let buffer = self.inner.fill_buf().expect("Failed to fill buffer");
         match &mut self.hash {
-            Hasher::Sha1(hasher) => hasher.update(&buffer[..amt]), // Update SHA1 hash with the data being consumed
-            Hasher::Sha256(hasher) => hasher.update(&buffer[..amt]), // Update SHA256 hash with the data being consumed
+            HashAlgorithm::Sha1(hasher) => hasher.update(&buffer[..amt]), // Update SHA1 hash with the data being consumed
+            HashAlgorithm::Sha256(hasher) => hasher.update(&buffer[..amt]), // Update SHA256 hash with the data being consumed
         }
         self.inner.consume(amt); // Consume the data from the inner reader
         self.bytes_read += amt;
@@ -105,8 +99,8 @@ where
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let o = self.inner.read(buf)?; // Read data into the buffer
         match &mut self.hash {
-            Hasher::Sha1(hasher) => hasher.update(&buf[..o]), // Update SHA1 hash with the data being read
-            Hasher::Sha256(hasher) => hasher.update(&buf[..o]), // Update SHA256 hash with the data being read
+            HashAlgorithm::Sha1(hasher) => hasher.update(&buf[..o]), // Update SHA1 hash with the data being read
+            HashAlgorithm::Sha256(hasher) => hasher.update(&buf[..o]), // Update SHA256 hash with the data being read
         }
         self.bytes_read += o;
         Ok(o) // Return the number of bytes read

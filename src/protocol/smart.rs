@@ -298,7 +298,7 @@ where
         for command in &mut self.command_list {
             if command.ref_type == RefTypeEnum::Tag {
                 // Just update if refs type is tag
-                // Convert ze to None for old hash
+                // Convert zero_id to None for old hash
                 let old_hash = if command.old_hash == self.zero_id {
                     None
                 } else {
