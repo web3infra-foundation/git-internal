@@ -44,7 +44,7 @@ rust_library(
     deps = [
         "//third-party/rust/crates/base64/0.22.1:base64",
         "//third-party/rust/crates/bigdecimal/0.4.9:bigdecimal",
-        "//third-party/rust/crates/bytes/1.10.1:bytes",
+        "//third-party/rust/crates/bytes/1.11.0:bytes",
         "//third-party/rust/crates/chrono/0.4.42:chrono",
         "//third-party/rust/crates/crc/3.3.0:crc",
         "//third-party/rust/crates/crossbeam-queue/0.3.12:crossbeam-queue",
@@ -68,7 +68,7 @@ rust_library(
         "//third-party/rust/crates/smallvec/1.15.1:smallvec",
         "//third-party/rust/crates/thiserror/2.0.17:thiserror",
         "//third-party/rust/crates/time/0.3.44:time",
-        "//third-party/rust/crates/tracing/0.1.41:tracing",
+        "//third-party/rust/crates/tracing/0.1.43:tracing",
         "//third-party/rust/crates/url/2.5.7:url",
         "//third-party/rust/crates/uuid/1.18.1:uuid",
     ],
