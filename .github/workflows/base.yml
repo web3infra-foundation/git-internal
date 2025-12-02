@@ -86,7 +86,7 @@ jobs:
           submodules: recursive
 
       - name: Build with Buck2
-        run: buck2 build //:git_internal
+        run: buck2 build //:git-internal
 
   test:
     name: Run Tests
