@@ -866,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "git-internal"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -884,8 +884,6 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
- "http",
- "hyper",
  "libc",
  "lru-mem",
  "memchr",
@@ -898,7 +896,6 @@ dependencies = [
  "rayon",
  "sea-orm",
  "serde",
- "serde_json",
  "sha1",
  "sha2",
  "similar",
