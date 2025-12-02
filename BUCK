@@ -15,7 +15,7 @@ cargo_manifest(
 )
 
 rust_library(
-    name = "git_internal",
+    name = "git-internal",
     srcs = [":git-internal-vendor"],
     crate = "git_internal",
     crate_root = "vendor/src/lib.rs",
