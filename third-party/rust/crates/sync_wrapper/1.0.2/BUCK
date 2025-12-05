@@ -23,11 +23,6 @@ rust_library(
     crate = "sync_wrapper",
     crate_root = "vendor/src/lib.rs",
     edition = "2021",
-    features = [
-        "futures",
-        "futures-core",
-    ],
     rustc_flags = ["@$(location :sync_wrapper-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/futures-core/0.3.31:futures-core"],
 )

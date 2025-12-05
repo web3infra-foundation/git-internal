@@ -15,7 +15,7 @@ cargo_manifest(
 )
 
 rust_library(
-    name = "git-internal",
+    name = "git_internal",
     srcs = [":git-internal-vendor"],
     crate = "git_internal",
     crate_root = "vendor/src/lib.rs",
@@ -43,7 +43,7 @@ rust_library(
         "//third-party/rust/crates/futures-util/0.3.31:futures-util",
         "//third-party/rust/crates/futures/0.3.31:futures",
         "//third-party/rust/crates/hex/0.4.3:hex",
-        "//third-party/rust/crates/libc/0.2.177:libc",
+        "//third-party/rust/crates/libc/0.2.178:libc",
         "//third-party/rust/crates/lru-mem/0.3.0:lru-mem",
         "//third-party/rust/crates/memchr/2.7.6:memchr",
         "//third-party/rust/crates/natord/1.0.9:natord",
@@ -62,7 +62,7 @@ rust_library(
         "//third-party/rust/crates/tokio/1.48.0:tokio",
         "//third-party/rust/crates/tracing-subscriber/0.3.22:tracing-subscriber",
         "//third-party/rust/crates/tracing/0.1.43:tracing",
-        "//third-party/rust/crates/uuid/1.18.1:uuid",
+        "//third-party/rust/crates/uuid/1.19.0:uuid",
         "//third-party/rust/crates/zstd-sys/2.0.16+zstd.1.5.7:zstd-sys",
     ],
 )
@@ -96,7 +96,7 @@ rust_test(
         "//third-party/rust/crates/futures-util/0.3.31:futures-util",
         "//third-party/rust/crates/futures/0.3.31:futures",
         "//third-party/rust/crates/hex/0.4.3:hex",
-        "//third-party/rust/crates/libc/0.2.177:libc",
+        "//third-party/rust/crates/libc/0.2.178:libc",
         "//third-party/rust/crates/lru-mem/0.3.0:lru-mem",
         "//third-party/rust/crates/memchr/2.7.6:memchr",
         "//third-party/rust/crates/natord/1.0.9:natord",
@@ -119,7 +119,7 @@ rust_test(
         "//third-party/rust/crates/tokio/1.48.0:tokio",
         "//third-party/rust/crates/tracing-subscriber/0.3.22:tracing-subscriber",
         "//third-party/rust/crates/tracing/0.1.43:tracing",
-        "//third-party/rust/crates/uuid/1.18.1:uuid",
+        "//third-party/rust/crates/uuid/1.19.0:uuid",
         "//third-party/rust/crates/zstd-sys/2.0.16+zstd.1.5.7:zstd-sys",
     ],
 )
