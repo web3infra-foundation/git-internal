@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "buildscript_run", "rust_binary", "rust_library")
 
 http_archive(
     name = "flate2-vendor",
-    urls = ["https://static.crates.io/crates/flate2/flate2-1.1.5.crate"],
-    sha256 = "bfe33edd8e85a12a67454e37f8c75e730830d83e313556ab9ebf9ee7fbeb3bfb",
+    urls = ["https://static.crates.io/crates/flate2/flate2-1.1.7.crate"],
+    sha256 = "a2152dbcb980c05735e2a651d96011320a949eb31a0c8b38b72645ce97dec676",
     type = "tar.gz",
-    strip_prefix = "flate2-1.1.5",
+    strip_prefix = "flate2-1.1.7",
     out = "vendor",
 )
 
