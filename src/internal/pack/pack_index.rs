@@ -1,12 +1,7 @@
 use crate::errors::GitError;
 use crate::hash::ObjectHash;
-use crate::internal::metadata::{EntryMeta, MetaAttached};
-use crate::internal::pack::encode::PackEncoder;
-use crate::internal::pack::entry::Entry;
 use crate::internal::pack::index_entry::IndexEntry;
-use crate::protocol::pack::PackGenerator;
 use crate::utils::HashAlgorithm;
-use std::io::Write;
 use tokio::sync::mpsc;
 
 pub struct IdxBuilder {
@@ -36,7 +31,7 @@ impl IdxBuilder {
             sender.send(data).await.map_err(|e| {
                 GitError::IOError(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
-                    format!("Failed to send idx data: {}", e),
+                    format!("Failed to send idx data: {e}"),
                 ))
             })?;
         }
@@ -48,7 +43,7 @@ impl IdxBuilder {
             sender.send(data).await.map_err(|e| {
                 GitError::IOError(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
-                    format!("Failed to send idx data: {}", e),
+                    format!("Failed to send idx data: {e}"),
                 ))
             })?;
         }
@@ -76,12 +71,12 @@ impl IdxBuilder {
     /// 4-byte number of object formats in this pack index: 2
     async fn write_header(&mut self) -> Result<(), GitError> {
         match &self.inner_hash {
-            HashAlgorithm::Sha1(sha1) => {
+            HashAlgorithm::Sha1(_sha1) => {
                 //magic: FF 74 4F 63  version=2
                 let header: [u8; 8] = [0xFF, 0x74, 0x4F, 0x63, 0, 0, 0, 2];
                 self.send_data(header.to_vec()).await
             }
-            HashAlgorithm::Sha256(sha2) => {
+            HashAlgorithm::Sha256(_sha2) => {
                 // .idx v3
 
                 let magic: [u8; 4] = [0xFF, 0x74, 0x4F, 0x63];

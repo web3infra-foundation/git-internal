@@ -123,7 +123,7 @@ impl Note {
         target_object_id: ObjectHash,
     ) -> Result<Self, GitError> {
         let content = String::from_utf8(data.to_vec())
-            .map_err(|e| GitError::InvalidNoteObject(format!("Invalid UTF-8 content: {}", e)))?;
+            .map_err(|e| GitError::InvalidNoteObject(format!("Invalid UTF-8 content: {e}")))?;
 
         Ok(Note {
             id: hash,
@@ -160,7 +160,7 @@ impl ObjectTrait for Note {
     {
         // Convert bytes to UTF-8 string
         let content = String::from_utf8(data.to_vec())
-            .map_err(|e| GitError::InvalidNoteObject(format!("Invalid UTF-8 content: {}", e)))?;
+            .map_err(|e| GitError::InvalidNoteObject(format!("Invalid UTF-8 content: {e}")))?;
 
         Ok(Note {
             id: hash,

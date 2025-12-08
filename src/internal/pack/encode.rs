@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-
 use std::io::Write;
+//use std::io as stdio;
+
 
 use crate::delta;
 use crate::internal::metadata::{EntryMeta, MetaAttached};
@@ -18,11 +19,12 @@ use rayon::prelude::*;
 
 use crate::internal::pack::index_entry::IndexEntry;
 use crate::internal::pack::pack_index::IdxBuilder;
-use libc::ungetc;
+// use libc::ungetc;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+//use tokio::io::AsyncWriteExt;
+use tokio::io::AsyncWriteExt as TokioAsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -74,9 +76,11 @@ pub async fn encode_and_output_to_files(
     // 在编码开始前就启动消费者，避免发送端被阻塞
     let pack_writer = tokio::spawn(async move {
         while let Some(chunk) = pack_rx.recv().await {
-            pack_file.write_all(&chunk).await?;
+            //pack_file.write_all(&chunk).await?;
+            TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
         }
-        pack_file.flush().await?;
+        //pack_file.flush().await?;
+        TokioAsyncWriteExt::flush(&mut pack_file).await?;
         Ok::<(), GitError>(())
     });
 
@@ -92,11 +96,11 @@ pub async fn encode_and_output_to_files(
     // 最终文件名
     let final_pack_name = output_dir.join(format!(
         "pack-{}.pack",
-        pack_encoder.final_hash.unwrap().to_string()
+        pack_encoder.final_hash.unwrap()
     ));
     let final_idx_name = output_dir.join(format!(
         "pack-{}.idx",
-        pack_encoder.final_hash.unwrap().to_string()
+        pack_encoder.final_hash.unwrap()
     ));
     tokio::fs::rename(tmp_path, &final_pack_name).await?;
 
@@ -104,9 +108,11 @@ pub async fn encode_and_output_to_files(
     let mut idx_file = File::create(&final_idx_name).await?;
     let idx_writer = tokio::spawn(async move {
         while let Some(chunk) = idx_rx.recv().await {
-            idx_file.write_all(&chunk).await?;
+            //idx_file.write_all(&chunk).await?;
+            TokioAsyncWriteExt::write_all(&mut idx_file, &chunk).await?;
         }
-        idx_file.flush().await?;
+        //idx_file.flush().await?;
+        TokioAsyncWriteExt::flush(&mut idx_file).await?;
         Ok::<(), GitError>(())
     });
 
@@ -608,7 +614,7 @@ impl PackEncoder {
             res.push((obj_data.clone(), IndexEntry::new(entry, 0)));
             current_offset += obj_data.len();
         }
-        Ok((res))
+        Ok(res)
     }
 
     /// Parallel encode with rayon, only works when window_size == 0 (no delta)

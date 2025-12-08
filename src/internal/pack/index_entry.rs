@@ -1,7 +1,6 @@
 use crate::errors::GitError;
-use crate::hash::{ObjectHash, SHA1};
+use crate::hash::ObjectHash;
 use crate::internal::metadata::{EntryMeta, MetaAttached};
-use crate::internal::pack::Pack;
 use crate::internal::pack::entry::Entry;
 use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
