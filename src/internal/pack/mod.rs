@@ -8,11 +8,11 @@ pub mod channel_reader;
 pub mod decode;
 pub mod encode;
 pub mod entry;
+mod index_entry;
+mod pack_index;
 pub mod utils;
 pub mod waitlist;
 pub mod wrapper;
-mod index_entry;
-mod pack_index;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;

@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+
 use std::io::Write;
 
 use crate::delta;
@@ -15,8 +16,13 @@ use flate2::write::ZlibEncoder;
 use natord::compare;
 use rayon::prelude::*;
 
+use crate::internal::pack::index_entry::IndexEntry;
+use crate::internal::pack::pack_index::IdxBuilder;
+use libc::ungetc;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -26,15 +32,94 @@ const MIN_DELTA_RATE: f64 = 0.5; // minimum delta rate
 
 /// A encoder for generating pack files with delta objects.
 pub struct PackEncoder {
+    //path: Option<PathBuf>,
     object_number: usize,
     process_index: usize,
     window_size: usize,
     // window: VecDeque<(Entry, usize)>, // entry and offset
-    sender: Option<mpsc::Sender<Vec<u8>>>,
+    pack_sender: Option<mpsc::Sender<Vec<u8>>>,
+    idx_sender: Option<mpsc::Sender<Vec<u8>>>,
+    //idx_sender: Option<mpsc::Sender<Vec<u8>>>,
+    idx_entries: Option<Vec<IndexEntry>>,
     inner_offset: usize,       // offset of current entry
     inner_hash: HashAlgorithm, // introduce different hash algorithm
     final_hash: Option<ObjectHash>,
     start_encoding: bool,
+}
+
+/// Encode entries into a pack, write `.pack`/`.idx` files to `output_dir`.
+/// - Spawns background writers to consume pack/idx channels to avoid back-pressure.
+/// - Uses `window_size` to control delta: `0` means no delta (parallel encode), otherwise enable delta window.
+/// # Arguments
+/// * `raw_entries_rx` - receiver providing entries with metadata
+/// * `object_number` - expected total object count for the pack header
+/// * `output_dir` - target directory to place the generated files
+/// * `window_size` - delta window size; `0` disables delta
+/// # Returns
+/// * `Ok(())` on success, `GitError` on failure
+pub async fn encode_and_output_to_files(
+    raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
+    object_number: usize,
+    output_dir: PathBuf,
+    window_size: usize,
+) -> Result<(), GitError> {
+    let (pack_tx, mut pack_rx) = mpsc::channel(1024);
+    let (idx_tx, mut idx_rx) = mpsc::channel(1024);
+    let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
+
+    // 临时文件
+    let tmp_path = output_dir.join("objects.pack.tmp");
+    let mut pack_file = File::create(&tmp_path).await?;
+
+    // 在编码开始前就启动消费者，避免发送端被阻塞
+    let pack_writer = tokio::spawn(async move {
+        while let Some(chunk) = pack_rx.recv().await {
+            pack_file.write_all(&chunk).await?;
+        }
+        pack_file.flush().await?;
+        Ok::<(), GitError>(())
+    });
+
+    // 生产 pack 数据
+    pack_encoder.encode(raw_entries_rx).await?;
+
+    // 等待 pack 写入完成
+    let pack_write_result = pack_writer
+        .await
+        .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
+    pack_write_result?;
+
+    // 最终文件名
+    let final_pack_name = output_dir.join(format!(
+        "pack-{}.pack",
+        pack_encoder.final_hash.unwrap().to_string()
+    ));
+    let final_idx_name = output_dir.join(format!(
+        "pack-{}.idx",
+        pack_encoder.final_hash.unwrap().to_string()
+    ));
+    tokio::fs::rename(tmp_path, &final_pack_name).await?;
+
+    // 同步启动 idx 写入，避免阻塞 idx 发送端
+    let mut idx_file = File::create(&final_idx_name).await?;
+    let idx_writer = tokio::spawn(async move {
+        while let Some(chunk) = idx_rx.recv().await {
+            idx_file.write_all(&chunk).await?;
+        }
+        idx_file.flush().await?;
+        Ok::<(), GitError>(())
+    });
+
+    // 生成 idx 数据
+    pack_encoder.encode_idx_file().await?;
+
+    // 等待 idx 写入完成
+    let idx_write_result = idx_writer
+        .await
+        .map_err(|e| GitError::PackEncodeError(format!("idx writer task join error: {e}")))?;
+    idx_write_result?;
+
+    Ok(())
 }
 
 /// Encode header of pack file (12 byte)<br>
@@ -185,7 +270,31 @@ impl PackEncoder {
             window_size,
             process_index: 0,
             // window: VecDeque::with_capacity(window_size),
-            sender: Some(sender),
+            pack_sender: Some(sender),
+            idx_sender: None,
+            idx_entries: None,
+            inner_offset: 12, // start  after 12 bytes pack header(signature + version + object count).
+            inner_hash: HashAlgorithm::new(), // introduce different hash algorithm
+            final_hash: None,
+            start_encoding: false,
+        }
+    }
+
+    pub fn new_with_idx(
+        object_number: usize,
+        window_size: usize,
+        pack_sender: mpsc::Sender<Vec<u8>>,
+        idx_sender: mpsc::Sender<Vec<u8>>,
+    ) -> Self {
+        PackEncoder {
+            //path: Some(path),
+            object_number,
+            window_size,
+            process_index: 0,
+            // window: VecDeque::with_capacity(window_size),
+            pack_sender: Some(pack_sender),
+            idx_sender: Some(idx_sender),
+            idx_entries: None,
             inner_offset: 12, // start  after 12 bytes pack header(signature + version + object count).
             inner_hash: HashAlgorithm::new(), // introduce different hash algorithm
             final_hash: None,
@@ -194,11 +303,11 @@ impl PackEncoder {
     }
 
     pub fn drop_sender(&mut self) {
-        self.sender.take(); // Take the sender out, dropping it
+        self.pack_sender.take(); // Take the sender out, dropping it
     }
 
     pub async fn send_data(&mut self, data: Vec<u8>) {
-        if let Some(sender) = &self.sender {
+        if let Some(sender) = &self.pack_sender {
             sender.send(data).await.unwrap();
         }
     }
@@ -219,7 +328,12 @@ impl PackEncoder {
         &mut self,
         entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
     ) -> Result<(), GitError> {
-        self.inner_encode(entry_rx, false).await
+        //self.inner_encode(entry_rx, false).await
+        if self.window_size == 0 {
+            self.parallel_encode(entry_rx).await
+        } else {
+            self.inner_encode(entry_rx, false).await
+        }
     }
 
     pub async fn encode_with_zstdelta(
@@ -325,21 +439,46 @@ impl PackEncoder {
         )
         .map_err(|e| GitError::PackEncodeError(format!("Task join error: {e}")))?;
 
-        let all_encoded_data = [
-            commit_results
-                .map_err(|e| GitError::PackEncodeError(format!("Commit encoding error: {e}")))?,
-            tree_results
-                .map_err(|e| GitError::PackEncodeError(format!("Tree encoding error: {e}")))?,
-            blob_results
-                .map_err(|e| GitError::PackEncodeError(format!("Blob encoding error: {e}")))?,
-            tag_results
-                .map_err(|e| GitError::PackEncodeError(format!("Tag encoding error: {e}")))?,
-        ]
-        .concat();
+        // let (commit_objs, commit_idx) = commit_results?;
+        // let (tree_objs, tree_idx) = tree_results?;
+        // let (blob_objs, blob_idx) = blob_results?;
+        // let (tag_objs,  tag_idx)  = tag_results?;
+        //
+        // // merge all objects
+        // let mut all_objs = Vec::new();
+        // all_objs.extend(commit_objs);
+        // all_objs.extend(tree_objs);
+        // all_objs.extend(blob_objs);
+        // all_objs.extend(tag_objs);
+        //
+        // // merge all index entries
+        // let mut all_idx = Vec::new();
+        // all_idx.extend(commit_idx);
+        // all_idx.extend(tree_idx);
+        // all_idx.extend(blob_idx);
+        // all_idx.extend(tag_idx);
 
-        for data in all_encoded_data {
-            self.write_all_and_update(&data).await;
+        let commit_res = commit_results?;
+        let tree_res = tree_results?;
+        let blob_res = blob_results?;
+        let tag_res = tag_results?;
+
+        let mut all_res = Vec::new();
+        all_res.push(commit_res);
+        all_res.push(tree_res);
+        all_res.push(blob_res);
+        all_res.push(tag_res);
+
+        let mut idx_entries = Vec::new();
+        for res in &mut all_res {
+            for data in res {
+                data.1.offset = self.inner_offset as u64;
+                self.write_all_and_update(&data.0).await;
+                idx_entries.push(data.1.clone());
+            }
         }
+
+        self.idx_entries = Some(idx_entries);
 
         // Hash signature
         let hash_result = self.inner_hash.clone().finalize();
@@ -361,10 +500,11 @@ impl PackEncoder {
         mut bucket: Vec<Entry>,
         window_size: usize,
         enable_zstdelta: bool,
-    ) -> Result<Vec<Vec<u8>>, GitError> {
+    ) -> Result<Vec<(Vec<u8>, IndexEntry)>, GitError> {
         let mut current_offset = 0usize;
         let mut window: VecDeque<(Entry, usize)> = VecDeque::with_capacity(window_size);
-        let mut res: Vec<Vec<u8>> = Vec::new();
+        let mut res: Vec<(Vec<u8>, IndexEntry)> = Vec::new();
+        //let mut idx_entries: Vec<IndexEntry> = Vec::new();
 
         for entry in bucket.iter_mut() {
             //let entry_for_window = entry.clone();
@@ -465,10 +605,10 @@ impl PackEncoder {
             if window.len() > window_size {
                 window.pop_front();
             }
+            res.push((obj_data.clone(), IndexEntry::new(entry, 0)));
             current_offset += obj_data.len();
-            res.push(obj_data);
         }
-        Ok(res)
+        Ok((res))
     }
 
     /// Parallel encode with rayon, only works when window_size == 0 (no delta)
@@ -493,6 +633,7 @@ impl PackEncoder {
             ));
         }
 
+        let mut idx_entries = Vec::new();
         let batch_size = usize::max(1000, entry_rx.max_capacity() / 10); // A temporary value, not optimized
         tracing::info!("encode with batch size: {}", batch_size);
         loop {
@@ -514,20 +655,29 @@ impl PackEncoder {
             }
 
             // use `collect` will return result in order, refs: https://github.com/rayon-rs/rayon/issues/551#issuecomment-371657900
-            let batch_result: Vec<Vec<u8>> = time_it!("parallel encode: encode batch", {
-                batch_entries
-                    .par_iter()
-                    .map(|entry| encode_one_object(entry, None).unwrap())
-                    .collect()
-            });
+            let batch_result: Vec<(Vec<u8>, IndexEntry)> =
+                time_it!("parallel encode: encode batch", {
+                    batch_entries
+                        .par_iter()
+                        .map(|entry| {
+                            (
+                                encode_one_object(entry, None).unwrap(),
+                                IndexEntry::new(entry, 0),
+                            )
+                        })
+                        .collect()
+                });
 
             time_it!("parallel encode: write batch", {
-                for obj_data in batch_result {
-                    self.write_all_and_update(&obj_data).await;
+                for mut obj_data in batch_result {
+                    obj_data.1.offset = self.inner_offset as u64;
+                    self.write_all_and_update(&obj_data.0).await;
+                    idx_entries.push(obj_data.1);
                 }
             });
         }
 
+        tracing::debug!("parallel encode idx entries: {:?}", idx_entries.len());
         if self.process_index != self.object_number {
             panic!(
                 "not all objects are encoded, process:{}, total:{}",
@@ -540,6 +690,8 @@ impl PackEncoder {
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result.to_vec()).await;
         self.drop_sender();
+
+        self.idx_entries = Some(idx_entries);
         Ok(())
     }
 
@@ -548,6 +700,21 @@ impl PackEncoder {
         self.inner_hash.update(data);
         self.inner_offset += data.len();
         self.send_data(data.to_vec()).await;
+    }
+
+    async fn generate_idx_file(&mut self) -> Result<(), GitError> {
+        let final_hash = self.final_hash
+            .ok_or(GitError::PackEncodeError("final_hash is missing,The pack file must be generated before the index file is produced.".into()))?;
+        let idx_entries = self.idx_entries.clone().ok_or(GitError::PackEncodeError(
+            "The pack file must be generated before the index file is produced.".into(),
+        ))?;
+        let mut idx_builder = IdxBuilder::new(
+            self.object_number,
+            self.idx_sender.clone().unwrap(),
+            final_hash,
+        );
+        idx_builder.write_idx(idx_entries).await?;
+        Ok(())
     }
 
     /// async version of encode, result data will be returned by JoinHandle.
@@ -577,6 +744,22 @@ impl PackEncoder {
             self.encode_with_zstdelta(rx).await.unwrap()
         }))
     }
+
+    pub async fn encode_idx_file(&mut self) -> Result<(), GitError> {
+        if self.idx_sender.is_none() {
+            return Err(GitError::PackEncodeError(String::from(
+                "idx sender is none",
+            )));
+        }
+        self.generate_idx_file().await?;
+        // drop sender so downstream consumer can finish
+        self.idx_sender.take();
+        Ok(())
+    }
+
+    // pub async fn output_pack_and_idx_file(mut self,rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,) -> Result<(), GitError> {
+    //
+    // }
 }
 
 #[cfg(test)]
@@ -585,6 +768,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Instant;
     use std::{io::Cursor, path::PathBuf};
+    use tempfile::tempdir;
     use tokio::sync::Mutex;
 
     use super::*;
@@ -1270,5 +1454,141 @@ mod tests {
 
         // check format
         check_format(&result);
+    }
+
+    #[tokio::test]
+    async fn test_pack_encoder_output_to_files() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        init_logger();
+        let entries = get_entries_for_test().await;
+        let entries_number = entries.lock().await.len();
+
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+
+        let start = Instant::now();
+
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(100_000);
+        // 自动创建临时目录，生命周期结束自动删除
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        // spawn a task to send entries
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx
+                    .send(MetaAttached {
+                        inner: entry.clone(),
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+
+        encode_and_output_to_files(entry_rx, entries_number, path.to_path_buf(), 0)
+            .await
+            .unwrap();
+
+        // 验证临时目录下生成的 pack/idx 文件
+        let mut pack_file = None;
+        let mut idx_file = None;
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name();
+            tracing::info!("file name: {:?}", file_name);
+            let file_name = file_name.to_string_lossy();
+            if file_name.ends_with(".pack") {
+                pack_file = Some(entry.path());
+            } else if file_name.ends_with(".idx") {
+                idx_file = Some(entry.path());
+            }
+        }
+        let pack_file = pack_file.expect("pack file not generated");
+        let idx_file = idx_file.expect("idx file not generated");
+        assert!(
+            pack_file.metadata().unwrap().len() > 0,
+            "pack file is empty"
+        );
+        assert!(idx_file.metadata().unwrap().len() > 0, "idx file is empty");
+
+        let duration = start.elapsed();
+        tracing::info!("test executed in: {:.2?}", duration);
+        tracing::info!("original total size: {}", total_original_size);
+    }
+
+    #[tokio::test]
+    async fn test_pack_encoder_output_to_files_with_delta() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        init_logger();
+        let entries = get_entries_for_test().await;
+        let entries_number = entries.lock().await.len();
+
+        let total_original_size: usize = entries
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.data.len())
+            .sum();
+
+        let start = Instant::now();
+
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(100_000);
+        // 自动创建临时目录，生命周期结束自动删除
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        // spawn a task to send entries
+        tokio::spawn(async move {
+            let entries = entries.lock().await;
+            for entry in entries.iter() {
+                entry_tx
+                    .send(MetaAttached {
+                        inner: entry.clone(),
+                        meta: EntryMeta::new(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(entry_tx);
+            tracing::info!("all entries sent");
+        });
+
+        encode_and_output_to_files(entry_rx, entries_number, path.to_path_buf(), 10)
+            .await
+            .unwrap();
+
+        // 验证临时目录下生成的 pack/idx 文件
+        let mut pack_file = None;
+        let mut idx_file = None;
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name();
+            tracing::info!("file name: {:?}", file_name);
+            let file_name = file_name.to_string_lossy();
+            if file_name.ends_with(".pack") {
+                pack_file = Some(entry.path());
+            } else if file_name.ends_with(".idx") {
+                idx_file = Some(entry.path());
+            }
+        }
+        let pack_file = pack_file.expect("pack file not generated");
+        let idx_file = idx_file.expect("idx file not generated");
+        assert!(
+            pack_file.metadata().unwrap().len() > 0,
+            "pack file is empty"
+        );
+        assert!(idx_file.metadata().unwrap().len() > 0, "idx file is empty");
+
+        let duration = start.elapsed();
+        tracing::info!("test executed in: {:.2?}", duration);
+        tracing::info!("original total size: {}", total_original_size);
     }
 }
