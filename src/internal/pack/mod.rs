@@ -11,6 +11,8 @@ pub mod entry;
 pub mod utils;
 pub mod waitlist;
 pub mod wrapper;
+mod index_entry;
+mod pack_index;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
