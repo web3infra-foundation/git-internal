@@ -21,7 +21,7 @@ rust_library(
     name = "zstd-sys",
     srcs = [":zstd-sys-vendor"],
     crate = "zstd_sys",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     env = {
         "OUT_DIR": "$(location :zstd-sys-build-script-run[out_dir])",

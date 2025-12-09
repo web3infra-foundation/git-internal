@@ -21,7 +21,7 @@ rust_library(
     name = "autocfg",
     srcs = [":autocfg-vendor"],
     crate = "autocfg",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :autocfg-manifest[env_flags])"],
     visibility = ["PUBLIC"],

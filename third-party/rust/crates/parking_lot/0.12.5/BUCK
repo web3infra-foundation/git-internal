@@ -21,7 +21,7 @@ rust_library(
     name = "parking_lot",
     srcs = [":parking_lot-vendor"],
     crate = "parking_lot",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["default"],
     rustc_flags = ["@$(location :parking_lot-manifest[env_flags])"],

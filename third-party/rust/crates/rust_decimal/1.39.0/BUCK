@@ -21,7 +21,7 @@ rust_library(
     name = "rust_decimal",
     srcs = [":rust_decimal-vendor"],
     crate = "rust_decimal",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :rust_decimal-build-script-run[out_dir])",

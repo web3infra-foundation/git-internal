@@ -21,7 +21,7 @@ rust_library(
     name = "clang-sys",
     srcs = [":clang-sys-vendor"],
     crate = "clang_sys",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :clang-sys-build-script-run[out_dir])",

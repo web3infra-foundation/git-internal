@@ -21,15 +21,12 @@ rust_library(
     name = "nu-ansi-term",
     srcs = [":nu-ansi-term-vendor"],
     crate = "nu_ansi_term",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "default",
         "std",
     ],
     rustc_flags = ["@$(location :nu-ansi-term-manifest[env_flags])"],
-    named_deps = {
-        "windows": "//third-party/rust/crates/windows-sys/0.61.2:windows-sys",
-    },
     visibility = ["PUBLIC"],
 )

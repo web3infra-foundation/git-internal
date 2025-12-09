@@ -21,7 +21,7 @@ rust_library(
     name = "quote",
     srcs = [":quote-vendor"],
     crate = "quote",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     env = {
         "OUT_DIR": "$(location :quote-build-script-run[out_dir])",

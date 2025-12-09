@@ -21,7 +21,7 @@ rust_library(
     name = "windows_x86_64_gnu",
     srcs = [":windows_x86_64_gnu-vendor"],
     crate = "windows_x86_64_gnu",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :windows_x86_64_gnu-build-script-run[out_dir])",

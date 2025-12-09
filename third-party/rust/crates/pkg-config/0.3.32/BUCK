@@ -21,7 +21,7 @@ rust_library(
     name = "pkg-config",
     srcs = [":pkg-config-vendor"],
     crate = "pkg_config",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :pkg-config-manifest[env_flags])"],
     visibility = ["PUBLIC"],

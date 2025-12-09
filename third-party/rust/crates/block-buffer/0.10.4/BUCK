@@ -21,7 +21,7 @@ rust_library(
     name = "block-buffer",
     srcs = [":block-buffer-vendor"],
     crate = "block_buffer",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :block-buffer-manifest[env_flags])"],
     visibility = ["PUBLIC"],

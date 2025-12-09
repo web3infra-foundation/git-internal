@@ -21,7 +21,7 @@ rust_library(
     name = "windows-strings",
     srcs = [":windows-strings-vendor"],
     crate = "windows_strings",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["std"],
     rustc_flags = ["@$(location :windows-strings-manifest[env_flags])"],

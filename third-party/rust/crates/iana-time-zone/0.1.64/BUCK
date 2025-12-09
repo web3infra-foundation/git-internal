@@ -21,10 +21,9 @@ rust_library(
     name = "iana-time-zone",
     srcs = [":iana-time-zone-vendor"],
     crate = "iana_time_zone",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["fallback"],
     rustc_flags = ["@$(location :iana-time-zone-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/windows-core/0.62.2:windows-core"],
 )

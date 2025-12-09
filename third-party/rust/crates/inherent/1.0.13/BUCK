@@ -21,7 +21,7 @@ rust_library(
     name = "inherent",
     srcs = [":inherent-vendor"],
     crate = "inherent",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :inherent-manifest[env_flags])"],
     proc_macro = True,

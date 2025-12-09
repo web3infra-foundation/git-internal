@@ -21,7 +21,7 @@ rust_library(
     name = "md-5",
     srcs = [":md-5-vendor"],
     crate = "md5",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :md-5-manifest[env_flags])"],
     visibility = ["PUBLIC"],

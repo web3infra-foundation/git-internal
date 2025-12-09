@@ -21,7 +21,7 @@ rust_library(
     name = "sqlx-postgres",
     srcs = [":sqlx-postgres-vendor"],
     crate = "sqlx_postgres",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "bigdecimal",
@@ -47,7 +47,6 @@ rust_library(
         "//third-party/rust/crates/chrono/0.4.42:chrono",
         "//third-party/rust/crates/crc/3.4.0:crc",
         "//third-party/rust/crates/dotenvy/0.15.7:dotenvy",
-        "//third-party/rust/crates/etcetera/0.8.0:etcetera",
         "//third-party/rust/crates/futures-channel/0.3.31:futures-channel",
         "//third-party/rust/crates/futures-core/0.3.31:futures-core",
         "//third-party/rust/crates/futures-util/0.3.31:futures-util",

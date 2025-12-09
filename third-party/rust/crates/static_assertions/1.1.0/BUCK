@@ -21,7 +21,7 @@ rust_library(
     name = "static_assertions",
     srcs = [":static_assertions-vendor"],
     crate = "static_assertions",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :static_assertions-manifest[env_flags])"],
     visibility = ["PUBLIC"],

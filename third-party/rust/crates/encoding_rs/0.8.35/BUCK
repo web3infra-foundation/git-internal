@@ -21,7 +21,7 @@ rust_library(
     name = "encoding_rs",
     srcs = [":encoding_rs-vendor"],
     crate = "encoding_rs",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
         "alloc",

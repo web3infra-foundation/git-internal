@@ -21,7 +21,7 @@ rust_library(
     name = "rustc_version",
     srcs = [":rustc_version-vendor"],
     crate = "rustc_version",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :rustc_version-manifest[env_flags])"],
     visibility = ["PUBLIC"],

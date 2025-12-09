@@ -21,7 +21,7 @@ rust_library(
     name = "zerotrie",
     srcs = [":zerotrie-vendor"],
     crate = "zerotrie",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "yoke",

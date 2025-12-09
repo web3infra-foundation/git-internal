@@ -21,10 +21,10 @@ rust_library(
     name = "errno",
     srcs = [":errno-vendor"],
     crate = "errno",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = ["std"],
     rustc_flags = ["@$(location :errno-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/windows-sys/0.61.2:windows-sys"],
+    deps = ["//third-party/rust/crates/libc/0.2.178:libc"],
 )

@@ -21,7 +21,7 @@ rust_library(
     name = "icu_properties_data",
     srcs = [":icu_properties_data-vendor"],
     crate = "icu_properties_data",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :icu_properties_data-build-script-run[out_dir])",

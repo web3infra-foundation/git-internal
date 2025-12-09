@@ -21,7 +21,7 @@ rust_library(
     name = "futures-sink",
     srcs = [":futures-sink-vendor"],
     crate = "futures_sink",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
         "alloc",

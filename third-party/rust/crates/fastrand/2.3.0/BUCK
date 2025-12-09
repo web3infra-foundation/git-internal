@@ -21,7 +21,7 @@ rust_library(
     name = "fastrand",
     srcs = [":fastrand-vendor"],
     crate = "fastrand",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
         "alloc",

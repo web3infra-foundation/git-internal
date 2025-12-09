@@ -21,7 +21,7 @@ rust_library(
     name = "bumpalo",
     srcs = [":bumpalo-vendor"],
     crate = "bumpalo",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["default"],
     rustc_flags = ["@$(location :bumpalo-manifest[env_flags])"],

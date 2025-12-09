@@ -21,7 +21,7 @@ rust_library(
     name = "pkcs1",
     srcs = [":pkcs1-vendor"],
     crate = "pkcs1",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "alloc",

@@ -21,7 +21,7 @@ rust_library(
     name = "virtue",
     srcs = [":virtue-vendor"],
     crate = "virtue",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :virtue-manifest[env_flags])"],
     visibility = ["PUBLIC"],

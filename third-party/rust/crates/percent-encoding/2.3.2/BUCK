@@ -21,7 +21,7 @@ rust_library(
     name = "percent-encoding",
     srcs = [":percent-encoding-vendor"],
     crate = "percent_encoding",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
         "alloc",

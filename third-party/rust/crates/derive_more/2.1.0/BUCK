@@ -21,7 +21,7 @@ rust_library(
     name = "derive_more",
     srcs = [":derive_more-vendor"],
     crate = "derive_more",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "debug",

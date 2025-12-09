@@ -21,7 +21,7 @@ rust_library(
     name = "http",
     srcs = [":http-vendor"],
     crate = "http",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "default",

@@ -21,7 +21,7 @@ rust_library(
     name = "sea-query-binder",
     srcs = [":sea-query-binder-vendor"],
     crate = "sea_query_binder",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "bigdecimal",

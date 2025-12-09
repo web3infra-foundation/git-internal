@@ -21,7 +21,7 @@ rust_library(
     name = "allocator-api2",
     srcs = [":allocator-api2-vendor"],
     crate = "allocator_api2",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = ["alloc"],
     rustc_flags = ["@$(location :allocator-api2-manifest[env_flags])"],

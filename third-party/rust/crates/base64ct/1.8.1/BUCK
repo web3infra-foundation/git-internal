@@ -21,7 +21,7 @@ rust_library(
     name = "base64ct",
     srcs = [":base64ct-vendor"],
     crate = "base64ct",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2024",
     features = ["alloc"],
     rustc_flags = ["@$(location :base64ct-manifest[env_flags])"],

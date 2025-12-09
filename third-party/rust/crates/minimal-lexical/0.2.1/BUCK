@@ -21,7 +21,7 @@ rust_library(
     name = "minimal-lexical",
     srcs = [":minimal-lexical-vendor"],
     crate = "minimal_lexical",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = ["std"],
     rustc_flags = ["@$(location :minimal-lexical-manifest[env_flags])"],

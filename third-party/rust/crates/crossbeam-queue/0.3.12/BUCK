@@ -21,7 +21,7 @@ rust_library(
     name = "crossbeam-queue",
     srcs = [":crossbeam-queue-vendor"],
     crate = "crossbeam_queue",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "alloc",

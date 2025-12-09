@@ -21,7 +21,7 @@ rust_library(
     name = "toml_edit",
     srcs = [":toml_edit-vendor"],
     crate = "toml_edit",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["parse"],
     rustc_flags = ["@$(location :toml_edit-manifest[env_flags])"],

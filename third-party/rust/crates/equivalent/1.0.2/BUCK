@@ -21,7 +21,7 @@ rust_library(
     name = "equivalent",
     srcs = [":equivalent-vendor"],
     crate = "equivalent",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :equivalent-manifest[env_flags])"],
     visibility = ["PUBLIC"],

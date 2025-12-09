@@ -21,7 +21,7 @@ rust_library(
     name = "mio",
     srcs = [":mio-vendor"],
     crate = "mio",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "net",
@@ -30,5 +30,5 @@ rust_library(
     ],
     rustc_flags = ["@$(location :mio-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/windows-sys/0.61.2:windows-sys"],
+    deps = ["//third-party/rust/crates/libc/0.2.178:libc"],
 )

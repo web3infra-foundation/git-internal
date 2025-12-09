@@ -21,7 +21,7 @@ rust_library(
     name = "rand",
     srcs = [":rand-vendor"],
     crate = "rand",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
         "alloc",
@@ -35,6 +35,7 @@ rust_library(
     rustc_flags = ["@$(location :rand-manifest[env_flags])"],
     visibility = ["PUBLIC"],
     deps = [
+        "//third-party/rust/crates/libc/0.2.178:libc",
         "//third-party/rust/crates/rand_chacha/0.3.1:rand_chacha",
         "//third-party/rust/crates/rand_core/0.6.4:rand_core",
     ],

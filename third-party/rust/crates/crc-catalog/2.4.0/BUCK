@@ -21,7 +21,7 @@ rust_library(
     name = "crc-catalog",
     srcs = [":crc-catalog-vendor"],
     crate = "crc_catalog",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :crc-catalog-manifest[env_flags])"],
     visibility = ["PUBLIC"],

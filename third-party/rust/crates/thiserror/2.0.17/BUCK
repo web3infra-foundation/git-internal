@@ -21,7 +21,7 @@ rust_library(
     name = "thiserror",
     srcs = [":thiserror-vendor"],
     crate = "thiserror",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :thiserror-build-script-run[out_dir])",

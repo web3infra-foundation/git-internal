@@ -21,7 +21,7 @@ rust_library(
     name = "env_logger",
     srcs = [":env_logger-vendor"],
     crate = "env_logger",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = ["regex"],
     rustc_flags = ["@$(location :env_logger-manifest[env_flags])"],

@@ -21,7 +21,7 @@ rust_library(
     name = "idna_adapter",
     srcs = [":idna_adapter-vendor"],
     crate = "idna_adapter",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["compiled_data"],
     rustc_flags = ["@$(location :idna_adapter-manifest[env_flags])"],

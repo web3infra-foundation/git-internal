@@ -21,7 +21,7 @@ rust_library(
     name = "bytecheck_derive",
     srcs = [":bytecheck_derive-vendor"],
     crate = "bytecheck_derive",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["std"],
     rustc_flags = ["@$(location :bytecheck_derive-manifest[env_flags])"],

@@ -21,7 +21,7 @@ rust_library(
     name = "toml_datetime",
     srcs = [":toml_datetime-vendor"],
     crate = "toml_datetime",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "alloc",

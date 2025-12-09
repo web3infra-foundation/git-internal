@@ -21,7 +21,7 @@ rust_library(
     name = "zerofrom-derive",
     srcs = [":zerofrom-derive-vendor"],
     crate = "zerofrom_derive",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :zerofrom-derive-manifest[env_flags])"],
     proc_macro = True,

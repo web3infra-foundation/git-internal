@@ -21,7 +21,7 @@ rust_library(
     name = "ppv-lite86",
     srcs = [":ppv-lite86-vendor"],
     crate = "ppv_lite86",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "simd",
@@ -29,5 +29,5 @@ rust_library(
     ],
     rustc_flags = ["@$(location :ppv-lite86-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/zerocopy/0.8.27:zerocopy"],
+    deps = ["//third-party/rust/crates/zerocopy/0.8.31:zerocopy"],
 )

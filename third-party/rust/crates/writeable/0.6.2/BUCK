@@ -21,7 +21,7 @@ rust_library(
     name = "writeable",
     srcs = [":writeable-vendor"],
     crate = "writeable",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :writeable-manifest[env_flags])"],
     visibility = ["PUBLIC"],

@@ -21,7 +21,7 @@ rust_library(
     name = "cfg-if",
     srcs = [":cfg-if-vendor"],
     crate = "cfg_if",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :cfg-if-manifest[env_flags])"],
     visibility = ["PUBLIC"],

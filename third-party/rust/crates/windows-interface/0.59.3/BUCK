@@ -21,7 +21,7 @@ rust_library(
     name = "windows-interface",
     srcs = [":windows-interface-vendor"],
     crate = "windows_interface",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :windows-interface-manifest[env_flags])"],
     proc_macro = True,

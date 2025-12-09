@@ -21,7 +21,7 @@ rust_library(
     name = "unicode-xid",
     srcs = [":unicode-xid-vendor"],
     crate = "unicode_xid",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2015",
     features = ["default"],
     rustc_flags = ["@$(location :unicode-xid-manifest[env_flags])"],

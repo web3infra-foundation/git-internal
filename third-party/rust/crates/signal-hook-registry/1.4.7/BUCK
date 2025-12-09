@@ -21,7 +21,7 @@ rust_library(
     name = "signal-hook-registry",
     srcs = [":signal-hook-registry-vendor"],
     crate = "signal_hook_registry",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :signal-hook-registry-manifest[env_flags])"],
     visibility = ["PUBLIC"],

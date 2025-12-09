@@ -21,7 +21,7 @@ rust_library(
     name = "thread_local",
     srcs = [":thread_local-vendor"],
     crate = "thread_local",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :thread_local-manifest[env_flags])"],
     visibility = ["PUBLIC"],

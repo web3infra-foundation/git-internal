@@ -21,7 +21,7 @@ rust_library(
     name = "atoi",
     srcs = [":atoi-vendor"],
     crate = "atoi",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "default",

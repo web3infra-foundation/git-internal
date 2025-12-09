@@ -21,7 +21,7 @@ rust_library(
     name = "nom",
     srcs = [":nom-vendor"],
     crate = "nom",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
         "alloc",

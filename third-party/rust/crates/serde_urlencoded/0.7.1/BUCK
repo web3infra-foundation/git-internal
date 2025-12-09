@@ -21,7 +21,7 @@ rust_library(
     name = "serde_urlencoded",
     srcs = [":serde_urlencoded-vendor"],
     crate = "serde_urlencoded",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :serde_urlencoded-manifest[env_flags])"],
     visibility = ["PUBLIC"],

@@ -21,7 +21,7 @@ rust_library(
     name = "bitvec",
     srcs = [":bitvec-vendor"],
     crate = "bitvec",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["alloc"],
     rustc_flags = ["@$(location :bitvec-manifest[env_flags])"],

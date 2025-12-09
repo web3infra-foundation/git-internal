@@ -21,7 +21,7 @@ rust_library(
     name = "shlex",
     srcs = [":shlex-vendor"],
     crate = "shlex",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2015",
     features = [
         "default",

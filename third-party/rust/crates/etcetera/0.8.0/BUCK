@@ -21,13 +21,12 @@ rust_library(
     name = "etcetera",
     srcs = [":etcetera-vendor"],
     crate = "etcetera",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :etcetera-manifest[env_flags])"],
     visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/cfg-if/1.0.4:cfg-if",
         "//third-party/rust/crates/home/0.5.12:home",
-        "//third-party/rust/crates/windows-sys/0.48.0:windows-sys",
     ],
 )

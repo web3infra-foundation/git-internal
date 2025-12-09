@@ -21,7 +21,7 @@ rust_library(
     name = "matchit",
     srcs = [":matchit-vendor"],
     crate = "matchit",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["default"],
     rustc_flags = ["@$(location :matchit-manifest[env_flags])"],

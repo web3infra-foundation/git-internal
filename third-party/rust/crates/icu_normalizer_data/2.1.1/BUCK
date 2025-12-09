@@ -21,7 +21,7 @@ rust_library(
     name = "icu_normalizer_data",
     srcs = [":icu_normalizer_data-vendor"],
     crate = "icu_normalizer_data",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :icu_normalizer_data-build-script-run[out_dir])",

@@ -21,7 +21,7 @@ rust_library(
     name = "icu_locale_core",
     srcs = [":icu_locale_core-vendor"],
     crate = "icu_locale_core",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = ["zerovec"],
     rustc_flags = ["@$(location :icu_locale_core-manifest[env_flags])"],

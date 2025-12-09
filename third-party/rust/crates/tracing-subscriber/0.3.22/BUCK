@@ -21,7 +21,7 @@ rust_library(
     name = "tracing-subscriber",
     srcs = [":tracing-subscriber-vendor"],
     crate = "tracing_subscriber",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
         "alloc",

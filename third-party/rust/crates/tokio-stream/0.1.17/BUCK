@@ -21,7 +21,7 @@ rust_library(
     name = "tokio-stream",
     srcs = [":tokio-stream-vendor"],
     crate = "tokio_stream",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     features = [
         "default",

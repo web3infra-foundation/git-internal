@@ -21,7 +21,7 @@ rust_library(
     name = "getrandom",
     srcs = [":getrandom-vendor"],
     crate = "getrandom",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :getrandom-build-script-run[out_dir])",
@@ -32,7 +32,10 @@ rust_library(
         "@$(location :getrandom-manifest[env_flags])",
     ],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/cfg-if/1.0.4:cfg-if"],
+    deps = [
+        "//third-party/rust/crates/cfg-if/1.0.4:cfg-if",
+        "//third-party/rust/crates/libc/0.2.178:libc",
+    ],
 )
 
 rust_binary(

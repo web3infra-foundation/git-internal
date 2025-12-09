@@ -21,7 +21,7 @@ rust_library(
     name = "displaydoc",
     srcs = [":displaydoc-vendor"],
     crate = "displaydoc",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :displaydoc-manifest[env_flags])"],
     proc_macro = True,

@@ -21,7 +21,7 @@ rust_library(
     name = "tap",
     srcs = [":tap-vendor"],
     crate = "tap",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :tap-manifest[env_flags])"],
     visibility = ["PUBLIC"],
