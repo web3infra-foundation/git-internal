@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::io::Write;
 //use std::io as stdio;
 
-
 use crate::delta;
 use crate::internal::metadata::{EntryMeta, MetaAttached};
 use crate::internal::object::types::ObjectType;
@@ -20,9 +19,9 @@ use rayon::prelude::*;
 use crate::internal::pack::index_entry::IndexEntry;
 use crate::internal::pack::pack_index::IdxBuilder;
 // use libc::ungetc;
+use chrono::Utc;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use chrono::Utc;
 use tokio::fs::File;
 //use tokio::io::AsyncWriteExt;
 use tokio::io::AsyncWriteExt as TokioAsyncWriteExt;
@@ -72,14 +71,12 @@ pub async fn encode_and_output_to_files(
 
     // timestamp for temp filename
     let now = Utc::now();
-    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();  // 例如 20251209235959.123
-    let tmp_path = output_dir.join(format!("{}objects.pack.tmp",timestamp));
+    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string(); // 例如 20251209235959.123
+    let tmp_path = output_dir.join(format!("{}objects.pack.tmp", timestamp));
     let mut pack_file = File::create(&tmp_path).await?;
 
-    
     let pack_writer = tokio::spawn(async move {
         while let Some(chunk) = pack_rx.recv().await {
-           
             TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
         }
         //pack_file.flush().await?;
@@ -87,7 +84,6 @@ pub async fn encode_and_output_to_files(
         Ok::<(), GitError>(())
     });
 
-    
     pack_encoder.encode(raw_entries_rx).await?;
 
     // 等待 pack 写入完成
@@ -96,18 +92,11 @@ pub async fn encode_and_output_to_files(
         .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
     pack_write_result?;
 
-    
-    let final_pack_name = output_dir.join(format!(
-        "pack-{}.pack",
-        pack_encoder.final_hash.unwrap()
-    ));
-    let final_idx_name = output_dir.join(format!(
-        "pack-{}.idx",
-        pack_encoder.final_hash.unwrap()
-    ));
+    let final_pack_name =
+        output_dir.join(format!("pack-{}.pack", pack_encoder.final_hash.unwrap()));
+    let final_idx_name = output_dir.join(format!("pack-{}.idx", pack_encoder.final_hash.unwrap()));
     tokio::fs::rename(tmp_path, &final_pack_name).await?;
 
-    
     let mut idx_file = File::create(&final_idx_name).await?;
     let idx_writer = tokio::spawn(async move {
         while let Some(chunk) = idx_rx.recv().await {
@@ -119,10 +108,9 @@ pub async fn encode_and_output_to_files(
         Ok::<(), GitError>(())
     });
 
-    //build idx 
+    //build idx
     pack_encoder.encode_idx_file().await?;
 
-    
     let idx_write_result = idx_writer
         .await
         .map_err(|e| GitError::PackEncodeError(format!("idx writer task join error: {e}")))?;
@@ -238,7 +226,6 @@ fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryM
         (None, Some(_)) => return Ordering::Greater, // entries without paths sort last
         (None, None) => {}
     }
-    
 
     let ord = b.inner.data.len().cmp(&a.inner.data.len());
     if ord != Ordering::Equal {
@@ -438,18 +425,13 @@ impl PackEncoder {
             }),
         )
         .map_err(|e| GitError::PackEncodeError(format!("Task join error: {e}")))?;
-        
 
         let commit_res = commit_results?;
         let tree_res = tree_results?;
         let blob_res = blob_results?;
         let tag_res = tag_results?;
 
-        let mut all_res = Vec::new();
-        all_res.push(commit_res);
-        all_res.push(tree_res);
-        all_res.push(blob_res);
-        all_res.push(tag_res);
+        let mut all_res = vec![commit_res, tree_res, blob_res, tag_res];
 
         let mut idx_entries = Vec::new();
         for res in &mut all_res {
@@ -738,8 +720,6 @@ impl PackEncoder {
         self.idx_sender.take();
         Ok(())
     }
-
-    
 }
 
 #[cfg(test)]

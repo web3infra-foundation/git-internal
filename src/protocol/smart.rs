@@ -86,10 +86,11 @@ where
         &self,
         service_type: ServiceType,
     ) -> Result<BytesMut, ProtocolError> {
-        let refs =
-            self.repo_storage.get_repository_refs().await.map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to get refs: {e}"))
-            })?;
+        let refs = self
+            .repo_storage
+            .get_repository_refs()
+            .await
+            .map_err(|e| ProtocolError::repository_error(format!("Failed to get refs: {e}")))?;
         let hex_len = self.wire_hash_kind.hex_len();
         for (name, h) in &refs {
             if h.len() != hex_len {

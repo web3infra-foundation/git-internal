@@ -93,20 +93,23 @@ impl IdxBuilder {
         }
     }
 
-    
-    async fn write_fanout(&mut self, entries: &mut Vec<IndexEntry>) -> Result<(), GitError> {
+    async fn write_fanout(&mut self, entries: &mut [IndexEntry]) -> Result<(), GitError> {
         entries.sort_by(|a, b| a.hash.cmp(&b.hash));
         let mut fanout = [0u32; 256];
         for entry in entries.iter() {
             fanout[entry.hash.to_data()[0] as usize] += 1;
         }
-        for i in 1..256 {
+
+        // 计算累积计数
+        for i in 1..fanout.len() {
             fanout[i] += fanout[i - 1];
         }
-        // send all 256 cumulative counts (including index 0)
-        for i in 0..256 {
-            self.send_u32(fanout[i]).await?;
+
+        // 发送所有 256 个累积计数
+        for &count in fanout.iter() {
+            self.send_u32(count).await?;
         }
+
         Ok(())
     }
     async fn write_names(&mut self, entries: &Vec<IndexEntry>) -> Result<(), GitError> {
