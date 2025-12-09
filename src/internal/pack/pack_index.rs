@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 pub struct IdxBuilder {
     sender: Option<mpsc::Sender<Vec<u8>>>,
-    inner_hash: HashAlgorithm, // 用于 idx trailer
+    inner_hash: HashAlgorithm, //  idx trailer
     object_number: usize,
     pack_hash: ObjectHash,
 }
@@ -59,7 +59,7 @@ impl IdxBuilder {
         self.send_data(v.to_be_bytes().to_vec()).await
     }
 
-    /// todo: support idx v3
+    /// support idx v3
     /// The 4-byte pack index signature: \377t0c
     ///
     /// 4-byte version number: 3
@@ -93,7 +93,7 @@ impl IdxBuilder {
         }
     }
 
-    //根据对象哈希的 第一个字节（00~FF）排序
+    
     async fn write_fanout(&mut self, entries: &mut Vec<IndexEntry>) -> Result<(), GitError> {
         entries.sort_by(|a, b| a.hash.cmp(&b.hash));
         let mut fanout = [0u32; 256];

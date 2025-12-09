@@ -22,6 +22,7 @@ use crate::internal::pack::pack_index::IdxBuilder;
 // use libc::ungetc;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use chrono::Utc;
 use tokio::fs::File;
 //use tokio::io::AsyncWriteExt;
 use tokio::io::AsyncWriteExt as TokioAsyncWriteExt;
@@ -69,14 +70,16 @@ pub async fn encode_and_output_to_files(
     let (idx_tx, mut idx_rx) = mpsc::channel(1024);
     let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
 
-    // 临时文件
-    let tmp_path = output_dir.join("objects.pack.tmp");
+    // timestamp for temp filename
+    let now = Utc::now();
+    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();  // 例如 20251209235959.123
+    let tmp_path = output_dir.join(format!("{}objects.pack.tmp",timestamp));
     let mut pack_file = File::create(&tmp_path).await?;
 
-    // 在编码开始前就启动消费者，避免发送端被阻塞
+    
     let pack_writer = tokio::spawn(async move {
         while let Some(chunk) = pack_rx.recv().await {
-            //pack_file.write_all(&chunk).await?;
+           
             TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
         }
         //pack_file.flush().await?;
@@ -84,7 +87,7 @@ pub async fn encode_and_output_to_files(
         Ok::<(), GitError>(())
     });
 
-    // 生产 pack 数据
+    
     pack_encoder.encode(raw_entries_rx).await?;
 
     // 等待 pack 写入完成
@@ -93,7 +96,7 @@ pub async fn encode_and_output_to_files(
         .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
     pack_write_result?;
 
-    // 最终文件名
+    
     let final_pack_name = output_dir.join(format!(
         "pack-{}.pack",
         pack_encoder.final_hash.unwrap()
@@ -104,7 +107,7 @@ pub async fn encode_and_output_to_files(
     ));
     tokio::fs::rename(tmp_path, &final_pack_name).await?;
 
-    // 同步启动 idx 写入，避免阻塞 idx 发送端
+    
     let mut idx_file = File::create(&final_idx_name).await?;
     let idx_writer = tokio::spawn(async move {
         while let Some(chunk) = idx_rx.recv().await {
@@ -116,10 +119,10 @@ pub async fn encode_and_output_to_files(
         Ok::<(), GitError>(())
     });
 
-    // 生成 idx 数据
+    //build idx 
     pack_encoder.encode_idx_file().await?;
 
-    // 等待 idx 写入完成
+    
     let idx_write_result = idx_writer
         .await
         .map_err(|e| GitError::PackEncodeError(format!("idx writer task join error: {e}")))?;
@@ -235,16 +238,7 @@ fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryM
         (None, Some(_)) => return Ordering::Greater, // entries without paths sort last
         (None, None) => {}
     }
-
-    // let ord = b.obj_type.to_u8().cmp(&a.obj_type.to_u8());
-    // if ord != Ordering::Equal {
-    //     return ord;
-    // }
-
-    // the hash should be file hash not content hash
-    // todo the feature need larger refactor
-    // let ord = b.hash.cmp(&a.hash);
-    // if ord != Ordering::Equal { return ord; }
+    
 
     let ord = b.inner.data.len().cmp(&a.inner.data.len());
     if ord != Ordering::Equal {
@@ -444,25 +438,7 @@ impl PackEncoder {
             }),
         )
         .map_err(|e| GitError::PackEncodeError(format!("Task join error: {e}")))?;
-
-        // let (commit_objs, commit_idx) = commit_results?;
-        // let (tree_objs, tree_idx) = tree_results?;
-        // let (blob_objs, blob_idx) = blob_results?;
-        // let (tag_objs,  tag_idx)  = tag_results?;
-        //
-        // // merge all objects
-        // let mut all_objs = Vec::new();
-        // all_objs.extend(commit_objs);
-        // all_objs.extend(tree_objs);
-        // all_objs.extend(blob_objs);
-        // all_objs.extend(tag_objs);
-        //
-        // // merge all index entries
-        // let mut all_idx = Vec::new();
-        // all_idx.extend(commit_idx);
-        // all_idx.extend(tree_idx);
-        // all_idx.extend(blob_idx);
-        // all_idx.extend(tag_idx);
+        
 
         let commit_res = commit_results?;
         let tree_res = tree_results?;
@@ -763,9 +739,7 @@ impl PackEncoder {
         Ok(())
     }
 
-    // pub async fn output_pack_and_idx_file(mut self,rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,) -> Result<(), GitError> {
-    //
-    // }
+    
 }
 
 #[cfg(test)]
