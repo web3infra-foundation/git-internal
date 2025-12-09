@@ -21,9 +21,8 @@ rust_library(
     name = "num_cpus",
     srcs = [":num_cpus-vendor"],
     crate = "num_cpus",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :num_cpus-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/libc/0.2.178:libc"],
 )

@@ -21,7 +21,7 @@ rust_library(
     name = "proc-macro-error-attr2",
     srcs = [":proc-macro-error-attr2-vendor"],
     crate = "proc_macro_error_attr2",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :proc-macro-error-attr2-manifest[env_flags])"],
     proc_macro = True,

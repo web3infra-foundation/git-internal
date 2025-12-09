@@ -21,7 +21,7 @@ rust_library(
     name = "adler2",
     srcs = [":adler2-vendor"],
     crate = "adler2",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :adler2-manifest[env_flags])"],
     visibility = ["PUBLIC"],

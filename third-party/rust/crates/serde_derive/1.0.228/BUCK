@@ -21,7 +21,7 @@ rust_library(
     name = "serde_derive",
     srcs = [":serde_derive-vendor"],
     crate = "serde_derive",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = ["default"],
     rustc_flags = ["@$(location :serde_derive-manifest[env_flags])"],
@@ -30,6 +30,6 @@ rust_library(
     deps = [
         "//third-party/rust/crates/proc-macro2/1.0.103:proc-macro2",
         "//third-party/rust/crates/quote/1.0.42:quote",
-        "//third-party/rust/crates/syn/2.0.110:syn",
+        "//third-party/rust/crates/syn/2.0.111:syn",
     ],
 )

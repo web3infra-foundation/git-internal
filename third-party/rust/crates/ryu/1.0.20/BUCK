@@ -21,7 +21,7 @@ rust_library(
     name = "ryu",
     srcs = [":ryu-vendor"],
     crate = "ryu",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :ryu-manifest[env_flags])"],
     visibility = ["PUBLIC"],

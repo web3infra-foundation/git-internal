@@ -21,7 +21,7 @@ rust_library(
     name = "windows-implement",
     srcs = [":windows-implement-vendor"],
     crate = "windows_implement",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :windows-implement-manifest[env_flags])"],
     proc_macro = True,
@@ -29,6 +29,6 @@ rust_library(
     deps = [
         "//third-party/rust/crates/proc-macro2/1.0.103:proc-macro2",
         "//third-party/rust/crates/quote/1.0.42:quote",
-        "//third-party/rust/crates/syn/2.0.110:syn",
+        "//third-party/rust/crates/syn/2.0.111:syn",
     ],
 )

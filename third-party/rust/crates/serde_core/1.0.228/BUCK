@@ -21,7 +21,7 @@ rust_library(
     name = "serde_core",
     srcs = [":serde_core-vendor"],
     crate = "serde_core",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :serde_core-build-script-run[out_dir])",

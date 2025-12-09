@@ -21,7 +21,7 @@ rust_library(
     name = "axum-core",
     srcs = [":axum-core-vendor"],
     crate = "axum_core",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = ["tracing"],
     rustc_flags = ["@$(location :axum-core-manifest[env_flags])"],

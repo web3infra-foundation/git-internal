@@ -21,7 +21,7 @@ rust_library(
     name = "borsh",
     srcs = [":borsh-vendor"],
     crate = "borsh",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     env = {
         "OUT_DIR": "$(location :borsh-build-script-run[out_dir])",

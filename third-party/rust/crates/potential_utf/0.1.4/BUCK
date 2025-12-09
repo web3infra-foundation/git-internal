@@ -21,7 +21,7 @@ rust_library(
     name = "potential_utf",
     srcs = [":potential_utf-vendor"],
     crate = "potential_utf",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = ["zerovec"],
     rustc_flags = ["@$(location :potential_utf-manifest[env_flags])"],

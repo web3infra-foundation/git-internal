@@ -21,7 +21,7 @@ rust_library(
     name = "path-absolutize",
     srcs = [":path-absolutize-vendor"],
     crate = "path_absolutize",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :path-absolutize-manifest[env_flags])"],
     visibility = ["PUBLIC"],

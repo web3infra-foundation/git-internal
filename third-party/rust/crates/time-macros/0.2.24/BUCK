@@ -21,7 +21,7 @@ rust_library(
     name = "time-macros",
     srcs = [":time-macros-vendor"],
     crate = "time_macros",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = [
         "formatting",

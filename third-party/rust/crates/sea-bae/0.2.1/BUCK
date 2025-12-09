@@ -21,7 +21,7 @@ rust_library(
     name = "sea-bae",
     srcs = [":sea-bae-vendor"],
     crate = "sea_bae",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :sea-bae-manifest[env_flags])"],
     proc_macro = True,
@@ -31,6 +31,6 @@ rust_library(
         "//third-party/rust/crates/proc-macro-error2/2.0.1:proc-macro-error2",
         "//third-party/rust/crates/proc-macro2/1.0.103:proc-macro2",
         "//third-party/rust/crates/quote/1.0.42:quote",
-        "//third-party/rust/crates/syn/2.0.110:syn",
+        "//third-party/rust/crates/syn/2.0.111:syn",
     ],
 )

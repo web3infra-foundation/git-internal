@@ -21,7 +21,7 @@ rust_library(
     name = "powerfmt",
     srcs = [":powerfmt-vendor"],
     crate = "powerfmt",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :powerfmt-manifest[env_flags])"],
     visibility = ["PUBLIC"],

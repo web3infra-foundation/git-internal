@@ -21,10 +21,10 @@ rust_library(
     name = "socket2",
     srcs = [":socket2-vendor"],
     crate = "socket2",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = ["all"],
     rustc_flags = ["@$(location :socket2-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/libc/0.2.178:libc"],
+    deps = ["//third-party/rust/crates/windows-sys/0.60.2:windows-sys"],
 )

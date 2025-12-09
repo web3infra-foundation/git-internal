@@ -21,7 +21,7 @@ rust_library(
     name = "unicode-bidi",
     srcs = [":unicode-bidi-vendor"],
     crate = "unicode_bidi",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = [
         "default",

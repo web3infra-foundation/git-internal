@@ -21,7 +21,7 @@ rust_library(
     name = "sqlx-macros",
     srcs = [":sqlx-macros-vendor"],
     crate = "sqlx_macros",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = [
         "bigdecimal",
@@ -41,6 +41,6 @@ rust_library(
         "//third-party/rust/crates/quote/1.0.42:quote",
         "//third-party/rust/crates/sqlx-core/0.8.6:sqlx-core",
         "//third-party/rust/crates/sqlx-macros-core/0.8.6:sqlx-macros-core",
-        "//third-party/rust/crates/syn/2.0.110:syn",
+        "//third-party/rust/crates/syn/2.0.111:syn",
     ],
 )

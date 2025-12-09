@@ -21,7 +21,7 @@ rust_library(
     name = "num-bigint-dig",
     srcs = [":num-bigint-dig-vendor"],
     crate = "num_bigint_dig",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :num-bigint-dig-build-script-run[out_dir])",

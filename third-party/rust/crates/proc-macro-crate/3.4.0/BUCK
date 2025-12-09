@@ -21,9 +21,9 @@ rust_library(
     name = "proc-macro-crate",
     srcs = [":proc-macro-crate-vendor"],
     crate = "proc_macro_crate",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :proc-macro-crate-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/toml_edit/0.23.7:toml_edit"],
+    deps = ["//third-party/rust/crates/toml_edit/0.23.9:toml_edit"],
 )

@@ -21,7 +21,7 @@ rust_library(
     name = "ahash",
     srcs = [":ahash-vendor"],
     crate = "ahash",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     env = {
         "OUT_DIR": "$(location :ahash-build-script-run[out_dir])",

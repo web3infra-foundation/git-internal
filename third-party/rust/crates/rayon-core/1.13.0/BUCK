@@ -21,7 +21,7 @@ rust_library(
     name = "rayon-core",
     srcs = [":rayon-core-vendor"],
     crate = "rayon_core",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     env = {
         "OUT_DIR": "$(location :rayon-core-build-script-run[out_dir])",

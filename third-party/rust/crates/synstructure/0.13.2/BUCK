@@ -21,7 +21,7 @@ rust_library(
     name = "synstructure",
     srcs = [":synstructure-vendor"],
     crate = "synstructure",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = [
         "default",
@@ -32,6 +32,6 @@ rust_library(
     deps = [
         "//third-party/rust/crates/proc-macro2/1.0.103:proc-macro2",
         "//third-party/rust/crates/quote/1.0.42:quote",
-        "//third-party/rust/crates/syn/2.0.110:syn",
+        "//third-party/rust/crates/syn/2.0.111:syn",
     ],
 )

@@ -21,7 +21,7 @@ rust_library(
     name = "concurrent-queue",
     srcs = [":concurrent-queue-vendor"],
     crate = "concurrent_queue",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = ["std"],
     rustc_flags = ["@$(location :concurrent-queue-manifest[env_flags])"],

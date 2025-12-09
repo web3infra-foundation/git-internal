@@ -21,7 +21,7 @@ rust_library(
     name = "proc-macro2-diagnostics",
     srcs = [":proc-macro2-diagnostics-vendor"],
     crate = "proc_macro2_diagnostics",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     env = {
         "OUT_DIR": "$(location :proc-macro2-diagnostics-build-script-run[out_dir])",
@@ -39,7 +39,7 @@ rust_library(
     deps = [
         "//third-party/rust/crates/proc-macro2/1.0.103:proc-macro2",
         "//third-party/rust/crates/quote/1.0.42:quote",
-        "//third-party/rust/crates/syn/2.0.110:syn",
+        "//third-party/rust/crates/syn/2.0.111:syn",
         "//third-party/rust/crates/yansi/1.0.1:yansi",
     ],
 )

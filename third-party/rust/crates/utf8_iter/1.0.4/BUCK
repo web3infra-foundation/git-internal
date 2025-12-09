@@ -21,7 +21,7 @@ rust_library(
     name = "utf8_iter",
     srcs = [":utf8_iter-vendor"],
     crate = "utf8_iter",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :utf8_iter-manifest[env_flags])"],
     visibility = ["PUBLIC"],

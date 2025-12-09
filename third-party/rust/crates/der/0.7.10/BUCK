@@ -21,7 +21,7 @@ rust_library(
     name = "der",
     srcs = [":der-vendor"],
     crate = "der",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = [
         "alloc",

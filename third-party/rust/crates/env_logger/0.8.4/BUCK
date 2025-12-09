@@ -21,13 +21,13 @@ rust_library(
     name = "env_logger",
     srcs = [":env_logger-vendor"],
     crate = "env_logger",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = ["regex"],
     rustc_flags = ["@$(location :env_logger-manifest[env_flags])"],
     visibility = ["PUBLIC"],
     deps = [
-        "//third-party/rust/crates/log/0.4.28:log",
+        "//third-party/rust/crates/log/0.4.29:log",
         "//third-party/rust/crates/regex/1.12.2:regex",
     ],
 )

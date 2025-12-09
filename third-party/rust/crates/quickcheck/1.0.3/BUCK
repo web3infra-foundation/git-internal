@@ -21,7 +21,7 @@ rust_library(
     name = "quickcheck",
     srcs = [":quickcheck-vendor"],
     crate = "quickcheck",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = [
         "default",
@@ -34,7 +34,7 @@ rust_library(
     visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/env_logger/0.8.4:env_logger",
-        "//third-party/rust/crates/log/0.4.28:log",
+        "//third-party/rust/crates/log/0.4.29:log",
         "//third-party/rust/crates/rand/0.8.5:rand",
     ],
 )

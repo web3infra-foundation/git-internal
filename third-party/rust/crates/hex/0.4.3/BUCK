@@ -21,7 +21,7 @@ rust_library(
     name = "hex",
     srcs = [":hex-vendor"],
     crate = "hex",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = [
         "alloc",

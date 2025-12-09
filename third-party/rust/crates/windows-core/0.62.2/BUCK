@@ -21,7 +21,7 @@ rust_library(
     name = "windows-core",
     srcs = [":windows-core-vendor"],
     crate = "windows_core",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = [
         "default",

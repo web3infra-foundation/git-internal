@@ -21,7 +21,7 @@ rust_library(
     name = "tower",
     srcs = [":tower-vendor"],
     crate = "tower",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = [
         "__common",

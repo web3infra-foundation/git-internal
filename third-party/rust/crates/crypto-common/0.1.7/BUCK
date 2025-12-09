@@ -21,7 +21,7 @@ rust_library(
     name = "crypto-common",
     srcs = [":crypto-common-vendor"],
     crate = "crypto_common",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = ["std"],
     rustc_flags = ["@$(location :crypto-common-manifest[env_flags])"],

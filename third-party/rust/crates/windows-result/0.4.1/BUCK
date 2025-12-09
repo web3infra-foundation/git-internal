@@ -21,7 +21,7 @@ rust_library(
     name = "windows-result",
     srcs = [":windows-result-vendor"],
     crate = "windows_result",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = ["std"],
     rustc_flags = ["@$(location :windows-result-manifest[env_flags])"],

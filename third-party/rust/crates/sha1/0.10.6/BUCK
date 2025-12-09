@@ -21,7 +21,7 @@ rust_library(
     name = "sha1",
     srcs = [":sha1-vendor"],
     crate = "sha1",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = [
         "default",

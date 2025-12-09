@@ -21,7 +21,7 @@ rust_library(
     name = "r-efi",
     srcs = [":r-efi-vendor"],
     crate = "r_efi",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :r-efi-manifest[env_flags])"],
     visibility = ["PUBLIC"],

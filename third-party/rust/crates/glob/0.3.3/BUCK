@@ -21,7 +21,7 @@ rust_library(
     name = "glob",
     srcs = [":glob-vendor"],
     crate = "glob",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :glob-manifest[env_flags])"],
     visibility = ["PUBLIC"],

@@ -21,7 +21,7 @@ rust_library(
     name = "cfg_aliases",
     srcs = [":cfg_aliases-vendor"],
     crate = "cfg_aliases",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :cfg_aliases-manifest[env_flags])"],
     visibility = ["PUBLIC"],

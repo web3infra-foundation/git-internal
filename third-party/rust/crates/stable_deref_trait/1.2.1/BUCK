@@ -21,7 +21,7 @@ rust_library(
     name = "stable_deref_trait",
     srcs = [":stable_deref_trait-vendor"],
     crate = "stable_deref_trait",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :stable_deref_trait-manifest[env_flags])"],
     visibility = ["PUBLIC"],

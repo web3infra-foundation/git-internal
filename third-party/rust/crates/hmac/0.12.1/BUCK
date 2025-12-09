@@ -21,7 +21,7 @@ rust_library(
     name = "hmac",
     srcs = [":hmac-vendor"],
     crate = "hmac",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = ["reset"],
     rustc_flags = ["@$(location :hmac-manifest[env_flags])"],

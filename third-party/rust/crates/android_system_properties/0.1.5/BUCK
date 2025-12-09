@@ -21,7 +21,7 @@ rust_library(
     name = "android_system_properties",
     srcs = [":android_system_properties-vendor"],
     crate = "android_system_properties",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :android_system_properties-manifest[env_flags])"],
     visibility = ["PUBLIC"],

@@ -21,7 +21,7 @@ rust_library(
     name = "http-body-util",
     srcs = [":http-body-util-vendor"],
     crate = "http_body_util",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = ["default"],
     rustc_flags = ["@$(location :http-body-util-manifest[env_flags])"],

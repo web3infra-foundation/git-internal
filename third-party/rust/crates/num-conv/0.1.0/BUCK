@@ -21,7 +21,7 @@ rust_library(
     name = "num-conv",
     srcs = [":num-conv-vendor"],
     crate = "num_conv",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :num-conv-manifest[env_flags])"],
     visibility = ["PUBLIC"],

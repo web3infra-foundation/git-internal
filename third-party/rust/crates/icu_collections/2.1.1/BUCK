@@ -21,7 +21,7 @@ rust_library(
     name = "icu_collections",
     srcs = [":icu_collections-vendor"],
     crate = "icu_collections",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :icu_collections-manifest[env_flags])"],
     visibility = ["PUBLIC"],

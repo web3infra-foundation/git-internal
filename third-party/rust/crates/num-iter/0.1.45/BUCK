@@ -21,7 +21,7 @@ rust_library(
     name = "num-iter",
     srcs = [":num-iter-vendor"],
     crate = "num_iter",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :num-iter-manifest[env_flags])"],
     visibility = ["PUBLIC"],

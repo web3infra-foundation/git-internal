@@ -21,7 +21,7 @@ rust_library(
     name = "hashbrown",
     srcs = [":hashbrown-vendor"],
     crate = "hashbrown",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = [
         "ahash",

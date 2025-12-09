@@ -21,7 +21,7 @@ rust_library(
     name = "windows-sys",
     srcs = [":windows-sys-vendor"],
     crate = "windows_sys",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = [
         "Win32",

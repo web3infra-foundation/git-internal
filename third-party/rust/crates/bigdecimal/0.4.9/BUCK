@@ -21,7 +21,7 @@ rust_library(
     name = "bigdecimal",
     srcs = [":bigdecimal-vendor"],
     crate = "bigdecimal",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2015",
     env = {
         "OUT_DIR": "$(location :bigdecimal-build-script-run[out_dir])",

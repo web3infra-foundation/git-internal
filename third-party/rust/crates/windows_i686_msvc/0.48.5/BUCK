@@ -21,7 +21,7 @@ rust_library(
     name = "windows_i686_msvc",
     srcs = [":windows_i686_msvc-vendor"],
     crate = "windows_i686_msvc",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     env = {
         "OUT_DIR": "$(location :windows_i686_msvc-build-script-run[out_dir])",

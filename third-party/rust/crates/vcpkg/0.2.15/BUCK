@@ -21,7 +21,7 @@ rust_library(
     name = "vcpkg",
     srcs = [":vcpkg-vendor"],
     crate = "vcpkg",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2015",
     rustc_flags = ["@$(location :vcpkg-manifest[env_flags])"],
     visibility = ["PUBLIC"],

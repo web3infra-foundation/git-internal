@@ -21,7 +21,7 @@ rust_library(
     name = "rand_core",
     srcs = [":rand_core-vendor"],
     crate = "rand_core",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     features = [
         "os_rng",

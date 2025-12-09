@@ -21,8 +21,9 @@ rust_library(
     name = "colored",
     srcs = [":colored-vendor"],
     crate = "colored",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :colored-manifest[env_flags])"],
     visibility = ["PUBLIC"],
+    deps = ["//third-party/rust/crates/windows-sys/0.59.0:windows-sys"],
 )

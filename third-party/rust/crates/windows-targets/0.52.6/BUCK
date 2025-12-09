@@ -21,9 +21,9 @@ rust_library(
     name = "windows-targets",
     srcs = [":windows-targets-vendor"],
     crate = "windows_targets",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :windows-targets-manifest[env_flags])"],
     visibility = ["PUBLIC"],
-    deps = ["//third-party/rust/crates/windows_x86_64_gnu/0.52.6:windows_x86_64_gnu"],
+    deps = ["//third-party/rust/crates/windows_x86_64_msvc/0.52.6:windows_x86_64_msvc"],
 )

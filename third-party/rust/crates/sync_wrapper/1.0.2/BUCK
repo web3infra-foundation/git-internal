@@ -21,7 +21,7 @@ rust_library(
     name = "sync_wrapper",
     srcs = [":sync_wrapper-vendor"],
     crate = "sync_wrapper",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2021",
     rustc_flags = ["@$(location :sync_wrapper-manifest[env_flags])"],
     visibility = ["PUBLIC"],

@@ -21,7 +21,7 @@ rust_library(
     name = "tracing-core",
     srcs = [":tracing-core-vendor"],
     crate = "tracing_core",
-    crate_root = "vendor/src/lib.rs",
+    crate_root = "vendor/src\\lib.rs",
     edition = "2018",
     features = [
         "default",
