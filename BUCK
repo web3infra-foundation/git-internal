@@ -18,7 +18,7 @@ rust_library(
     name = "git_internal",
     srcs = [":git-internal-vendor"],
     crate = "git_internal",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2024",
     features = [
         "default",
@@ -77,7 +77,7 @@ rust_test(
     name = "git_internal-unittest",
     srcs = [":git-internal-vendor"],
     crate = "git_internal",
-    crate_root = "vendor/src\\lib.rs",
+    crate_root = "vendor/src/lib.rs",
     edition = "2024",
     features = [
         "default",
