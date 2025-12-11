@@ -64,10 +64,10 @@ pub trait RepositoryAccess: Send + Sync + Clone {
     ) -> Result<crate::internal::object::blob::Blob, ProtocolError> {
         let data = self.get_object(object_hash).await?;
         let hash = ObjectHash::from_str(object_hash)
-            .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
+            .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {e}")))?;
 
         crate::internal::object::blob::Blob::from_bytes(&data, hash)
-            .map_err(|e| ProtocolError::repository_error(format!("Failed to parse blob: {}", e)))
+            .map_err(|e| ProtocolError::repository_error(format!("Failed to parse blob: {e}")))
     }
 
     /// Get commit data by hash
@@ -80,10 +80,10 @@ pub trait RepositoryAccess: Send + Sync + Clone {
     ) -> Result<crate::internal::object::commit::Commit, ProtocolError> {
         let data = self.get_object(commit_hash).await?;
         let hash = ObjectHash::from_str(commit_hash)
-            .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
+            .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {e}")))?;
 
         crate::internal::object::commit::Commit::from_bytes(&data, hash)
-            .map_err(|e| ProtocolError::repository_error(format!("Failed to parse commit: {}", e)))
+            .map_err(|e| ProtocolError::repository_error(format!("Failed to parse commit: {e}")))
     }
 
     /// Get tree data by hash
@@ -96,10 +96,10 @@ pub trait RepositoryAccess: Send + Sync + Clone {
     ) -> Result<crate::internal::object::tree::Tree, ProtocolError> {
         let data = self.get_object(tree_hash).await?;
         let hash = ObjectHash::from_str(tree_hash)
-            .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {}", e)))?;
+            .map_err(|e| ProtocolError::repository_error(format!("Invalid hash format: {e}")))?;
 
         crate::internal::object::tree::Tree::from_bytes(&data, hash)
-            .map_err(|e| ProtocolError::repository_error(format!("Failed to parse tree: {}", e)))
+            .map_err(|e| ProtocolError::repository_error(format!("Failed to parse tree: {e}")))
     }
 
     /// Check if a commit exists
@@ -136,7 +136,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
         // Store blobs
         for blob in blobs {
             let data = blob.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to serialize blob: {}", e))
+                ProtocolError::repository_error(format!("Failed to serialize blob: {e}"))
             })?;
             self.store_pack_data(&data).await.map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to store blob {}: {}", blob.id, e))
@@ -146,7 +146,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
         // Store trees
         for tree in trees {
             let data = tree.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to serialize tree: {}", e))
+                ProtocolError::repository_error(format!("Failed to serialize tree: {e}"))
             })?;
             self.store_pack_data(&data).await.map_err(|e| {
                 ProtocolError::repository_error(format!("Failed to store tree {}: {}", tree.id, e))
@@ -156,7 +156,7 @@ pub trait RepositoryAccess: Send + Sync + Clone {
         // Store commits
         for commit in commits {
             let data = commit.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to serialize commit: {}", e))
+                ProtocolError::repository_error(format!("Failed to serialize commit: {e}"))
             })?;
             self.store_pack_data(&data).await.map_err(|e| {
                 ProtocolError::repository_error(format!(

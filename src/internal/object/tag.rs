@@ -93,8 +93,7 @@ impl Tag {
     ) -> Self {
         // Serialize the tag data to calculate its hash
         let data = format!(
-            "object {}\ntype {}\ntag {}\ntagger {}\n\n{}",
-            object_hash, object_type, tag_name, tagger, message
+            "object {object_hash}\ntype {object_type}\ntag {tag_name}\ntagger {tagger}\n\n{message}"
         );
         let id = ObjectHash::from_type_and_data(ObjectType::Tag, data.as_bytes());
 

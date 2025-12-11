@@ -432,8 +432,7 @@ impl Diff {
 
         let _ = writeln!(
             out,
-            "@@ -{},{} +{},{} @@",
-            old_start, old_count, new_start, new_count
+            "@@ -{old_start},{old_count} +{new_start},{new_count} @@"
         );
 
         // 3. Output the hunk according to Myers change order
