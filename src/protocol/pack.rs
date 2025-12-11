@@ -128,7 +128,7 @@ where
             },
             None::<fn(ObjectHash)>,
         )
-        .map_err(|e| ProtocolError::invalid_request(&format!("Failed to decode pack: {}", e)))?;
+        .map_err(|e| ProtocolError::invalid_request(&format!("Failed to decode pack: {e}")))?;
 
         // Extract the results
         let commits_result = Arc::try_unwrap(commits).unwrap().into_inner().unwrap();
@@ -167,8 +167,7 @@ where
                 .await
                 .map_err(|e| {
                     ProtocolError::repository_error(format!(
-                        "Failed to get commit {}: {}",
-                        commit_hash, e
+                        "Failed to get commit {commit_hash}: {e}"
                     ))
                 })?;
 
@@ -211,7 +210,7 @@ where
         visited_trees.insert(tree_hash.to_string());
 
         let tree = self.repo_access.get_tree(tree_hash).await.map_err(|e| {
-            ProtocolError::repository_error(format!("Failed to get tree {}: {}", tree_hash, e))
+            ProtocolError::repository_error(format!("Failed to get tree {tree_hash}: {e}"))
         })?;
 
         for entry in &tree.tree_items {
@@ -233,8 +232,7 @@ where
                         visited_blobs.insert(entry_hash.clone());
                         let blob = self.repo_access.get_blob(&entry_hash).await.map_err(|e| {
                             ProtocolError::repository_error(format!(
-                                "Failed to get blob {}: {}",
-                                entry_hash, e
+                                "Failed to get blob {entry_hash}: {e}"
                             ))
                         })?;
                         blobs.push(blob);

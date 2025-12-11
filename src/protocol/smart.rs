@@ -86,10 +86,11 @@ where
         &self,
         service_type: ServiceType,
     ) -> Result<BytesMut, ProtocolError> {
-        let refs =
-            self.repo_storage.get_repository_refs().await.map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to get refs: {}", e))
-            })?;
+        let refs = self
+            .repo_storage
+            .get_repository_refs()
+            .await
+            .map_err(|e| ProtocolError::repository_error(format!("Failed to get refs: {e}")))?;
         let hex_len = self.wire_hash_kind.hex_len();
         for (name, h) in &refs {
             if h.len() != hex_len {
@@ -208,7 +209,7 @@ where
         // Check for common commits
         for hash in &have {
             let exists = self.repo_storage.commit_exists(hash).await.map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to check commit existence: {}", e))
+                ProtocolError::repository_error(format!("Failed to check commit existence: {e}"))
             })?;
             if exists {
                 add_pkt_line_string(&mut protocol_buf, format!("ACK {hash} common\n"));
@@ -268,7 +269,7 @@ where
 
         while let Some(chunk_result) = futures::StreamExt::next(&mut stream).await {
             let chunk = chunk_result
-                .map_err(|e| ProtocolError::invalid_request(&format!("Stream error: {}", e)))?;
+                .map_err(|e| ProtocolError::invalid_request(&format!("Stream error: {e}")))?;
             pack_data.extend_from_slice(&chunk);
         }
 
@@ -283,7 +284,7 @@ where
             .handle_pack_objects(commits, trees, blobs)
             .await
             .map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to store pack objects: {}", e))
+                ProtocolError::repository_error(format!("Failed to store pack objects: {e}"))
             })?;
 
         // Build status report
@@ -291,7 +292,7 @@ where
         add_pkt_line_string(&mut report_status, "unpack ok\n".to_owned());
 
         let mut default_exist = self.repo_storage.has_default_branch().await.map_err(|e| {
-            ProtocolError::repository_error(format!("Failed to check default branch: {}", e))
+            ProtocolError::repository_error(format!("Failed to check default branch: {e}"))
         })?;
 
         // Update refs with proper error handling
@@ -336,7 +337,7 @@ where
 
         // Post-receive hook
         self.repo_storage.post_receive_hook().await.map_err(|e| {
-            ProtocolError::repository_error(format!("Post-receive hook failed: {}", e))
+            ProtocolError::repository_error(format!("Post-receive hook failed: {e}"))
         })?;
 
         report_status.put(&PKT_LINE_END_MARKER[..]);

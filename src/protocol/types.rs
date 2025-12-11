@@ -250,14 +250,14 @@ impl std::fmt::Display for Capability {
             Capability::NoProgress => write!(f, "no-progress"),
             Capability::AllowTipSha1InWant => write!(f, "allow-tip-sha1-in-want"),
             Capability::AllowReachableSha1InWant => write!(f, "allow-reachable-sha1-in-want"),
-            Capability::PushCert(value) => write!(f, "push-cert={}", value),
+            Capability::PushCert(value) => write!(f, "push-cert={value}"),
             Capability::PushOptions => write!(f, "push-options"),
-            Capability::ObjectFormat(format) => write!(f, "object-format={}", format),
-            Capability::SessionId(id) => write!(f, "session-id={}", id),
-            Capability::Filter(filter) => write!(f, "filter={}", filter),
-            Capability::Symref(symref) => write!(f, "symref={}", symref),
-            Capability::Agent(agent) => write!(f, "agent={}", agent),
-            Capability::Unknown(s) => write!(f, "{}", s),
+            Capability::ObjectFormat(format) => write!(f, "object-format={format}"),
+            Capability::SessionId(id) => write!(f, "session-id={id}"),
+            Capability::Filter(filter) => write!(f, "filter={filter}"),
+            Capability::Symref(symref) => write!(f, "symref={symref}"),
+            Capability::Agent(agent) => write!(f, "agent={agent}"),
+            Capability::Unknown(s) => write!(f, "{s}"),
         }
     }
 }

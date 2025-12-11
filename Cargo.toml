@@ -31,11 +31,11 @@ diffs = "0.5.1"
 libc = "0.2.178"
 zstd-sys = { version = "2.0.16+zstd.1.5.7", features = ["experimental"] }
 sea-orm = { version = "1.1.17", features = ["sqlx-sqlite"] }
-flate2 = { version = "1.1.7", features = ["zlib"] }
+flate2 = { version = "1.1.5", features = ["zlib"] }
 serde = { version = "1.0.228", features = ["derive"] }
 chrono = { version = "0.4.42", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["v4"] }
-tokio = { version = "1.48.0", features = ["fs"] }
+tokio = { version = "1.48.0", features = ["fs", "io-util"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 axum = { version = "0.8.7", features = ["macros", "json"] }
 async-trait = "0.1.89"
@@ -46,6 +46,7 @@ tempfile = "3.23.0"
 path-absolutize = "3.1.1"
 similar = "2.7.0"
 sha2 = "0.10.9"
+crc32fast = "1.4"
 
 
 [dev-dependencies]
