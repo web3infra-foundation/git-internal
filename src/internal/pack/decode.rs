@@ -32,6 +32,33 @@ use crate::internal::pack::wrapper::Wrapper;
 use crate::internal::pack::{DEFAULT_TMP_DIR, Pack, utils};
 use crate::utils::CountingReader;
 
+/// A reader that counts bytes read and computes CRC32 checksum.
+/// which is used to verify the integrity of decompressed data.
+struct CrcCountingReader<'a, R> {
+    inner: R,
+    bytes_read: u64,
+    crc: &'a mut crc32fast::Hasher,
+}
+impl<R: Read> Read for CrcCountingReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes_read += n as u64;
+        self.crc.update(&buf[..n]);
+        Ok(n)
+    }
+}
+impl<R: BufRead> BufRead for CrcCountingReader<'_, R> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        self.inner.fill_buf()
+    }
+    fn consume(&mut self, amt: usize) {
+        let buf = self.inner.fill_buf().unwrap_or(&[]);
+        self.crc.update(&buf[..amt.min(buf.len())]);
+        self.bytes_read += amt as u64;
+        self.inner.consume(amt);
+    }
+}
+
 /// For the convenience of passing parameters
 struct SharedParams {
     pub pool: Arc<ThreadPool>,
@@ -253,9 +280,16 @@ impl Pack {
         offset: &mut usize,
     ) -> Result<CacheObject, GitError> {
         let init_offset = *offset;
+        let mut hasher = crc32fast::Hasher::new();
+        let mut reader = CrcCountingReader {
+            inner: pack,
+            bytes_read: 0,
+            crc: &mut hasher,
+        };
 
         // Attempt to read the type and size, handle potential errors
-        let (type_bits, size) = match utils::read_type_and_varint_size(pack, offset) {
+        // Note: read_type_and_varint_size updates the offset manually, but we can rely on reader.bytes_read
+        let (type_bits, size) = match utils::read_type_and_varint_size(&mut reader, offset) {
             Ok(result) => result,
             Err(e) => {
                 // Handle the error e.g., by logging it or converting it to GitError
@@ -269,15 +303,21 @@ impl Pack {
 
         match t {
             ObjectType::Commit | ObjectType::Tree | ObjectType::Blob | ObjectType::Tag => {
-                let (data, raw_size) = Pack::decompress_data(pack, size)?;
+                let (data, raw_size) = Pack::decompress_data(&mut reader, size)?;
                 *offset += raw_size;
-                Ok(CacheObject::new_for_undeltified(t, data, init_offset))
+                let crc32 = hasher.finalize();
+                Ok(CacheObject::new_for_undeltified(
+                    t,
+                    data,
+                    init_offset,
+                    crc32,
+                ))
             }
             ObjectType::OffsetDelta | ObjectType::OffsetZstdelta => {
-                let (delta_offset, bytes) = utils::read_offset_encoding(pack).unwrap();
+                let (delta_offset, bytes) = utils::read_offset_encoding(&mut reader).unwrap();
                 *offset += bytes;
 
-                let (data, raw_size) = Pack::decompress_data(pack, size)?;
+                let (data, raw_size) = Pack::decompress_data(&mut reader, size)?;
                 *offset += raw_size;
 
                 // Count the base object offset: the current offset - delta offset
@@ -300,9 +340,11 @@ impl Pack {
                     }
                     _ => unreachable!(),
                 };
+                let crc32 = hasher.finalize();
                 Ok(CacheObject {
                     info: obj_info,
                     offset: init_offset,
+                    crc32,
                     data_decompressed: data,
                     mem_recorder: None,
                     is_delta_in_pack: true,
@@ -310,19 +352,22 @@ impl Pack {
             }
             ObjectType::HashDelta => {
                 // Read hash bytes to get the reference object hash(size depends on hash kind,e.g.,20 for SHA1,32 for SHA256)
-                let ref_sha = ObjectHash::from_stream(pack).unwrap();
+                let ref_sha = ObjectHash::from_stream(&mut reader).unwrap();
                 // Offset is incremented by 20/32 bytes
                 *offset += get_hash_kind().size();
 
-                let (data, raw_size) = Pack::decompress_data(pack, size)?;
+                let (data, raw_size) = Pack::decompress_data(&mut reader, size)?;
                 *offset += raw_size;
 
                 let mut reader = Cursor::new(&data);
                 let (_, final_size) = utils::read_delta_object_size(&mut reader)?;
 
+                let crc32 = hasher.finalize();
+
                 Ok(CacheObject {
                     info: CacheObjectInfo::HashDelta(ref_sha, final_size),
                     offset: init_offset,
+                    crc32,
                     data_decompressed: data,
                     mem_recorder: None,
                     is_delta_in_pack: true,
@@ -704,6 +749,7 @@ impl Pack {
         CacheObject {
             info: CacheObjectInfo::BaseObject(base_obj.object_type(), hash),
             offset: delta_obj.offset,
+            crc32: delta_obj.crc32,
             data_decompressed: result,
             mem_recorder: None,
             is_delta_in_pack: delta_obj.is_delta_in_pack,
@@ -717,6 +763,7 @@ impl Pack {
         CacheObject {
             info: CacheObjectInfo::BaseObject(base_obj.object_type(), hash),
             offset: delta_obj.offset,
+            crc32: delta_obj.crc32,
             data_decompressed: result,
             mem_recorder: None,
             is_delta_in_pack: delta_obj.is_delta_in_pack,

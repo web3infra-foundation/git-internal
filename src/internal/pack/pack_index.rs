@@ -1,6 +1,6 @@
 use crate::errors::GitError;
 use crate::hash::ObjectHash;
-use crate::internal::pack::index_entry::IndexEntry;
+pub use crate::internal::pack::index_entry::IndexEntry;
 use crate::utils::HashAlgorithm;
 use tokio::sync::mpsc;
 
@@ -59,38 +59,13 @@ impl IdxBuilder {
         self.send_data(v.to_be_bytes().to_vec()).await
     }
 
-    /// support idx v3
-    /// The 4-byte pack index signature: \377t0c
-    ///
-    /// 4-byte version number: 3
-    ///
-    /// 4-byte length of the header section, including the signature and version number
-    ///
-    /// 4-byte number of objects contained in the pack
-    ///
-    /// 4-byte number of object formats in this pack index: 2
+    /// Write the idx v2 header (Git pack index format, used for both SHA1 and SHA256).
+    /// The 4-byte pack index signature: \377t0c, followed by 4-byte version number: 2.
     async fn write_header(&mut self) -> Result<(), GitError> {
-        match &self.inner_hash {
-            HashAlgorithm::Sha1(_sha1) => {
-                //magic: FF 74 4F 63  version=2
-                let header: [u8; 8] = [0xFF, 0x74, 0x4F, 0x63, 0, 0, 0, 2];
-                self.send_data(header.to_vec()).await
-            }
-            HashAlgorithm::Sha256(_sha2) => {
-                // .idx v3
-
-                let magic: [u8; 4] = [0xFF, 0x74, 0x4F, 0x63];
-                let version: u32 = 3;
-                let header_size: u32 = 20; // magic(4) + version(4) + header_size(4) + object_count(4) + format_count(4)
-                let format_count: u32 = 1; // in the project ,SHA1 and SHA256 will not appear in the same pack,right?.
-
-                self.send_data(magic.to_vec()).await?;
-                self.send_u32(version).await?;
-                self.send_u32(header_size).await?;
-                self.send_u32(self.object_number as u32).await?;
-                self.send_u32(format_count).await
-            }
-        }
+        // .idx v2 header (used for both SHA1 and SHA256)
+        // magic: FF 74 4F 63, version: 2
+        let header: [u8; 8] = [0xFF, 0x74, 0x4F, 0x63, 0, 0, 0, 2];
+        self.send_data(header.to_vec()).await
     }
 
     async fn write_fanout(&mut self, entries: &mut [IndexEntry]) -> Result<(), GitError> {
