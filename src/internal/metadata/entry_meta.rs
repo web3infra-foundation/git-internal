@@ -6,6 +6,8 @@ pub struct EntryMeta {
 
     /// Offset within the pack file
     pub pack_offset: Option<usize>,
+    /// CRC32 checksum of the compressed object data (including header)
+    pub crc32: Option<u32>,
 
     pub is_delta: Option<bool>,
 }
@@ -17,6 +19,11 @@ impl EntryMeta {
 
     pub fn set_pack_id(&mut self, id: impl Into<String>) -> &mut Self {
         self.pack_id = Some(id.into());
+        self
+    }
+
+    pub fn set_crc32(&mut self, crc32: u32) -> &mut Self {
+        self.crc32 = Some(crc32);
         self
     }
 }

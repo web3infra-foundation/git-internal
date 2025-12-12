@@ -84,6 +84,7 @@ impl CacheObjectInfo {
 pub struct CacheObject {
     pub(crate) info: CacheObjectInfo,
     pub offset: usize,
+    pub crc32: u32,
     pub data_decompressed: Vec<u8>,
     pub mem_recorder: Option<Arc<AtomicUsize>>, // record mem-size of all CacheObjects of a Pack
     pub is_delta_in_pack: bool,
@@ -94,6 +95,7 @@ impl Clone for CacheObject {
         let obj = CacheObject {
             info: self.info.clone(),
             offset: self.offset,
+            crc32: self.crc32,
             data_decompressed: self.data_decompressed.clone(),
             mem_recorder: self.mem_recorder.clone(),
             is_delta_in_pack: self.is_delta_in_pack,
@@ -181,11 +183,17 @@ impl MemSizeRecorder for CacheObject {
 
 impl CacheObject {
     /// Create a new CacheObject which is neither [`ObjectType::OffsetDelta`] nor [`ObjectType::HashDelta`].
-    pub fn new_for_undeltified(obj_type: ObjectType, data: Vec<u8>, offset: usize) -> Self {
+    pub fn new_for_undeltified(
+        obj_type: ObjectType,
+        data: Vec<u8>,
+        offset: usize,
+        crc32: u32,
+    ) -> Self {
         let hash = utils::calculate_object_hash(obj_type, &data);
         CacheObject {
             info: CacheObjectInfo::BaseObject(obj_type, hash),
             offset,
+            crc32,
             data_decompressed: data,
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -254,6 +262,7 @@ impl CacheObject {
                 let meta = EntryMeta {
                     // pack_id:Some(pack_id),
                     pack_offset: Some(self.offset),
+                    crc32: Some(self.crc32),
                     is_delta: Some(self.is_delta_in_pack),
                     ..Default::default()
                 };
@@ -377,6 +386,7 @@ mod test {
         let mut obj = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -395,6 +405,7 @@ mod test {
         let mut obj = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 2048],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -414,6 +425,7 @@ mod test {
         let a = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -430,6 +442,7 @@ mod test {
         let a = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 2048],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -451,6 +464,7 @@ mod test {
         let a = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_a),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -460,6 +474,7 @@ mod test {
         let b = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_b),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; (1024.0 * 1.5) as usize],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -505,6 +520,7 @@ mod test {
         let a = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_a),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 2048],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -514,6 +530,7 @@ mod test {
         let b = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_b),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 3072],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -618,6 +635,7 @@ mod test {
         let a = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 1024],
             mem_recorder: None,
             is_delta_in_pack: false,
@@ -636,6 +654,7 @@ mod test {
         let a = CacheObject {
             info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
             offset: 0,
+            crc32: 0,
             data_decompressed: vec![0; 2048],
             mem_recorder: None,
             is_delta_in_pack: false,

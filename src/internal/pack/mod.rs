@@ -9,11 +9,10 @@ pub mod decode;
 pub mod encode;
 pub mod entry;
 mod index_entry;
-mod pack_index;
+pub mod pack_index;
 pub mod utils;
 pub mod waitlist;
 pub mod wrapper;
-
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use threadpool::ThreadPool;
