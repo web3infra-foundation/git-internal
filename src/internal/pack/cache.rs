@@ -261,6 +261,7 @@ mod test {
             data_decompressed: vec![0; 800],
             mem_recorder: None,
             offset: 0,
+            crc32: 0,
             is_delta_in_pack: false,
         };
         let b = CacheObject {
@@ -268,6 +269,7 @@ mod test {
             data_decompressed: vec![0; 800],
             mem_recorder: None,
             offset: 0,
+            crc32: 0,
             is_delta_in_pack: false,
         };
         // insert a
@@ -288,6 +290,7 @@ mod test {
             data_decompressed: vec![0; 1700],
             mem_recorder: None,
             offset: 0,
+            crc32: 0,
             is_delta_in_pack: false,
         };
         cache.insert(c.offset, c_hash, c.clone());
@@ -313,6 +316,7 @@ mod test {
             data_decompressed: vec![0; 1500],
             mem_recorder: None,
             offset: 0,
+            crc32: 0,
             is_delta_in_pack: false,
         };
         let b = CacheObject {
@@ -320,6 +324,7 @@ mod test {
             data_decompressed: vec![0; 1500],
             mem_recorder: None,
             offset: 0,
+            crc32: 0,
             is_delta_in_pack: false,
         };
         // insert a
@@ -338,6 +343,7 @@ mod test {
             data_decompressed: vec![0; 3000],
             mem_recorder: None,
             offset: 0,
+            crc32: 0,
             is_delta_in_pack: false,
         };
         cache.insert(c.offset, c_hash, c.clone());
@@ -366,6 +372,7 @@ mod test {
                 data_decompressed: vec![0; 800],
                 mem_recorder: None,
                 offset: 1,
+                crc32: 0,
                 is_delta_in_pack: false,
             };
             cache_sha1.insert(obj.offset, hash, obj.clone());
@@ -382,6 +389,7 @@ mod test {
                 data_decompressed: vec![0; 1500],
                 mem_recorder: None,
                 offset: 2,
+                crc32: 0,
                 is_delta_in_pack: false,
             };
             cache_sha256.insert(obj.offset, hash, obj.clone());

@@ -22,9 +22,15 @@ impl TryFrom<&MetaAttached<Entry, EntryMeta>> for IndexEntry {
             .ok_or(GitError::ConversionError(String::from(
                 "empty offset in pack entry",
             )))?;
+        // Use the CRC32 from metadata if available (calculated from compressed data),
+        // otherwise fallback to calculating it from decompressed data (which is technically wrong for .idx but handles legacy cases)
+        let crc32 = pack_entry
+            .meta
+            .crc32
+            .unwrap_or_else(|| calculate_crc32(&pack_entry.inner.data));
         Ok(IndexEntry {
             hash: pack_entry.inner.hash,
-            crc32: calculate_crc32(&pack_entry.inner.data),
+            crc32,
             offset: offset as u64,
         })
     }
