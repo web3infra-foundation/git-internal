@@ -11,18 +11,17 @@
 //! - A commit message that describes the changes made in the commit.
 //! - A reference to the parent commit or commits (in the case of a merge commit) that the new commit is based on.
 //! - The contents of the files in the repository at the time the commit was made.
-use std::fmt::Display;
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
-use crate::errors::GitError;
-use crate::hash::ObjectHash;
-use crate::internal::object::ObjectTrait;
-use crate::internal::object::ObjectType;
-use crate::internal::object::signature::Signature;
 use bincode::{Decode, Encode};
 use bstr::ByteSlice;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{ObjectTrait, ObjectType, signature::Signature},
+};
 
 /// The `Commit` struct is used to represent a commit object.
 ///
@@ -252,9 +251,10 @@ impl ObjectTrait for Commit {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
-    use std::str::FromStr;
 
     fn basic_commit() -> Commit {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);

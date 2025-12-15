@@ -1,3 +1,6 @@
+//! Shared readers for Git delta streams: length parsing, partial integer decoding, and VarInt helpers
+//! that both encoder and decoder reuse.
+
 use std::io::Read;
 
 const VAR_INT_ENCODING_BITS: u8 = 7;

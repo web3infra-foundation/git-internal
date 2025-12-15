@@ -36,16 +36,15 @@
 //!
 //! So, we can use the `git cat-file -p <tag>` command to get the tag object, and the command not
 //! for the lightweight tag.
-use std::fmt::Display;
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use bstr::ByteSlice;
 
-use crate::errors::GitError;
-use crate::hash::ObjectHash;
-use crate::internal::object::ObjectTrait;
-use crate::internal::object::ObjectType;
-use crate::internal::object::signature::Signature;
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{ObjectTrait, ObjectType, signature::Signature},
+};
 
 /// The tag object is used to Annotated tag
 #[derive(Eq, Debug, Clone)]

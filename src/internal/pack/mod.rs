@@ -1,7 +1,6 @@
-//!
-//! ## Reference
-//! 1. Git Pack-Format [Introduce](https://git-scm.com/docs/pack-format)
-//!
+//! Pack file encoder/decoder implementations, caches, waitlists, and stream wrappers that faithfully
+//! follow the [pack-format spec](https://git-scm.com/docs/pack-format).
+
 pub mod cache;
 pub mod cache_object;
 pub mod channel_reader;
@@ -13,14 +12,17 @@ pub mod pack_index;
 pub mod utils;
 pub mod waitlist;
 pub mod wrapper;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, atomic::AtomicUsize};
+
 use threadpool::ThreadPool;
 
-use crate::hash::ObjectHash;
-use crate::internal::object::ObjectTrait;
-use crate::internal::pack::cache::Caches;
-use crate::internal::pack::waitlist::Waitlist;
+use crate::{
+    hash::ObjectHash,
+    internal::{
+        object::ObjectTrait,
+        pack::{cache::Caches, waitlist::Waitlist},
+    },
+};
 
 const DEFAULT_TMP_DIR: &str = "./.cache_temp";
 pub struct Pack {

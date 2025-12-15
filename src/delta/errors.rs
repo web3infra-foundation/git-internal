@@ -1,3 +1,5 @@
+//! Error variants for the custom delta encoder/decoder so callers can surface friendly failures.
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]

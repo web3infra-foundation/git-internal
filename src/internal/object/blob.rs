@@ -29,10 +29,11 @@
 //!
 use std::fmt::Display;
 
-use crate::errors::GitError;
-use crate::hash::ObjectHash;
-use crate::internal::object::ObjectTrait;
-use crate::internal::object::types::ObjectType;
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{ObjectTrait, types::ObjectType},
+};
 
 /// **The Blob Object**
 #[derive(Eq, Debug, Clone)]

@@ -1,6 +1,10 @@
-use std::io::{self};
-use std::io::{BufRead, Read};
-use std::sync::mpsc::Receiver;
+//! Simple channel-backed `BufRead` adapter so pack decoding can consume data streamed from async
+//! tasks or background threads.
+
+use std::{
+    io::{self, BufRead, Read},
+    sync::mpsc::Receiver,
+};
 
 /// Custom BufRead implementation that reads from the channel
 pub(crate) struct StreamBufReader {

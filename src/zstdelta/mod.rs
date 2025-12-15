@@ -5,32 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::cmp;
-use std::ffi::CStr;
-use std::io;
+//! Thin wrapper around zstd's delta dictionary mode that we use to build/apply efficient deltas
+//! when git offset deltas alone are not enough. Provides tuned compression parameters plus the
+//! complementary `apply` routine with robust error reporting.
+
+use std::{cmp, ffi::CStr, io};
 
 use libc::c_void;
-use zstd_sys::ZSTD_CHAINLOG_MIN;
-use zstd_sys::ZSTD_CONTENTSIZE_ERROR;
-use zstd_sys::ZSTD_CONTENTSIZE_UNKNOWN;
-use zstd_sys::ZSTD_DCtx_setMaxWindowSize;
-use zstd_sys::ZSTD_HASHLOG_MIN;
-use zstd_sys::ZSTD_SEARCHLOG_MIN;
-use zstd_sys::ZSTD_WINDOWLOG_MIN;
-use zstd_sys::ZSTD_compress_advanced;
-use zstd_sys::ZSTD_compressBound;
-use zstd_sys::ZSTD_compressionParameters;
-use zstd_sys::ZSTD_createCCtx;
-use zstd_sys::ZSTD_createDCtx;
-use zstd_sys::ZSTD_decompress_usingDict;
-use zstd_sys::ZSTD_findDecompressedSize;
-use zstd_sys::ZSTD_frameParameters;
-use zstd_sys::ZSTD_freeCCtx;
-use zstd_sys::ZSTD_freeDCtx;
-use zstd_sys::ZSTD_getErrorName;
-use zstd_sys::ZSTD_isError;
-use zstd_sys::ZSTD_parameters;
-use zstd_sys::ZSTD_strategy;
+use zstd_sys::{
+    ZSTD_CHAINLOG_MIN, ZSTD_CONTENTSIZE_ERROR, ZSTD_CONTENTSIZE_UNKNOWN,
+    ZSTD_DCtx_setMaxWindowSize, ZSTD_HASHLOG_MIN, ZSTD_SEARCHLOG_MIN, ZSTD_WINDOWLOG_MIN,
+    ZSTD_compress_advanced, ZSTD_compressBound, ZSTD_compressionParameters, ZSTD_createCCtx,
+    ZSTD_createDCtx, ZSTD_decompress_usingDict, ZSTD_findDecompressedSize, ZSTD_frameParameters,
+    ZSTD_freeCCtx, ZSTD_freeDCtx, ZSTD_getErrorName, ZSTD_isError, ZSTD_parameters, ZSTD_strategy,
+};
 
 // They are complex "#define"s that are not exposed by bindgen automatically
 const ZSTD_WINDOWLOG_MAX: u32 = 30;
@@ -159,8 +147,7 @@ pub fn apply(base: &[u8], delta: &[u8]) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use quickcheck::quickcheck;
-    use rand::RngCore;
-    use rand::SeedableRng;
+    use rand::{RngCore, SeedableRng};
     use rand_chacha::ChaChaRng;
 
     use super::*;

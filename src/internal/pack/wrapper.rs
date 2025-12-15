@@ -1,9 +1,14 @@
+//! Reader wrapper that tracks how many bytes of a pack have been consumed while keeping a running
+//! SHA-1/SHA-256 hash for trailer verification.
+
 use std::io::{self, BufRead, Read};
 
 use sha1::{Digest, Sha1};
 
-use crate::hash::{HashKind, ObjectHash, get_hash_kind};
-use crate::utils::HashAlgorithm;
+use crate::{
+    hash::{HashKind, ObjectHash, get_hash_kind},
+    utils::HashAlgorithm,
+};
 /// [`Wrapper`] is a wrapper around a reader that also computes the SHA1/ SHA256 hash of the data read.
 ///
 /// It is designed to work with any reader that implements `BufRead`.
@@ -113,8 +118,10 @@ mod tests {
 
     use sha1::{Digest, Sha1};
 
-    use crate::hash::{HashKind, set_hash_kind};
-    use crate::internal::pack::wrapper::Wrapper;
+    use crate::{
+        hash::{HashKind, set_hash_kind},
+        internal::pack::wrapper::Wrapper,
+    };
     #[test]
     fn test_wrapper_read() -> io::Result<()> {
         let _guard = set_hash_kind(HashKind::Sha1);

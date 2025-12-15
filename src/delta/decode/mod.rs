@@ -1,5 +1,9 @@
-use super::{errors::GitDeltaError, utils};
+//! Decoder for Git-style delta instructions that rebuilds target objects from a base buffer and the
+//! instruction stream produced by `delta::encode`.
+
 use std::io::{ErrorKind, Read};
+
+use super::{errors::GitDeltaError, utils};
 
 const COPY_INSTRUCTION_FLAG: u8 = 1 << 7;
 const COPY_OFFSET_BYTES: u8 = 4;

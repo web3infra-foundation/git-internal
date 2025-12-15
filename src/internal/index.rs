@@ -1,19 +1,26 @@
-use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
-use std::fs::{self, File};
-use std::io;
-use std::io::{BufReader, Read, Write};
+//! Minimal Git index (.git/index) reader/writer that maps working tree metadata to `IndexEntry`
+//! records, including POSIX timestamp handling and hash serialization helpers.
+
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::BTreeMap,
+    fmt::{Display, Formatter},
+    fs::{self, File},
+    io,
+    io::{BufReader, Read, Write},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::errors::GitError;
-use crate::hash::{ObjectHash, get_hash_kind};
-use crate::internal::pack::wrapper::Wrapper;
-use crate::utils::{self, HashAlgorithm};
+use crate::{
+    errors::GitError,
+    hash::{ObjectHash, get_hash_kind},
+    internal::pack::wrapper::Wrapper,
+    utils::{self, HashAlgorithm},
+};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Time {
