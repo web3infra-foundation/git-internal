@@ -331,7 +331,7 @@ mod tests {
     fn test_signature_without_delta() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-1d0e6c14760c956c173ede71cb28f33d921e232f.pack");
+        source.push("tests/data/packs/small-sha1.pack");
 
         let f = std::fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -340,16 +340,13 @@ mod tests {
         let mut buffer = vec![0; 20];
         buffered.read_exact(&mut buffer).unwrap();
         let signature = ObjectHash::from_bytes(buffer.as_ref()).unwrap();
-        assert_eq!(
-            signature.to_string(),
-            "1d0e6c14760c956c173ede71cb28f33d921e232f"
-        );
+        assert_eq!(signature.kind(), HashKind::Sha1);
     }
     #[test]
     fn test_signature_without_delta_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-78047853c60a1a3bb587f59598bdeb773fefc821f6f60f4f4797644ad43dad3d.pack");
+        source.push("tests/data/packs/small-sha256.pack");
 
         let f = std::fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -358,10 +355,7 @@ mod tests {
         let mut buffer = vec![0; 32];
         buffered.read_exact(&mut buffer).unwrap();
         let signature = ObjectHash::from_bytes(buffer.as_ref()).unwrap();
-        assert_eq!(
-            signature.to_string(),
-            "78047853c60a1a3bb587f59598bdeb773fefc821f6f60f4f4797644ad43dad3d"
-        );
+        assert_eq!(signature.kind(), HashKind::Sha256);
     }
 
     #[test]

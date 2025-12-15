@@ -794,13 +794,13 @@ mod tests {
     #[tokio::test]
     async fn test_pack_check_header() {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
+        source.push("tests/data/packs/medium-sha1.pack");
 
         let f = fs::File::open(source).unwrap();
         let mut buf_reader = BufReader::new(f);
         let (object_num, _) = Pack::check_header(&mut buf_reader).unwrap();
 
-        assert_eq!(object_num, 358109);
+        assert_eq!(object_num, 35031);
     }
 
     #[test]
@@ -829,7 +829,7 @@ mod tests {
     #[test]
     fn test_pack_decode_without_delta() {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-1d0e6c14760c956c173ede71cb28f33d921e232f.pack");
+        source.push("tests/data/packs/small-sha1.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -843,7 +843,7 @@ mod tests {
     fn test_pack_decode_without_delta_sha256() {
         let _guard = set_hash_kind(HashKind::Sha256);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-78047853c60a1a3bb587f59598bdeb773fefc821f6f60f4f4797644ad43dad3d.pack");
+        source.push("tests/data/packs/small-sha256.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -860,7 +860,7 @@ mod tests {
         init_logger();
 
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/ref-delta-65d47638aa7cb7c39f1bd1d5011a415439b887a8.pack");
+        source.push("tests/data/packs/ref-delta-sha1.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -875,7 +875,7 @@ mod tests {
         let _guard = set_hash_kind(HashKind::Sha256);
         init_logger();
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/ref-delta-0e26651d43b149c9baef6035c19cca140f82bb0d0cc5b12fda0ae89ff6a25195.pack");
+        source.push("tests/data/packs/ref-delta-sha256.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -890,7 +890,7 @@ mod tests {
     fn test_pack_decode_no_mem_limit() {
         let _guard = set_hash_kind(HashKind::Sha1);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-1d0e6c14760c956c173ede71cb28f33d921e232f.pack");
+        source.push("tests/data/packs/small-sha1.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -904,7 +904,7 @@ mod tests {
     fn test_pack_decode_no_mem_limit_sha256() {
         let _guard = set_hash_kind(HashKind::Sha256);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-78047853c60a1a3bb587f59598bdeb773fefc821f6f60f4f4797644ad43dad3d.pack");
+        source.push("tests/data/packs/small-sha256.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -920,15 +920,15 @@ mod tests {
         let _guard = set_hash_kind(HashKind::Sha1);
         init_logger();
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
+        source.push("tests/data/packs/medium-sha1.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
         let mut p = Pack::new(
-            Some(20),
-            Some(1024 * 1024 * 1024 * 1), //try to avoid dead lock on CI servers with low memory
+            Some(4),
+            Some(1024 * 1024 * 100), //try to avoid dead lock on CI servers with low memory
             Some(tmp.clone()),
             true,
         );
@@ -949,13 +949,13 @@ mod tests {
         let _guard = set_hash_kind(HashKind::Sha256);
         init_logger();
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/git-large-sha256-f6455f09d816f54d115724975da6e7edfb100d746ad145bfd0d2ddc0e0261f5d.pack");
+        source.push("tests/data/packs/medium-sha256.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
-        let mut p = Pack::new(Some(20), Some(1024 * 1024), Some(tmp.clone()), true);
+        let mut p = Pack::new(Some(4), Some(1024 * 1024 * 100), Some(tmp.clone()), true);
         let rt = p.decode(
             &mut buffered,
             |_obj| {
@@ -973,17 +973,12 @@ mod tests {
     async fn test_decode_large_file_stream() {
         init_logger();
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
+        source.push("tests/data/packs/medium-sha1.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = tokio::fs::File::open(source).await.unwrap();
         let stream = ReaderStream::new(f).map_err(axum::Error::new);
-        let p = Pack::new(
-            Some(20),
-            Some(1024 * 1024 * 1024 * 1),
-            Some(tmp.clone()),
-            true,
-        );
+        let p = Pack::new(Some(4), Some(1024 * 1024 * 100), Some(tmp.clone()), true);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = tokio::spawn(async move { p.decode_stream(stream, tx, None).await });
@@ -1001,19 +996,19 @@ mod tests {
         let p = handle.await.unwrap();
         consume.await.unwrap();
         assert_eq!(count.load(Ordering::Acquire), p.number);
-        assert_eq!(p.number, 358109);
+        assert_eq!(p.number, 35031);
     }
     #[tokio::test]
     async fn test_decode_large_file_stream_sha256() {
         let _guard = set_hash_kind(HashKind::Sha256);
         init_logger();
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/git-large-sha256-f6455f09d816f54d115724975da6e7edfb100d746ad145bfd0d2ddc0e0261f5d.pack");
+        source.push("tests/data/packs/medium-sha256.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = tokio::fs::File::open(source).await.unwrap();
         let stream = ReaderStream::new(f).map_err(axum::Error::new);
-        let p = Pack::new(Some(20), Some(1024 * 1024), Some(tmp.clone()), true);
+        let p = Pack::new(Some(4), Some(1024 * 1024 * 100), Some(tmp.clone()), true);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = tokio::spawn(async move { p.decode_stream(stream, tx, None).await });
@@ -1031,23 +1026,18 @@ mod tests {
         let p = handle.await.unwrap();
         consume.await.unwrap();
         assert_eq!(count.load(Ordering::Acquire), p.number);
-        assert_eq!(p.number, 26);
+        assert_eq!(p.number, 35031);
     }
 
     #[tokio::test]
     async fn test_decode_large_file_async() {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/git-2d187177923cd618a75da6c6db45bb89d92bd504.pack");
+        source.push("tests/data/packs/medium-sha1.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = fs::File::open(source).unwrap();
         let buffered = BufReader::new(f);
-        let p = Pack::new(
-            Some(20),
-            Some(1024 * 1024 * 1024 * 1),
-            Some(tmp.clone()),
-            true,
-        );
+        let p = Pack::new(Some(4), Some(1024 * 1024 * 100), Some(tmp.clone()), true);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = p.decode_async(buffered, tx); // new thread
@@ -1062,12 +1052,12 @@ mod tests {
     async fn test_decode_large_file_async_sha256() {
         let _guard = set_hash_kind(HashKind::Sha256);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/git-large-sha256-f6455f09d816f54d115724975da6e7edfb100d746ad145bfd0d2ddc0e0261f5d.pack");
+        source.push("tests/data/packs/medium-sha256.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = fs::File::open(source).unwrap();
         let buffered = BufReader::new(f);
-        let p = Pack::new(Some(20), Some(1024 * 1024), Some(tmp.clone()), true);
+        let p = Pack::new(Some(4), Some(1024 * 1024 * 100), Some(tmp.clone()), true);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = p.decode_async(buffered, tx); // new thread
@@ -1083,7 +1073,7 @@ mod tests {
     fn test_pack_decode_with_delta_without_ref() {
         let _guard = set_hash_kind(HashKind::Sha1);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-d50df695086eea6253a237cb5ac44af1629e7ced.pack");
+        source.push("tests/data/packs/medium-sha1.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -1099,7 +1089,7 @@ mod tests {
     fn test_pack_decode_with_delta_without_ref_sha256() {
         let _guard = set_hash_kind(HashKind::Sha256);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        source.push("tests/data/packs/pack-delta-sha256-3662654057d1adedf50f2a80bfdec752e00ac72798859d850ab1dcfd801beedd.pack");
+        source.push("tests/data/packs/medium-sha256.pack");
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
