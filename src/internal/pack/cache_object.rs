@@ -1,18 +1,31 @@
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::{fs, io};
-use std::{ops::Deref, sync::Arc};
+//! Cache object representation plus disk-backed serialization helpers used by the pack decoder to
+//! bound memory while still serving delta reconstruction quickly.
+
+use std::{
+    fs,
+    fs::OpenOptions,
+    io,
+    io::Write,
+    ops::Deref,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
 
 use lru_mem::{HeapSize, MemSize};
 use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
 
-use crate::internal::metadata::{EntryMeta, MetaAttached};
-use crate::internal::pack::entry::Entry;
-use crate::internal::pack::utils;
-use crate::{hash::ObjectHash, internal::object::types::ObjectType};
+use crate::{
+    hash::ObjectHash,
+    internal::{
+        metadata::{EntryMeta, MetaAttached},
+        object::types::ObjectType,
+        pack::{entry::Entry, utils},
+    },
+};
 
 // /// record heap-size of all CacheObjects, used for memory limit.
 // static CACHE_OBJS_MEM_SIZE: AtomicUsize = AtomicUsize::new(0);

@@ -1,3 +1,6 @@
+//! Patience/Myers-based delta encoder that emits Git-compatible instructions and exposes helpers to
+//! estimate similarity rates.
+
 use diffs::Diff;
 #[cfg(feature = "diff_mydrs")]
 use diffs::myers;
@@ -223,15 +226,17 @@ fn write_size_encoding(number: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use flate2::bufread::ZlibDecoder;
-    use std::env;
-    use std::fs::File;
-    use std::io::{self, BufReader, Cursor, Read};
-    use std::path::{Path, PathBuf};
+    use std::{
+        env,
+        fs::File,
+        io::{self, BufReader, Cursor, Read},
+        path::{Path, PathBuf},
+    };
 
-    use crate::delta::decode::delta_decode;
+    use flate2::bufread::ZlibDecoder;
 
     use super::DeltaDiff;
+    use crate::delta::decode::delta_decode;
     fn read_zlib_data(path: &Path) -> Result<Vec<u8>, io::Error> {
         // 打开文件进行读取
         let file = File::open(path)?;

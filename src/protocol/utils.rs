@@ -1,3 +1,6 @@
+//! Helper functions shared by the Git smart protocol handlers, including pkt-line parsing, pkt-line
+//! encoding, subsequence scans, and response builders that honor HTTP/SSH quirks.
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use super::types::{PKT_LINE_END_MARKER, TransportProtocol};

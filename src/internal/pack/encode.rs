@@ -1,32 +1,38 @@
-use std::cmp::Ordering;
-use std::collections::VecDeque;
-use std::io::Write;
-//use std::io as stdio;
+//! Pack encoder capable of building streamed `.pack`/`.idx` pairs with optional delta compression,
+//! windowing, and asynchronous writers.
 
-use crate::delta;
-use crate::internal::metadata::{EntryMeta, MetaAttached};
-use crate::internal::object::types::ObjectType;
-use crate::time_it;
-use crate::zstdelta;
-use crate::{
-    errors::GitError, hash::ObjectHash, internal::pack::entry::Entry, utils::HashAlgorithm,
+use std::{
+    cmp::Ordering,
+    collections::VecDeque,
+    hash::{Hash, Hasher},
+    io::Write,
+    path::{Path, PathBuf},
 };
+
 use ahash::AHasher;
+// use libc::ungetc;
+use chrono::Utc;
 use flate2::write::ZlibEncoder;
 use natord::compare;
 use rayon::prelude::*;
-
-use crate::internal::pack::index_entry::IndexEntry;
-use crate::internal::pack::pack_index::IdxBuilder;
-// use libc::ungetc;
-use chrono::Utc;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
-use tokio::fs::File;
 //use tokio::io::AsyncWriteExt;
 use tokio::io::AsyncWriteExt as TokioAsyncWriteExt;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::{fs::File, sync::mpsc, task::JoinHandle};
+
+//use std::io as stdio;
+use crate::delta;
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::{
+        metadata::{EntryMeta, MetaAttached},
+        object::types::ObjectType,
+        pack::{entry::Entry, index_entry::IndexEntry, pack_index::IdxBuilder},
+    },
+    time_it,
+    utils::HashAlgorithm,
+    zstdelta,
+};
 
 const MAX_CHAIN_LEN: usize = 50;
 const MIN_DELTA_RATE: f64 = 0.5; // minimum delta rate
@@ -724,19 +730,20 @@ impl PackEncoder {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::sync::Arc;
-    use std::time::Instant;
-    use std::{io::Cursor, path::PathBuf};
+    use std::{env, io::Cursor, path::PathBuf, sync::Arc, time::Instant};
+
     use tempfile::tempdir;
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-    use crate::internal::object::blob::Blob;
-    use crate::internal::pack::utils::read_offset_encoding;
-    use crate::internal::pack::{Pack, tests::init_logger};
-    use crate::time_it;
+    use crate::{
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
+        internal::{
+            object::blob::Blob,
+            pack::{Pack, tests::init_logger, utils::read_offset_encoding},
+        },
+        time_it,
+    };
 
     fn check_format(data: &Vec<u8>) {
         let mut p = Pack::new(

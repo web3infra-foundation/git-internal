@@ -1,3 +1,6 @@
+//! Low-level helpers shared by object encode/decode routines: varint readers, type/size parsing,
+//! and thin zlib compression wrappers tuned for Git object formats.
+
 use std::io::{self, Read, Write};
 
 use flate2::{Compression, write::ZlibEncoder};

@@ -1,8 +1,7 @@
-/// SSH transport adapter for Git protocol
-///
-/// This module provides SSH-specific handling for Git smart protocol operations.
-/// It's a thin wrapper around the core GitProtocol that handles SSH command
-/// execution and data streaming.
+//! SSH transport adapter for the Git smart protocol. Wraps the shared `GitProtocol` core with
+//! helpers for authenticating connections, parsing SSH commands, and serving upload/receive-pack
+//! requests over interactive channels.
+
 use super::core::{AuthenticationService, GitProtocol, RepositoryAccess};
 use super::types::{ProtocolError, ProtocolStream};
 

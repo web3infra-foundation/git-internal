@@ -1,8 +1,10 @@
+//! Core enums and error types for the Git smart protocol: service identifiers, transport selection,
+//! capability negotiation, and the shared stream/error aliases used throughout the crate.
+
+use std::{fmt, pin::Pin, str::FromStr};
+
 use bytes::Bytes;
 use futures::stream::Stream;
-use std::fmt;
-use std::pin::Pin;
-use std::str::FromStr;
 
 /// Type alias for protocol data streams to reduce nesting
 pub type ProtocolStream = Pin<Box<dyn Stream<Item = Result<Bytes, ProtocolError>> + Send>>;

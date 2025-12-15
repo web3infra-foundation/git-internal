@@ -1,3 +1,6 @@
+//! Object model definitions for Git blobs, trees, commits, tags, and supporting traits that let the
+//! pack/zlib layers create strongly typed values from raw bytes.
+
 pub mod blob;
 pub mod commit;
 pub mod note;
@@ -15,9 +18,11 @@ use std::{
 
 use sha1::Digest;
 
-use crate::internal::object::types::ObjectType;
-use crate::internal::zlib::stream::inflate::ReadBoxed;
-use crate::{errors::GitError, hash::ObjectHash};
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::{object::types::ObjectType, zlib::stream::inflate::ReadBoxed},
+};
 
 pub trait ObjectTrait: Send + Sync + Display {
     /// Creates a new object from a byte slice.

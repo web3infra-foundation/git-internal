@@ -1,8 +1,12 @@
+//! Custom delta engine roughly mirroring Git's ref/offset-delta encoding plus heuristics that decide
+//! when it's worthwhile to delta compress blobs.
+
 #![allow(dead_code)]
+
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use encode::DeltaDiff;
 use rayon::prelude::*;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 mod decode;
 mod encode;

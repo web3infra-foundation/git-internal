@@ -1,3 +1,6 @@
+//! Object type enumeration plus conversions used across pack/object modules for printing,
+//! serialization, and delta bookkeeping.
+
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};

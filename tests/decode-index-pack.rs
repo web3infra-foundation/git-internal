@@ -1,19 +1,27 @@
-/// Tests for decoding a pack file and re-encoding its index,
-/// verifying that the offsets in the generated index match those in the original pack.
-/// This ensures that the decoding and encoding processes are consistent.
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::fs;
-use std::io::BufReader;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+//! Integration tests that decode fixture packs, rebuild their `.idx` files, and assert offsets match
+//! the originals for both SHA-1 and SHA-256 object formats.
 
-use git_internal::errors::GitError;
-use git_internal::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-use git_internal::internal::metadata::{EntryMeta, MetaAttached};
-use git_internal::internal::pack::Pack;
-use git_internal::internal::pack::entry::Entry;
-use git_internal::internal::pack::pack_index::{IdxBuilder, IndexEntry};
+use std::collections::HashMap;
+use std::{
+    convert::TryInto,
+    fs,
+    io::BufReader,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+
+use git_internal::{
+    errors::GitError,
+    hash::{HashKind, ObjectHash, set_hash_kind_for_test},
+    internal::{
+        metadata::{EntryMeta, MetaAttached},
+        pack::{
+            Pack,
+            entry::Entry,
+            pack_index::{IdxBuilder, IndexEntry},
+        },
+    },
+};
 use tokio::sync::mpsc;
 
 fn packs_dir() -> PathBuf {

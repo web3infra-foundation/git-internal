@@ -1,3 +1,6 @@
+//! Metadata container that accompanies pack entries to track file paths, on-disk offsets, CRC32
+//! checksums, and delta flags so downstream encoders/decoders can enrich responses.
+
 #[derive(Debug, Clone, Default)]
 pub struct EntryMeta {
     pub file_path: Option<String>,

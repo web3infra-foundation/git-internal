@@ -1,20 +1,25 @@
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Once;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::sleep;
-use std::{fs, io};
+//! Multi-tier cache for pack decoding that combines an in-memory LRU with spill-to-disk storage and
+//! bookkeeping for concurrent rebuild tasks.
+
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, Once,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::sleep,
+};
 
 use dashmap::{DashMap, DashSet};
 use lru_mem::LruCache;
 use threadpool::ThreadPool;
 
-use crate::hash::ObjectHash;
-use crate::internal::pack::cache_object::{
-    ArcWrapper, CacheObject, FileLoadStore, MemSizeRecorder,
+use crate::{
+    hash::ObjectHash,
+    internal::pack::cache_object::{ArcWrapper, CacheObject, FileLoadStore, MemSizeRecorder},
+    time_it,
 };
-use crate::time_it;
 
 pub trait _Cache {
     fn new(mem_size: Option<usize>, tmp_path: PathBuf, thread_num: usize) -> Self
@@ -233,15 +238,13 @@ impl _Cache for Caches {
 
 #[cfg(test)]
 mod test {
-    use std::env;
+    use std::{env, sync::Arc, thread};
 
     use super::*;
     use crate::{
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::{object::types::ObjectType, pack::cache_object::CacheObjectInfo},
     };
-    use std::sync::Arc;
-    use std::thread;
 
     #[test]
     fn test_cache_single_thread() {

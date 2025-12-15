@@ -1,16 +1,24 @@
-use super::core::RepositoryAccess;
-use super::types::ProtocolError;
-use crate::hash::ObjectHash;
-use crate::internal::metadata::{EntryMeta, MetaAttached};
-use crate::internal::object::types::ObjectType;
-use crate::internal::object::{ObjectTrait, blob::Blob, commit::Commit, tree::Tree};
-use crate::internal::pack::{Pack, encode::PackEncoder, entry::Entry};
+//! Transport-agnostic pack generator that reuses repository storage traits to walk commits, expand
+//! trees/blobs, and either stream packs to clients or unpack uploads for server-side ingestion.
+
+use std::{
+    collections::{HashSet, VecDeque},
+    io::Cursor,
+};
+
 use bytes::Bytes;
-use std::collections::{HashSet, VecDeque};
-use std::io::Cursor;
-use tokio;
-use tokio::sync::mpsc;
+use tokio::{self, sync::mpsc};
 use tokio_stream::wrappers::ReceiverStream;
+
+use super::{core::RepositoryAccess, types::ProtocolError};
+use crate::{
+    hash::ObjectHash,
+    internal::{
+        metadata::{EntryMeta, MetaAttached},
+        object::{ObjectTrait, blob::Blob, commit::Commit, tree::Tree, types::ObjectType},
+        pack::{Pack, encode::PackEncoder, entry::Entry},
+    },
+};
 
 /// Pack generation service for Git protocol operations
 ///
@@ -345,14 +353,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::hash::{HashKind, set_hash_kind_for_test};
-    use crate::internal::object::blob::Blob;
-    use crate::internal::object::commit::Commit;
-    use crate::internal::object::signature::{Signature, SignatureType};
-    use crate::internal::object::tree::{Tree, TreeItem, TreeItemMode};
     use async_trait::async_trait;
     use bytes::Bytes;
+
+    use super::*;
+    use crate::{
+        hash::{HashKind, set_hash_kind_for_test},
+        internal::object::{
+            blob::Blob,
+            commit::Commit,
+            signature::{Signature, SignatureType},
+            tree::{Tree, TreeItem, TreeItemMode},
+        },
+    };
 
     #[derive(Clone)]
     struct DummyRepoAccess;

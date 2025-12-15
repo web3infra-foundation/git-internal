@@ -1,6 +1,10 @@
+//! Lightweight metadata plumbing that allows pack entries to carry auxiliary information (paths,
+//! pack offsets, CRC32, etc.) through encode/decode pipelines without polluting core types.
+
 mod entry_meta;
-pub use entry_meta::EntryMeta;
 use std::fmt;
+
+pub use entry_meta::EntryMeta;
 
 pub trait MetadataExt {
     type Meta: Clone + std::fmt::Debug + Send + Sync + 'static;

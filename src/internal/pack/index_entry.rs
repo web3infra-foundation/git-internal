@@ -1,9 +1,17 @@
-use crate::errors::GitError;
-use crate::hash::ObjectHash;
-use crate::internal::metadata::{EntryMeta, MetaAttached};
-use crate::internal::pack::entry::Entry;
+//! Representation of a single `.idx` entry including precomputed CRC32 and offset extraction from
+//! decoded pack metadata.
+
 use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
+
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::{
+        metadata::{EntryMeta, MetaAttached},
+        pack::entry::Entry,
+    },
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IndexEntry {

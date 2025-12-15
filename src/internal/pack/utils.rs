@@ -1,10 +1,18 @@
-use sha1::{Digest, Sha1};
-use std::fs;
-use std::io::{self, Read};
-use std::path::Path;
+//! Shared pack-parsing helpers for reading object headers, varints, offsets, and zlib-compressed
+//! payloads as defined by Git's pack format.
 
-use crate::hash::{ObjectHash, get_hash_kind};
-use crate::internal::object::types::ObjectType;
+use std::{
+    fs,
+    io::{self, Read},
+    path::Path,
+};
+
+use sha1::{Digest, Sha1};
+
+use crate::{
+    hash::{ObjectHash, get_hash_kind},
+    internal::object::types::ObjectType,
+};
 
 /// Checks if the reader has reached EOF (end of file).
 ///
@@ -331,13 +339,15 @@ macro_rules! time_it {
 
 #[cfg(test)]
 mod tests {
-    use crate::hash::{HashKind, set_hash_kind_for_test};
-    use crate::internal::object::types::ObjectType;
-    use std::io;
-    use std::io::Cursor;
-    use std::io::Read;
+    use std::{
+        io,
+        io::{Cursor, Read},
+    };
 
-    use crate::internal::pack::utils::*;
+    use crate::{
+        hash::{HashKind, set_hash_kind_for_test},
+        internal::{object::types::ObjectType, pack::utils::*},
+    };
 
     #[test]
     fn test_calc_obj_hash() {

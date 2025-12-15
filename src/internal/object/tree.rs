@@ -14,16 +14,18 @@
 //! have been added, modified, or deleted between two points in time. This allows Git to perform
 //! operations like merging and rebasing more quickly and accurately.
 //!
-use crate::errors::GitError;
-use crate::hash::{ObjectHash, get_hash_kind};
-use crate::internal::object::ObjectTrait;
-use crate::internal::object::ObjectType;
+use std::fmt::Display;
+
 use bincode::{Decode, Encode};
 use colored::Colorize;
 use encoding_rs::GBK;
-use serde::Deserialize;
-use serde::Serialize;
-use std::fmt::Display;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    errors::GitError,
+    hash::{ObjectHash, get_hash_kind},
+    internal::object::{ObjectTrait, ObjectType},
+};
 
 /// In Git, the mode field in a tree object's entry specifies the type of the object represented by
 /// that entry. The mode is a three-digit octal number that encodes both the permissions and the
@@ -341,9 +343,12 @@ impl ObjectTrait for Tree {
 #[cfg(test)]
 mod tests {
 
-    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-    use crate::internal::object::tree::{Tree, TreeItem, TreeItemMode};
     use std::str::FromStr;
+
+    use crate::{
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
+        internal::object::tree::{Tree, TreeItem, TreeItemMode},
+    };
 
     #[test]
     fn test_tree_item_new() {

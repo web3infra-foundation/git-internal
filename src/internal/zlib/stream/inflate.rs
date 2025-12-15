@@ -1,3 +1,6 @@
+//! Buffered inflate reader that decodes Git's zlib-compressed objects while simultaneously tracking
+//! SHA digests for integrity verification.
+
 use std::{io, io::BufRead};
 
 use flate2::{Decompress, FlushDecompress, Status};

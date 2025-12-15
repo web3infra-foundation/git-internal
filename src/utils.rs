@@ -1,7 +1,14 @@
-use crate::hash::{HashKind, ObjectHash, get_hash_kind};
+//! Shared I/O utilities for Git-internal including buffered readers, SHA abstractions, and helpers
+//! for reading pack/file bytes while tracking stream progress.
+
+use std::{
+    io,
+    io::{BufRead, Read},
+};
+
 use sha1::{Digest, Sha1};
-use std::io;
-use std::io::{BufRead, Read};
+
+use crate::hash::{HashKind, ObjectHash, get_hash_kind};
 pub fn read_bytes(file: &mut impl Read, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = vec![0; len];
     file.read_exact(&mut buf)?;

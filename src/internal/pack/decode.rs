@@ -1,9 +1,16 @@
-use std::io::{self, BufRead, Cursor, ErrorKind, Read};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread::{self, JoinHandle};
-use std::time::Instant;
+//! Streaming pack decoder that validates headers, inflates entries, rebuilds deltas (including zstd),
+//! and populates caches/metadata for downstream consumers.
+
+use std::{
+    io::{self, BufRead, Cursor, ErrorKind, Read},
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::Instant,
+};
 
 use axum::Error;
 use bytes::Bytes;
@@ -13,24 +20,27 @@ use threadpool::ThreadPool;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-use crate::errors::GitError;
-use crate::hash::{ObjectHash, get_hash_kind, set_hash_kind};
-
-use crate::internal::metadata::{EntryMeta, MetaAttached};
-use crate::zstdelta;
-
-use crate::internal::object::types::ObjectType;
-
 use super::cache_object::CacheObjectInfo;
-use crate::internal::pack::cache::_Cache;
-use crate::internal::pack::cache::Caches;
-use crate::internal::pack::cache_object::{CacheObject, MemSizeRecorder};
-use crate::internal::pack::channel_reader::StreamBufReader;
-use crate::internal::pack::entry::Entry;
-use crate::internal::pack::waitlist::Waitlist;
-use crate::internal::pack::wrapper::Wrapper;
-use crate::internal::pack::{DEFAULT_TMP_DIR, Pack, utils};
-use crate::utils::CountingReader;
+use crate::{
+    errors::GitError,
+    hash::{ObjectHash, get_hash_kind, set_hash_kind},
+    internal::{
+        metadata::{EntryMeta, MetaAttached},
+        object::types::ObjectType,
+        pack::{
+            DEFAULT_TMP_DIR, Pack,
+            cache::{_Cache, Caches},
+            cache_object::{CacheObject, MemSizeRecorder},
+            channel_reader::StreamBufReader,
+            entry::Entry,
+            utils,
+            waitlist::Waitlist,
+            wrapper::Wrapper,
+        },
+    },
+    utils::CountingReader,
+    zstdelta,
+};
 
 /// A reader that counts bytes read and computes CRC32 checksum.
 /// which is used to verify the integrity of decompressed data.
@@ -774,22 +784,24 @@ impl Pack {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::io::BufReader;
-    use std::io::Cursor;
-    use std::io::prelude::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::{env, path::PathBuf};
+    use std::{
+        env, fs,
+        io::{BufReader, Cursor, prelude::*},
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
-    use flate2::Compression;
-    use flate2::write::ZlibEncoder;
+    use flate2::{Compression, write::ZlibEncoder};
+    use futures_util::TryStreamExt;
     use tokio_util::io::ReaderStream;
 
-    use crate::hash::{HashKind, ObjectHash, set_hash_kind};
-    use crate::internal::pack::Pack;
-    use crate::internal::pack::tests::init_logger;
-    use futures_util::TryStreamExt;
+    use crate::{
+        hash::{HashKind, ObjectHash, set_hash_kind},
+        internal::pack::{Pack, tests::init_logger},
+    };
 
     #[tokio::test]
     async fn test_pack_check_header() {
