@@ -5,11 +5,12 @@
 
 use std::{cell::RefCell, fmt::Display, hash::Hash, io, str::FromStr};
 
-use crate::internal::object::types::ObjectType;
 use bincode::{Decode, Encode};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use sha1::Digest;
+
+use crate::internal::object::types::ObjectType;
 pub type SHA1 = ObjectHash;
 /// The [`SHA1`] struct, encapsulating a `[u8; 20]` array, is specifically designed to represent Git hash IDs.
 /// In Git's context, these IDs are 40-character hexadecimal strings generated via the SHA-1 algorithm.
@@ -293,12 +294,12 @@ pub fn set_hash_kind_for_test(kind: HashKind) -> HashKindGuard {
 #[cfg(test)]
 mod tests {
 
-    use std::io::BufReader;
-    use std::io::Read;
-    use std::io::Seek;
-    use std::io::SeekFrom;
-    use std::str::FromStr;
-    use std::{env, path::PathBuf};
+    use std::{
+        env,
+        io::{BufReader, Read, Seek, SeekFrom},
+        path::PathBuf,
+        str::FromStr,
+    };
 
     use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 

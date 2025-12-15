@@ -1,6 +1,9 @@
-use crate::hash::ObjectHash;
-use crate::internal::pack::cache_object::CacheObject;
+//! Temporary storage for delta objects while their base object is still decoding, keyed by both pack
+//! offset and object hash.
+
 use dashmap::DashMap;
+
+use crate::{hash::ObjectHash, internal::pack::cache_object::CacheObject};
 
 /// Waitlist for Delta objects while the Base object is not ready.
 /// Easier and faster than Channels.

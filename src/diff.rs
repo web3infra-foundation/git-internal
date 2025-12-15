@@ -1,9 +1,16 @@
-use crate::hash::ObjectHash;
+//! Unified diff generation utilities that compare blobs/trees, map deltas back to line numbers,
+//! and emit Myers-based unified diffs for Git objects while guarding against pathological inputs.
+
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fmt::Write,
+    path::{Path, PathBuf},
+};
+
 use path_absolutize::Absolutize;
 use similar::{Algorithm, ChangeTag, TextDiff};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt::Write;
-use std::path::{Path, PathBuf};
+
+use crate::hash::ObjectHash;
 
 /// This struct is returned by diff operations and contains:
 /// - `path`: The file path being diffed.
@@ -479,13 +486,12 @@ pub fn compute_diff(old_lines: &[String], new_lines: &[String]) -> Vec<DiffOpera
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, fs, path::PathBuf, process::Command};
+
+    use tempfile::tempdir;
+
     use super::{Diff, DiffOperation, compute_diff};
     use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-    use std::collections::HashMap;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::process::Command;
-    use tempfile::tempdir;
 
     fn run_diff(
         logical_path: &str,

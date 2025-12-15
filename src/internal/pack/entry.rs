@@ -1,14 +1,16 @@
+//! Lightweight representation of a decoded Git object coming out of a pack stream, with helpers to
+//! convert to/from strongly typed objects.
+
 use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
-use crate::hash::ObjectHash;
-use crate::internal::object::ObjectTrait;
-use crate::internal::object::blob::Blob;
-use crate::internal::object::commit::Commit;
-use crate::internal::object::tag::Tag;
-use crate::internal::object::tree::Tree;
-use crate::internal::object::types::ObjectType;
+use crate::{
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait, blob::Blob, commit::Commit, tag::Tag, tree::Tree, types::ObjectType,
+    },
+};
 
 ///
 /// Git object data from pack file

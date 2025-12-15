@@ -1,12 +1,19 @@
-use super::core::{AuthenticationService, GitProtocol, RepositoryAccess};
-use super::types::{ProtocolError, ProtocolStream};
+//! HTTP transport adapter that wires request parsing and content negotiation onto the generic
+//! `GitProtocol`, exposing helpers for info/refs, upload-pack, and receive-pack endpoints.
+
+use std::collections::HashMap;
+
 /// HTTP transport adapter for Git protocol
 ///
 /// This module provides HTTP-specific handling for Git smart protocol operations.
 /// It's a thin wrapper around the core GitProtocol that handles HTTP-specific
 /// request/response formatting and uses the utility functions for proper HTTP handling.
 use serde::Deserialize;
-use std::collections::HashMap;
+
+use super::{
+    core::{AuthenticationService, GitProtocol, RepositoryAccess},
+    types::{ProtocolError, ProtocolStream},
+};
 
 /// HTTP Git protocol handler
 pub struct HttpGitHandler<R: RepositoryAccess, A: AuthenticationService> {

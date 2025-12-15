@@ -1,15 +1,21 @@
-use bytes::{BufMut, Bytes, BytesMut};
+//! Implementation of the Git smart protocol state machine, handling capability negotiation, pkt
+//! exchanges, authentication delegation, and bridging repository storage to transport streams.
+
 use std::collections::HashMap;
+
+use bytes::{BufMut, Bytes, BytesMut};
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::core::{AuthenticationService, RepositoryAccess};
-use super::pack::PackGenerator;
-use super::types::ProtocolError;
-use super::types::{
-    COMMON_CAP_LIST, Capability, LF, NUL, PKT_LINE_END_MARKER, ProtocolStream, RECEIVE_CAP_LIST,
-    RefCommand, RefTypeEnum, SP, ServiceType, SideBand, TransportProtocol, UPLOAD_CAP_LIST,
+use super::{
+    core::{AuthenticationService, RepositoryAccess},
+    pack::PackGenerator,
+    types::{
+        COMMON_CAP_LIST, Capability, LF, NUL, PKT_LINE_END_MARKER, ProtocolError, ProtocolStream,
+        RECEIVE_CAP_LIST, RefCommand, RefTypeEnum, SP, ServiceType, SideBand, TransportProtocol,
+        UPLOAD_CAP_LIST,
+    },
+    utils::{add_pkt_line_string, build_smart_reply, read_pkt_line, read_until_white_space},
 };
-use super::utils::{add_pkt_line_string, build_smart_reply, read_pkt_line, read_until_white_space};
 use crate::hash::{HashKind, ObjectHash, get_hash_kind};
 /// Smart Git Protocol implementation
 ///
@@ -392,24 +398,32 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::hash::{HashKind, set_hash_kind_for_test};
-    use crate::internal::metadata::{EntryMeta, MetaAttached};
-    use crate::internal::object::blob::Blob;
-    use crate::internal::object::commit::Commit;
-    use crate::internal::object::signature::{Signature, SignatureType};
-    use crate::internal::object::tree::{Tree, TreeItem, TreeItemMode};
-    use crate::internal::pack::{encode::PackEncoder, entry::Entry};
-    use crate::protocol::types::RefCommand; // import sibling types
-    use crate::protocol::utils; // import sibling module
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use futures;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     };
+
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures;
     use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::protocol::types::RefCommand; // import sibling types
+    use crate::protocol::utils; // import sibling module
+    use crate::{
+        hash::{HashKind, set_hash_kind_for_test},
+        internal::{
+            metadata::{EntryMeta, MetaAttached},
+            object::{
+                blob::Blob,
+                commit::Commit,
+                signature::{Signature, SignatureType},
+                tree::{Tree, TreeItem, TreeItemMode},
+            },
+            pack::{encode::PackEncoder, entry::Entry},
+        },
+    };
 
     // Simplify complex type via aliases to satisfy clippy::type_complexity
     type UpdateRecord = (String, Option<String>, String);

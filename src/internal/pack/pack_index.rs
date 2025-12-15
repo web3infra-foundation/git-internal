@@ -1,8 +1,10 @@
-use crate::errors::GitError;
-use crate::hash::ObjectHash;
-pub use crate::internal::pack::index_entry::IndexEntry;
-use crate::utils::HashAlgorithm;
+//! Builder for Git pack index (.idx) files that streams fanout tables, CRCs, offsets, and trailer
+//! hashes through an async channel.
+
 use tokio::sync::mpsc;
+
+pub use crate::internal::pack::index_entry::IndexEntry;
+use crate::{errors::GitError, hash::ObjectHash, utils::HashAlgorithm};
 
 pub struct IdxBuilder {
     sender: Option<mpsc::Sender<Vec<u8>>>,
@@ -157,11 +159,13 @@ impl IdxBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::errors::GitError;
-    use crate::hash::ObjectHash;
-    use crate::internal::pack::index_entry::IndexEntry;
-    use crate::internal::pack::pack_index::IdxBuilder;
     use tokio::sync::mpsc;
+
+    use crate::{
+        errors::GitError,
+        hash::ObjectHash,
+        internal::pack::{index_entry::IndexEntry, pack_index::IdxBuilder},
+    };
 
     /// 构造一个假的哈希（长度必须符合 Sha1 或 Sha256）
     fn fake_sha1(n: u8) -> ObjectHash {

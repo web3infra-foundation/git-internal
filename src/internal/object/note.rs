@@ -15,10 +15,11 @@ use std::fmt::Display;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::errors::GitError;
-use crate::hash::ObjectHash;
-use crate::internal::object::ObjectTrait;
-use crate::internal::object::ObjectType;
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{ObjectTrait, ObjectType},
+};
 
 /// Git Note object structure
 ///
@@ -192,9 +193,10 @@ impl ObjectTrait for Note {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-    use std::str::FromStr;
 
     #[test]
     fn test_note_creation_and_serialization() {
