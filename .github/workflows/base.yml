@@ -35,6 +35,9 @@ jobs:
   clippy:
     name: Clippy Check
     runs-on: [ self-hosted ]
+    permissions:
+      contents: read
+      pull-requests: write
     env:
       CARGO_TERM_COLOR: always
 
@@ -100,4 +103,4 @@ jobs:
           lfs: true
 
       - name: Run cargo test
-        run: cargo test --all
+        run: git lfs pull | cargo test --all
