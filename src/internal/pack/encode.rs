@@ -838,7 +838,7 @@ mod tests {
 
     async fn get_entries_for_test() -> Arc<Mutex<Vec<Entry>>> {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/packs/pack-f8bbb573cef7d851957caceb491c073ee8e8de41.pack");
+            .join("tests/data/packs/encode-test-sha1.pack");
 
         let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
 
@@ -864,7 +864,7 @@ mod tests {
     }
     async fn get_entries_for_test_sha256() -> Arc<Mutex<Vec<Entry>>> {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/packs/pack-78047853c60a1a3bb587f59598bdeb773fefc821f6f60f4f4797644ad43dad3d.pack");
+            .join("tests/data/packs/encode-test-sha256.pack");
 
         let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
 
