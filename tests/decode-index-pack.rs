@@ -152,20 +152,20 @@ async fn roundtrip(prefix: &str, kind: HashKind) -> Result<(), GitError> {
 
 #[tokio::test]
 async fn idx_offsets_match_sha1_small() -> Result<(), GitError> {
-    roundtrip("sha1_small_", HashKind::Sha1).await
+    roundtrip("small-sha1", HashKind::Sha1).await
 }
 
 #[tokio::test]
 async fn idx_offsets_match_sha1_delta() -> Result<(), GitError> {
-    roundtrip("sha1_delta_", HashKind::Sha1).await
+    roundtrip("ref-delta-sha1", HashKind::Sha1).await
 }
 
 #[tokio::test]
 async fn idx_offsets_match_sha256_small() -> Result<(), GitError> {
-    roundtrip("sha256_small_", HashKind::Sha256).await
+    roundtrip("small-sha256", HashKind::Sha256).await
 }
 
 #[tokio::test]
 async fn idx_offsets_match_sha256_delta() -> Result<(), GitError> {
-    roundtrip("sha256_delta_", HashKind::Sha256).await
+    roundtrip("ref-delta-sha256", HashKind::Sha256).await
 }
