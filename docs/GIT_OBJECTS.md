@@ -51,7 +51,11 @@ This document summarizes the object formats supported by git-internal, how IDs a
 
 - Location: `object/note.rs`.
 - Meaning: An annotation attached to an object; internally treated as a Blob (`get_type` returns Blob), and hashed using Blob rules.
+<<<<<<< HEAD
 - Build/Parse: `Note::from_content(content)` builds a note for a placeholder target; `Note::new(target_object_id, content)` associates it to a specific object. Use `from_bytes` to parse existing data.
+=======
+- Build/Parse: `Note::from_content(note_on, note_author, note_message)` computes the hash; `from_bytes` reads back fields.
+>>>>>>> a3997c6 (add 2 docs)
 
 ## Signature
 
