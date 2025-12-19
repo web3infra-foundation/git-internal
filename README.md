@@ -22,7 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pack = Pack::new(None, Some(64 * 1024 * 1024), None, true);
 
     pack.decode(&mut reader, |_entry| {
-        // handle MetaAttached<Entry, EntryMeta>
+        // Process each decoded object here (MetaAttached<Entry, EntryMeta>).
+        // For example, index it, persist it, or feed it into your build pipeline.
     }, None::<fn(git_internal::hash::ObjectHash)>)?;
     Ok(())
 }
