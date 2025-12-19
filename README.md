@@ -6,6 +6,38 @@ Git-Internal is a high-performance Rust library for encoding and decoding Git in
 
 This module is designed to handle Git internal objects and Pack files efficiently, supporting both reading and writing operations with optimized memory usage and multi-threaded processing capabilities. The library implements the complete Git Pack format specification with additional optimizations for large-scale Git operations.
 
+## Quickstart
+
+Decode a pack (offline):
+
+```rust
+use std::{fs::File, io::BufReader};
+use git_internal::internal::pack::Pack;
+use git_internal::hash::{set_hash_kind, HashKind};
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // In production, hash kind is configured at the repository level. Set here for demonstration only.
+    set_hash_kind(HashKind::Sha1);
+    let f = File::open("tests/data/packs/small-sha1.pack")?;
+    let mut reader = BufReader::new(f);
+    let mut pack = Pack::new(None, Some(64 * 1024 * 1024), None, true);
+
+    pack.decode(&mut reader, |_entry| {
+        // Process each decoded object here (MetaAttached<Entry, EntryMeta>).
+        // For example, index it, persist it, or feed it into your build pipeline.
+    }, None::<fn(git_internal::hash::ObjectHash)>)?;
+    Ok(())
+}
+```
+
+## Modules at a glance
+
+- `hash.rs`: object IDs and hash algorithm selection (thread-local), set once by your app.
+- `internal/object` / `internal/index` / `internal/metadata`: object parse/serialize, .git/index IO, path/offset/CRC metadata.
+- `delta` / `zstdelta` / `diff.rs`: delta compression, zstd dictionary delta, line-level diff.
+- `internal/pack`: pack decode/encode, waitlist, cache, idx building.
+- `protocol/*`: smart protocol + HTTP/SSH adapters, wrapping info-refs/upload-pack/receive-pack.
+- Docs: [docs/ARCHITECTURE.md (architecture)](docs/ARCHITECTURE.md), [docs/GIT_OBJECTS.md (objects)](docs/GIT_OBJECTS.md), [docs/GIT_PROTOCOL_GUIDE.md (protocol)](docs/GIT_PROTOCOL_GUIDE.md).
+
 ## Key Features
 
 ### 1. Multi-threaded Processing
