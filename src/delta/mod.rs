@@ -124,11 +124,6 @@ mod tests {
     /// - totally different => low rate
     /// - empty/empty => 1.0; empty vs non-empty => 0.0.
     #[test]
-    /// Heuristic vs accurate rates on small strings and edge cases:
-    /// - identical buffers => 1.0
-    /// - minor edits => partial rate between (0.5,1.0)
-    /// - totally different => low rate
-    /// - empty/empty => 1.0; empty vs non-empty => 0.0.
     fn test_heuristic_encode_rate() {
         let data1 = b"hello world, this is a test for delta rate";
         let data2 = b"hello world, this is a test for delta rate";
@@ -165,9 +160,6 @@ mod tests {
     /// - completely different large slices should early-stop to 0
     /// - partially different large slices: parallel heuristic vs accurate rate should be close.
     #[test]
-    /// Heuristic rates on large buffers:
-    /// - completely different large slices should early-stop to 0
-    /// - partially different large slices: parallel heuristic vs accurate rate should be close.
     fn test_heuristic_encode_rate_large_files() {
         let data1 = vec![0u8; 100_000];
         let data2 = vec![1u8; 100_000];
