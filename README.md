@@ -15,7 +15,7 @@ use std::{fs::File, io::BufReader};
 use git_internal::internal::pack::Pack;
 use git_internal::hash::{set_hash_kind, HashKind};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-   // set once at startup, this is usually configured in the upper-level repository, not set directly; it's only shown here for demonstration purposes.
+    // In production, hash kind is configured at the repository level. Set here for demonstration only.
     set_hash_kind(HashKind::Sha1);
     let f = File::open("tests/data/packs/small-sha1.pack")?;
     let mut reader = BufReader::new(f);
