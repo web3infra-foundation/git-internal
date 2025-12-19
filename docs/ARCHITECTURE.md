@@ -6,20 +6,20 @@ This doc summarizes the overall design of git-internal: module relationships, ke
 
 ```
 protocol/* (smart/http/ssh)
-        │ calls/returns pkt-line & pack
-        ▼
-internal/pack (encode/decode/waitlist/cache/idx)  ←────────────┐
-        │ produces/consumes Entry+Meta                         │
-        │                                                      │
-        ├─▶ internal/object / index / metadata  (object parse, index IO, metadata)
-        └─▶ delta / zstdelta / diff             (delta/compression/line diff)
+        ⇅ pkt-line & pack encode/decode
+internal/pack (encode/decode/waitlist/cache/idx)
+        ⇅ consumes/produces Entry+Meta
+        ⇅ internal/object / index / metadata  (object parse, index IO, metadata)
+        ⇅ delta / zstdelta / diff             (delta/compression/line diff)
+
+hash.rs / utils.rs / errors.rs  (shared infra for all arrows above)
 ```
 
-- Core context: `internal/pack` sits in the middle, handling pack decode/encode, cache, waitlist, and idx, interacting with protocol, object/index, and delta/diff modules.
-- Protocol entry: `protocol/*` drives info-refs/upload-pack/receive-pack, calling `Pack`/`PackEncoder` and using app-provided `RepositoryAccess` / `AuthenticationService` for storage/auth.
-- Data model: `internal/object` / `internal/index` / `internal/metadata` for object parse/serialize, index IO, and path/offset/CRC metadata.
-- Algorithm support: `delta` / `zstdelta` / `diff` provide delta compression and line diff, usable by pack pipelines or standalone.
-- Infrastructure (not drawn): `hash.rs` (hash choice/object IDs), `utils.rs` (common IO/hash helpers), `errors.rs` (unified errors). Hash algorithm is configured once by upper layers and reused throughout.
+- Core context: `internal/pack` is the hub, decoding/encoding packs, managing cache/waitlist/idx, and exchanging data with both protocol (upstream) and object/index/metadata + delta/diff (side dependencies).
+- Protocol entry: `protocol/*` drives info-refs/upload-pack/receive-pack, calling into `Pack`/`PackEncoder` and receiving decoded entries back; uses app-provided `RepositoryAccess` / `AuthenticationService` for storage/auth.
+- Data model: `internal/object` / `internal/index` / `internal/metadata` parse/serialize objects, handle index IO, attach path/offset/CRC metadata; interact bidirectionally with pack (feed objects, receive decoded ones).
+- Algorithm support: `delta` / `zstdelta` / `diff` serve pack compression/rebuild and can be consumed independently; pack calls them to build/apply deltas, and they rely on common infra.
+- Infrastructure: `hash.rs`, `utils.rs`, `errors.rs` are shared by all modules (hash choice/IDs, IO/hash helpers, unified errors), configured once and reused across flows.
 
 ## Core Data Flows
 

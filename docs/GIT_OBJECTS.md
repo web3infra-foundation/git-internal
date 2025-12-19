@@ -1,11 +1,11 @@
 # Git Object Reference
 
-This document summarizes the object formats supported by git-internal, how IDs are hashed, and how they map to canonical Git formats, based on the implementations in `src/internal/object`.
+This document summarizes the object formats supported by git-internal, how IDs are hashed, and how they map to canonical Git formats, based on the implementations in `internal/object`.
 
 ## Common Format and Hashing
 
 - Storage format: `<type> <size>\0<raw-bytes>`, where `type` is `blob/tree/commit/tag` and `size` is the raw data length (decimal string).
-- Hashing: `ObjectHash::from_type_and_data(ObjectType, data)` produces an ID using the current thread hash algorithm (Now support SHA1 and SHA256); switch via `set_hash_kind` / `set_hash_kind_for_test`.
+- Hashing: `ObjectHash::from_type_and_data(ObjectType, data)` produces an ID using the current thread hash algorithm (Currently supports SHA-1 and SHA-256); switch via `set_hash_kind` / `set_hash_kind_for_test`.
 - Types: `ObjectType` offers `to_string`/`to_u8`/`from_u8`/`from_string`, covering base objects (Commit/Tree/Blob/Tag) and delta objects (OffsetDelta/HashDelta/OffsetZstdelta—extension).
 - Serialization: Each object’s `to_data` returns `<type><size>\0<body>`; `ObjectHash::to_string()` emits hex, `to_data()` returns raw bytes.
 
@@ -51,7 +51,7 @@ This document summarizes the object formats supported by git-internal, how IDs a
 
 - Location: `object/note.rs`.
 - Meaning: An annotation attached to an object; internally treated as a Blob (`get_type` returns Blob), and hashed using Blob rules.
-- Build/Parse: `Note::from_content(note_on, note_author, note_message)` computes the hash; `from_bytes` reads back fields.
+- Build/Parse: `Note::from_content(content)` builds a note for a placeholder target; `Note::new(target_object_id, content)` associates it to a specific object. Use `from_bytes` to parse existing data.
 
 ## Signature
 
