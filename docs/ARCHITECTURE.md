@@ -9,7 +9,7 @@ protocol/* (smart/http/ssh)
         ⇅ pkt-line & pack encode/decode
 internal/pack (encode/decode/waitlist/cache/idx)
         ⇅ consumes/produces Entry+Meta
-        ⇅ internal/object / index / metadata  (object parse, index IO, metadata)
+        ⇅ internal/object/index/metadata      (object parse, index IO, metadata)
         ⇅ delta / zstdelta / diff             (delta/compression/line diff)
 
 hash.rs / utils.rs / errors.rs  (shared infra for all arrows above)
