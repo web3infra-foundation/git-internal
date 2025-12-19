@@ -11,7 +11,7 @@
 //! - Encoding: serial and parallel pipelines; offset deltas and Zstd-based deltas.
 //! - Streaming: `decode_stream` for `Stream<Bytes>`; `decode_async` decodes in a new thread and sends entries.
 //! - Caching & memory: LRU-based cache; `MemSizeRecorder` tracks heap usage; optional `mem_limit` to bound memory.
-//! - Utilities: SHA1, zlib, delta, zstdelta toolkits.
+//! - Utilities: Hash-stream helpers, zlib, delta, zstdelta toolkits.
 //!
 //! Modules
 //! - `internal::pack`: decode/encode, caches, waitlists, parallel pipelines, helpers.
@@ -19,7 +19,7 @@
 //! - `internal::zlib`: compression/decompression stream utilities.
 //! - `delta` and `zstdelta`: delta algorithms and rebuild helpers.
 //! - `errors`: unified error types.
-//! - `hash`: SHA1 helpers.
+//! - `hash`: Hash helpers.
 //! - `utils`: common utilities (e.g., `CountingReader`).
 //!
 //! Typical Usage

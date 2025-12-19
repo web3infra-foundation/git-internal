@@ -256,8 +256,8 @@ mod tests {
         Ok(result)
     }
 
-    #[test]
     /// End-to-end encode + decode over real zlib-compressed fixtures should reconstruct new data.
+    #[test]
     fn test_delta_fn() {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/diff/16ecdcc8f663777896bd39ca025a041b7f005e");

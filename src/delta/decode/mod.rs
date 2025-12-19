@@ -88,8 +88,8 @@ mod tests {
     use super::delta_decode;
     use crate::delta::{encode::DeltaDiff, errors::GitDeltaError};
 
-    #[test]
     /// Delta encode + decode should round-trip to the new buffer.
+    #[test]
     fn round_trip_matches_source() {
         let old = b"hello world";
         let new = b"hello rust";
@@ -100,8 +100,8 @@ mod tests {
         assert_eq!(decoded, new);
     }
 
-    #[test]
     /// Mismatched base length should return a decoder error.
+    #[test]
     fn base_size_mismatch_returns_error() {
         let old = b"abcde";
         let new = b"abXYZ";

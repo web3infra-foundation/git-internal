@@ -73,16 +73,16 @@ mod tests {
 
     use super::{read_bytes, read_partial_int, read_size_encoding, read_var_int_byte};
 
-    #[test]
     /// Should read exactly N bytes into an array.
+    #[test]
     fn test_read_bytes() {
         let mut cursor = Cursor::new(vec![1u8, 2, 3]);
         let bytes: [u8; 3] = read_bytes(&mut cursor).unwrap();
         assert_eq!(bytes, [1, 2, 3]);
     }
 
-    #[test]
     /// Varint byte: lower 7 bits value, msb indicates continuation.
+    #[test]
     fn test_read_var_int_byte() {
         let mut cursor = Cursor::new(vec![0b1000_0001, 0b0000_0010]);
         let (v1, more1) = read_var_int_byte(&mut cursor).unwrap();
@@ -93,8 +93,8 @@ mod tests {
         assert!(!more2);
     }
 
-    #[test]
     /// Full varint assembly: two-byte encoding of 300.
+    #[test]
     fn test_read_size_encoding() {
         // Encode 300 (0b1 0010 1100) in Git varint: 0b1010_1100, 0b0000_0010
         let mut cursor = Cursor::new(vec![0b1010_1100, 0b0000_0010]);
@@ -102,8 +102,8 @@ mod tests {
         assert_eq!(v, 300);
     }
 
-    #[test]
     /// Partial int assembly based on presence bits (little-endian copy offsets).
+    #[test]
     fn test_read_partial_int() {
         // present_bytes 0b0000_1111 means offset bytes [1,2,3,4]
         let mut present = 0b0000_1111;
