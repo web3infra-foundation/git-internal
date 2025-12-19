@@ -41,7 +41,7 @@ Input: pack (BufRead / Stream<Bytes>)
   └─ After reading pack, record Pack.signature (trailer checksum)
 ```
 
-- Concurrency: `ThreadPool` handles decode/rebuild; queue length and `mem_limit` apply backpressure; `Waitlist` matches base/delta; `Caches` manage memory+disk and track offset/CRC metadata.
+- Concurrency: `ThreadPool` handles decode/rebuild; queue length and `mem_limit` apply backpressure and are configured via the pack-decode configuration (see engine/pack config docs / `PackDecodeConfig` for fields and defaults); `Waitlist` matches base/delta; `Caches` manage memory+disk and track offset/CRC metadata.
 
 ### Pack Encode & idx Generation
 
