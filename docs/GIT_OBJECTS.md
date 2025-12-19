@@ -6,11 +6,7 @@ This document summarizes the object formats supported by git-internal, how IDs a
 
 - Storage format: `<type> <size>\0<raw-bytes>`, where `type` is `blob/tree/commit/tag` and `size` is the raw data length (decimal string).
 - Hashing: `ObjectHash::from_type_and_data(ObjectType, data)` produces an ID using the current thread hash algorithm (Currently supports SHA-1 and SHA-256); switch via `set_hash_kind` / `set_hash_kind_for_test`.
-<<<<<<< HEAD
 - Types: `ObjectType` offers `to_string`/`to_u8`/`from_u8`/`from_string`, covering base objects (Commit/Tree/Blob/Tag) and delta objects (OffsetDelta/HashDelta/OffsetZstdDelta—extension).
-=======
-- Types: `ObjectType` offers `to_string`/`to_u8`/`from_u8`/`from_string`, covering base objects (Commit/Tree/Blob/Tag) and delta objects (OffsetDelta/HashDelta/OffsetZstdelta—extension).
->>>>>>> ced2b6f (update readme)
 - Serialization: Each object’s `to_data` returns `<type><size>\0<body>`; `ObjectHash::to_string()` emits hex, `to_data()` returns raw bytes.
 
 ## Blob
