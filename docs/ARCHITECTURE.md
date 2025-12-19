@@ -105,7 +105,7 @@ Client ─pkt-line─▶ SmartProtocol
 
 ## Hashing & Compatibility
 
-- Default SHA1; switch to SHA256 via `set_hash_kind` (usually configured once upstream for the whole flow).
+- Default SHA-1; switch to SHA-256 via `set_hash_kind` (usually configured once upstream for the whole flow).
 - `ObjectHash::from_type_and_data` matches Git object header format `<type> <size>\0<data>`, used for pack/idx/signatures.
 - For tests, use `set_hash_kind_for_test` to temporarily switch hash algorithm; test isolation avoids cross-thread interference.
 
