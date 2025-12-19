@@ -1,20 +1,25 @@
 //! Decoder for Git-style delta instructions that rebuilds target objects from a base buffer and the
-//! instruction stream produced by `delta::encode`.
+//! instruction stream produced by `delta::encode` (base size + result size + op codes).
 
 use std::io::{ErrorKind, Read};
 
 use super::{errors::GitDeltaError, utils};
 
-const COPY_INSTRUCTION_FLAG: u8 = 1 << 7;
+const COPY_INSTRUCTION_FLAG: u8 = 1 << 7; // msb set => copy from base, otherwise inline data
 const COPY_OFFSET_BYTES: u8 = 4;
 const COPY_SIZE_BYTES: u8 = 3;
 const COPY_ZERO_SIZE: usize = 0x10000;
 
+/// Apply a delta stream to `base_info`, returning the reconstructed target bytes.
+/// The stream format matches Git's delta encoding (see `delta::encode`):
+/// - leading base size, then result size (varint)
+/// - sequence of ops: data instructions (msb=0, lower 7 bits = literal length) or copy instructions
+///   (msb=1, following bytes encode offset/size).
 pub fn delta_decode(
     mut stream: &mut impl Read,
     base_info: &[u8],
 ) -> Result<Vec<u8>, GitDeltaError> {
-    // Read the bash object size & Result Size
+    // Read declared base size and result size
     let base_size = utils::read_size_encoding(&mut stream).unwrap();
     if base_info.len() != base_size {
         return Err(GitDeltaError::DeltaDecoderError(
@@ -74,4 +79,37 @@ pub fn delta_decode(
     }
     assert!(buffer.len() == result_size);
     Ok(buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::delta_decode;
+    use crate::delta::{encode::DeltaDiff, errors::GitDeltaError};
+
+    #[test]
+    /// Delta encode + decode should round-trip to the new buffer.
+    fn round_trip_matches_source() {
+        let old = b"hello world";
+        let new = b"hello rust";
+        let delta = DeltaDiff::new(old, new).encode();
+
+        let mut cursor = Cursor::new(delta);
+        let decoded = delta_decode(&mut cursor, old).expect("decode");
+        assert_eq!(decoded, new);
+    }
+
+    #[test]
+    /// Mismatched base length should return a decoder error.
+    fn base_size_mismatch_returns_error() {
+        let old = b"abcde";
+        let new = b"abXYZ";
+        let delta = DeltaDiff::new(old, new).encode();
+
+        let mut cursor = Cursor::new(delta);
+        // Provide a base buffer with a different length to trigger size mismatch.
+        let err = delta_decode(&mut cursor, b"xx").unwrap_err();
+        assert!(matches!(err, GitDeltaError::DeltaDecoderError(_)));
+    }
 }

@@ -8,12 +8,14 @@ use diffs::myers;
 const DATA_INS_LEN: usize = 0x7f;
 const VAR_INT_ENCODING_BITS: u8 = 7;
 
+/// Delta operation kind: inline literal data or copy-from-base.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Optype {
     Data,
     Copy,
 }
 
+/// A single delta op: either copy `len` bytes from `begin` in base, or insert `len` bytes from `new_data`.
 #[derive(Debug, Clone, Copy)]
 struct DeltaOp {
     ins: Optype,
@@ -21,6 +23,7 @@ struct DeltaOp {
     len: usize,
 }
 
+/// Holds diff result and metadata (similarity stats) between two byte slices.
 #[derive(Debug)]
 pub struct DeltaDiff<'a> {
     ops: Vec<DeltaOp>,
@@ -31,8 +34,8 @@ pub struct DeltaDiff<'a> {
 }
 
 impl<'a> DeltaDiff<'a> {
-    /// Diff the two u8 array slice , Type should be same.
-    /// Return the DeltaDiff struct.
+    /// Build a delta plan between two byte slices using patience or Myers (feature gated),
+    /// collecting copy/insert operations and similarity stats.
     pub fn new(old_data: &'a [u8], new_data: &'a [u8]) -> Self {
         let mut delta_diff = DeltaDiff {
             ops: vec![],
@@ -69,20 +72,23 @@ impl<'a> DeltaDiff<'a> {
         delta_diff
     }
 
+    /// Encode as Git-style delta stream:
+    /// `[varint old_size][varint new_size][ops...]` where each op is either
+    /// - data (msb=0, lower 7 bits = literal length, followed by literal bytes)
+    /// - copy (msb=1, flag bits describe which offset/size bytes are present).
     pub fn encode(&self) -> Vec<u8> {
         let mut result: Vec<u8> = Vec::with_capacity(self.ops.len() * 30);
         result.append(&mut write_size_encoding(self.old_data.len()));
         result.append(&mut write_size_encoding(self.new_data.len()));
 
         for op in &self.ops {
-            result.append(&mut self.decode_op(op));
+            result.append(&mut self.encode_op(op));
         }
         result
     }
 
-    ///
-    /// Decode the DeltaOp to `Vec<u8>`
-    fn decode_op(&self, op: &DeltaOp) -> Vec<u8> {
+    /// Encode a single delta op to raw bytes.
+    fn encode_op(&self, op: &DeltaOp) -> Vec<u8> {
         let mut op_data = vec![];
 
         match op.ins {
@@ -124,6 +130,7 @@ impl<'a> DeltaDiff<'a> {
         op_data
     }
 
+    /// Return similarity rate (shared-bytes / new_data len), computed in `finish`.
     pub fn get_ssam_rate(&self) -> f64 {
         self.ssam_r
     }
@@ -207,6 +214,7 @@ impl Diff for DeltaDiff<'_> {
     }
 }
 
+/// Encode a usize as Git-style varint (7 bits per byte, msb=1 means continue).
 fn write_size_encoding(number: usize) -> Vec<u8> {
     let mut num = vec![];
     let mut number = number;
@@ -237,8 +245,9 @@ mod tests {
 
     use super::DeltaDiff;
     use crate::delta::decode::delta_decode;
+    /// Read and inflate a zlib-compressed file into raw bytes.
     fn read_zlib_data(path: &Path) -> Result<Vec<u8>, io::Error> {
-        // 打开文件进行读取
+        // open the file and create a buffered reader
         let file = File::open(path)?;
         let buf_reader = BufReader::new(file);
         let mut deflate = ZlibDecoder::new(buf_reader);
@@ -248,6 +257,7 @@ mod tests {
     }
 
     #[test]
+    /// End-to-end encode + decode over real zlib-compressed fixtures should reconstruct new data.
     fn test_delta_fn() {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/diff/16ecdcc8f663777896bd39ca025a041b7f005e");

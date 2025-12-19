@@ -16,7 +16,7 @@ mod utils;
 const SAMPLE_STEP: usize = 64;
 const MIN_DELTA_RATE: f64 = 0.5;
 
-/// approximate calculation delta rate to enhance efficiency
+/// Approximate match rate between two buffers using sampled hashing; returns 0.0 if early exit below threshold.
 #[allow(clippy::manual_div_ceil)]
 pub fn heuristic_encode_rate(old_data: &[u8], new_data: &[u8]) -> f64 {
     let old_len = old_data.len();
@@ -60,12 +60,14 @@ pub fn heuristic_encode_rate(old_data: &[u8], new_data: &[u8]) -> f64 {
     match_count as f64 / sample_count as f64
 }
 
+/// Hash a sample chunk for quick equality check (used by heuristic sampling).
 fn hash_chunk(chunk: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     chunk.hash(&mut hasher);
     hasher.finish()
 }
 
+/// Parallel heuristic match rate for large inputs; adjusts sample step size based on length.
 pub fn heuristic_encode_rate_parallel(old_data: &[u8], new_data: &[u8]) -> f64 {
     let old_len = old_data.len();
     let new_len = new_data.len();
@@ -100,11 +102,13 @@ pub fn heuristic_encode_rate_parallel(old_data: &[u8], new_data: &[u8]) -> f64 {
     if rate < MIN_DELTA_RATE { 0.0 } else { rate }
 }
 
+/// Compute a more accurate similarity rate by building a full delta (shared bytes / new_data len).
 pub fn encode_rate(old_data: &[u8], new_data: &[u8]) -> f64 {
     let differ = DeltaDiff::new(old_data, new_data);
     differ.get_ssam_rate()
 }
 
+/// Produce a Git-style delta instruction stream from two buffers.
 pub fn encode(old_data: &[u8], new_data: &[u8]) -> Vec<u8> {
     let differ = DeltaDiff::new(old_data, new_data);
     differ.encode()
@@ -115,6 +119,11 @@ mod tests {
     use super::{encode_rate, heuristic_encode_rate, heuristic_encode_rate_parallel};
 
     #[test]
+    /// Heuristic vs accurate rates on small strings and edge cases:
+    /// - identical buffers => 1.0
+    /// - minor edits => partial rate between (0.5,1.0)
+    /// - totally different => low rate
+    /// - empty/empty => 1.0; empty vs non-empty => 0.0.
     fn test_heuristic_encode_rate() {
         let data1 = b"hello world, this is a test for delta rate";
         let data2 = b"hello world, this is a test for delta rate";
@@ -148,6 +157,9 @@ mod tests {
     }
 
     #[test]
+    /// Heuristic rates on large buffers:
+    /// - completely different large slices should early-stop to 0
+    /// - partially different large slices: parallel heuristic vs accurate rate should be close.
     fn test_heuristic_encode_rate_large_files() {
         let data1 = vec![0u8; 100_000];
         let data2 = vec![1u8; 100_000];
