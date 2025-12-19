@@ -100,7 +100,7 @@ Client ─pkt-line─▶ SmartProtocol
 
 - **ThreadPool**: used during pack decode for inflate and delta rebuild to avoid single-thread bottlenecks.
 - **Tokio**: streaming decode (`decode_stream`) and async file writes (`encode_and_output_to_files`).
-- **Cache layer**: `Caches` combines LRU memory + disk spill; `mem_limit`’s 80% is used for object cache; `cache_objs_mem` tracks object heap usage.
+- **Cache layer**: `Caches` combines LRU memory + disk spill; 80% of the `mem_limit` is used for object cache; `cache_objs_mem` tracks object heap usage.
 - **Waitlist**: delta objects hang until base arrives, then are replayed.
 
 ## Hashing & Compatibility
