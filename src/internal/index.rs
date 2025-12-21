@@ -22,23 +22,27 @@ use crate::{
     utils::{self, HashAlgorithm},
 };
 
+/// POSIX time with seconds and nanoseconds
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Time {
     seconds: u32,
     nanos: u32,
 }
 impl Time {
+    /// Read Time from stream
     pub fn from_stream(stream: &mut impl Read) -> Result<Self, GitError> {
         let seconds = stream.read_u32::<BigEndian>()?;
         let nanos = stream.read_u32::<BigEndian>()?;
         Ok(Time { seconds, nanos })
     }
 
+    /// Convert to SystemTime
     #[allow(dead_code)]
     fn to_system_time(&self) -> SystemTime {
         UNIX_EPOCH + std::time::Duration::new(self.seconds.into(), self.nanos)
     }
 
+    /// Create Time from SystemTime
     pub fn from_system_time(system_time: SystemTime) -> Self {
         match system_time.duration_since(UNIX_EPOCH) {
             Ok(duration) => {
@@ -109,6 +113,7 @@ impl Flags {
     }
 }
 
+/// An entry in the Git index file.
 pub struct IndexEntry {
     pub ctime: Time,
     pub mtime: Time,
@@ -195,6 +200,7 @@ impl IndexEntry {
         Ok(index)
     }
 
+    /// Create IndexEntry from blob object
     pub fn new_from_blob(name: String, hash: ObjectHash, size: u32) -> Self {
         IndexEntry {
             ctime: Time {
@@ -550,8 +556,12 @@ impl Index {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
+
+    /// Test Time conversion
     #[test]
     fn test_time() {
         let time = Time {
@@ -563,6 +573,7 @@ mod tests {
         assert_eq!(time, new_time);
     }
 
+    /// Test Flags conversion
     #[test]
     fn test_check_header() {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -573,6 +584,7 @@ mod tests {
         assert_eq!(entries, 2);
     }
 
+    /// Test IndexEntry creation
     #[test]
     fn test_index() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -585,6 +597,8 @@ mod tests {
             println!("{entry}");
         }
     }
+
+    /// Test IndexEntry creation with SHA256
     #[test]
     fn test_index_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -598,6 +612,86 @@ mod tests {
         }
     }
 
+    /// Flags bit packing/unpacking covers all fields and enforces name length limit.
+    #[test]
+    fn flags_round_trip_and_length_limit() {
+        let mut flags = Flags {
+            assume_valid: true,
+            extended: true,
+            stage: 2,
+            name_length: 0x0ABC,
+        };
+        let packed: u16 = (&flags).try_into().expect("should pack");
+        let unpacked = Flags::from(packed);
+        assert_eq!(unpacked.assume_valid, flags.assume_valid);
+        assert_eq!(unpacked.extended, flags.extended);
+        assert_eq!(unpacked.stage, flags.stage);
+        assert_eq!(unpacked.name_length, flags.name_length);
+
+        flags.name_length = 0x1FFF;
+        let overflow: Result<u16, _> = (&flags).try_into();
+        assert!(overflow.is_err(), "length overflow should err");
+    }
+
+    /// IndexEntry::new_from_blob populates fields and sets flags length.
+    #[test]
+    fn index_entry_new_from_blob_populates_fields() {
+        let hash = ObjectHash::from_bytes(&[0u8; 20]).unwrap();
+        let entry = IndexEntry::new_from_blob("file.txt".to_string(), hash.clone(), 42);
+        assert_eq!(entry.name, "file.txt");
+        assert_eq!(entry.size, 42);
+        assert_eq!(entry.hash, hash);
+        assert_eq!(entry.flags.name_length, "file.txt".len() as u16);
+        assert_eq!(entry.mode, 0o100644);
+    }
+
+    /// Index container operations: add/get/tracked/dir helpers.
+    #[test]
+    fn index_add_and_query_helpers() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let mut index = Index::new();
+        let hash = ObjectHash::from_bytes(&[1u8; 20]).unwrap();
+        let entry = IndexEntry::new_from_blob("a/b.txt".to_string(), hash.clone(), 10);
+        index.add(entry);
+
+        // get finds stage-0 by name
+        let got = index.get("a/b.txt", 0).expect("entry exists");
+        assert_eq!(got.hash, hash);
+
+        // tracked_entries/files return stage-0 paths
+        let tracked = index.tracked_entries(0);
+        assert_eq!(tracked.len(), 1);
+        let files = index.tracked_files();
+        assert_eq!(files, vec![PathBuf::from("a/b.txt")]);
+
+        // contains_dir_file true for subpath, false for exact file
+        assert!(index.contains_dir_file("a"));
+        assert!(!index.contains_dir_file("a/b.txt"));
+
+        // remove_dir_files removes under dir and returns removed names
+        let removed = index.remove_dir_files("a");
+        assert_eq!(removed, vec!["a/b.txt".to_string()]);
+        assert!(index.get("a/b.txt", 0).is_none());
+    }
+
+    /// check_header should reject bad magic/versions and accept valid header.
+    #[test]
+    fn check_header_validation() {
+        // valid header: "DIRC" + version 2 + 0 entries
+        let mut valid = Cursor::new(b"DIRC\0\0\0\x02\0\0\0\0".to_vec());
+        let entries = Index::check_header(&mut valid).expect("valid header");
+        assert_eq!(entries, 0);
+
+        // bad magic
+        let mut bad_magic = Cursor::new(b"XXXX\0\0\0\x02\0\0\0\0".to_vec());
+        assert!(Index::check_header(&mut bad_magic).is_err());
+
+        // bad version
+        let mut bad_version = Cursor::new(b"DIRC\0\0\0\x01\0\0\0\0".to_vec());
+        assert!(Index::check_header(&mut bad_version).is_err());
+    }
+
+    /// Test saving Index to file
     #[test]
     fn test_index_to_file() {
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -609,6 +703,7 @@ mod tests {
         assert_eq!(index.size(), new_index.size());
     }
 
+    /// Test IndexEntry creation from file
     #[test]
     fn test_index_entry_create() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -621,6 +716,8 @@ mod tests {
         let entry = IndexEntry::new_from_file(file, hash, workdir).unwrap();
         println!("{entry}");
     }
+
+    /// Test IndexEntry creation from file with SHA256
     #[test]
     fn test_index_entry_create_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
