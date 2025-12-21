@@ -366,7 +366,7 @@ mod tests {
             tree::{Tree, TreeItem, TreeItemMode},
         },
     };
-
+    /// Dummy repository access for testing
     #[derive(Clone)]
     struct DummyRepoAccess;
 
@@ -409,19 +409,16 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_pack_roundtrip_encode_decode() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        // Create two Blob objects
+    /// Encode and decode a pack, asserting that all object IDs survive the roundtrip.
+    async fn run_pack_roundtrip(kind: HashKind) {
+        let _guard = set_hash_kind_for_test(kind);
         let blob1 = Blob::from_content("hello");
         let blob2 = Blob::from_content("world");
 
-        // Create a Tree containing two file items
         let item1 = TreeItem::new(TreeItemMode::Blob, blob1.id, "hello.txt".to_string());
         let item2 = TreeItem::new(TreeItemMode::Blob, blob2.id, "world.txt".to_string());
         let tree = Tree::from_tree_items(vec![item1, item2]).unwrap();
 
-        // Create a Commit pointing to the Tree
         let author = Signature::new(
             SignatureType::Author,
             "tester".to_string(),
@@ -434,7 +431,6 @@ mod tests {
         );
         let commit = Commit::new(author, committer, tree.id, vec![], "init commit");
 
-        // Generate pack stream
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
         PackGenerator::<DummyRepoAccess>::generate_pack_stream(
             (
@@ -451,9 +447,7 @@ mod tests {
         while let Some(chunk) = rx.recv().await {
             pack_bytes.extend_from_slice(&chunk);
         }
-        println!("Encoded pack size: {} bytes", pack_bytes.len());
 
-        // Unpack the pack stream
         let dummy = DummyRepoAccess;
         let generator = PackGenerator::new(&dummy);
         let (decoded_commits, decoded_trees, decoded_blobs) = generator
@@ -461,29 +455,6 @@ mod tests {
             .await
             .unwrap();
 
-        println!(
-            "Decoded commits: {:?}",
-            decoded_commits
-                .iter()
-                .map(|c| c.id.to_string())
-                .collect::<Vec<_>>()
-        );
-        println!(
-            "Decoded trees:   {:?}",
-            decoded_trees
-                .iter()
-                .map(|t| t.id.to_string())
-                .collect::<Vec<_>>()
-        );
-        println!(
-            "Decoded blobs:   {:?}",
-            decoded_blobs
-                .iter()
-                .map(|b| b.id.to_string())
-                .collect::<Vec<_>>()
-        );
-
-        // Verify object ID roundtrip consistency
         assert_eq!(decoded_commits.len(), 1);
         assert_eq!(decoded_trees.len(), 1);
         assert_eq!(decoded_blobs.len(), 2);
@@ -492,103 +463,19 @@ mod tests {
         assert_eq!(decoded_trees[0].id, tree.id);
 
         let mut orig_blob_ids = vec![blob1.id.to_string(), blob2.id.to_string()];
-        orig_blob_ids.sort();
+        orig_blob_ids.sort_unstable();
         let mut decoded_blob_ids = decoded_blobs
             .iter()
             .map(|b| b.id.to_string())
             .collect::<Vec<_>>();
-        decoded_blob_ids.sort();
+        decoded_blob_ids.sort_unstable();
         assert_eq!(orig_blob_ids, decoded_blob_ids);
     }
+
+    /// Pack encode/decode roundtrip using SHA-1 and SHA-256
     #[tokio::test]
-    async fn test_pack_roundtrip_encode_decode_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        // Create two Blob objects
-        let blob1 = Blob::from_content("hello");
-        let blob2 = Blob::from_content("world");
-
-        // Create a Tree containing two file items
-        let item1 = TreeItem::new(TreeItemMode::Blob, blob1.id, "hello.txt".to_string());
-        let item2 = TreeItem::new(TreeItemMode::Blob, blob2.id, "world.txt".to_string());
-        let tree = Tree::from_tree_items(vec![item1, item2]).unwrap();
-
-        // Create a Commit pointing to the Tree
-        let author = Signature::new(
-            SignatureType::Author,
-            "tester".to_string(),
-            "tester@example.com".to_string(),
-        );
-        let committer = Signature::new(
-            SignatureType::Committer,
-            "tester".to_string(),
-            "tester@example.com".to_string(),
-        );
-        let commit = Commit::new(author, committer, tree.id, vec![], "init commit");
-
-        // Generate pack stream
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-        PackGenerator::<DummyRepoAccess>::generate_pack_stream(
-            (
-                vec![commit.clone()],
-                vec![tree.clone()],
-                vec![blob1.clone(), blob2.clone()],
-            ),
-            tx,
-        )
-        .await
-        .unwrap();
-
-        let mut pack_bytes: Vec<u8> = Vec::new();
-        while let Some(chunk) = rx.recv().await {
-            pack_bytes.extend_from_slice(&chunk);
-        }
-        println!("Encoded pack size: {} bytes", pack_bytes.len());
-
-        // Unpack the pack stream
-        let dummy = DummyRepoAccess;
-        let generator = PackGenerator::new(&dummy);
-        let (decoded_commits, decoded_trees, decoded_blobs) = generator
-            .unpack_stream(Bytes::from(pack_bytes))
-            .await
-            .unwrap();
-
-        println!(
-            "Decoded commits: {:?}",
-            decoded_commits
-                .iter()
-                .map(|c| c.id.to_string())
-                .collect::<Vec<_>>()
-        );
-        println!(
-            "Decoded trees:   {:?}",
-            decoded_trees
-                .iter()
-                .map(|t| t.id.to_string())
-                .collect::<Vec<_>>()
-        );
-        println!(
-            "Decoded blobs:   {:?}",
-            decoded_blobs
-                .iter()
-                .map(|b| b.id.to_string())
-                .collect::<Vec<_>>()
-        );
-
-        // Verify object ID roundtrip consistency
-        assert_eq!(decoded_commits.len(), 1);
-        assert_eq!(decoded_trees.len(), 1);
-        assert_eq!(decoded_blobs.len(), 2);
-
-        assert_eq!(decoded_commits[0].id, commit.id);
-        assert_eq!(decoded_trees[0].id, tree.id);
-
-        let mut orig_blob_ids = vec![blob1.id.to_string(), blob2.id.to_string()];
-        orig_blob_ids.sort();
-        let mut decoded_blob_ids = decoded_blobs
-            .iter()
-            .map(|b| b.id.to_string())
-            .collect::<Vec<_>>();
-        decoded_blob_ids.sort();
-        assert_eq!(orig_blob_ids, decoded_blob_ids);
+    async fn test_pack_roundtrip_encode_decode() {
+        run_pack_roundtrip(HashKind::Sha1).await;
+        run_pack_roundtrip(HashKind::Sha256).await;
     }
 }

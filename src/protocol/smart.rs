@@ -43,6 +43,7 @@ where
     R: RepositoryAccess,
     A: AuthenticationService,
 {
+    /// Set the wire hash kind (sha1 or sha256)
     pub fn set_wire_hash_kind(&mut self, kind: HashKind) {
         self.wire_hash_kind = kind;
         self.zero_id = ObjectHash::zero_str(kind);
@@ -404,7 +405,7 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
     use futures;
     use tokio::sync::mpsc;
 
@@ -412,7 +413,7 @@ mod tests {
     use crate::protocol::types::RefCommand; // import sibling types
     use crate::protocol::utils; // import sibling module
     use crate::{
-        hash::{HashKind, set_hash_kind_for_test},
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::{
             metadata::{EntryMeta, MetaAttached},
             object::{
@@ -430,6 +431,7 @@ mod tests {
     type UpdateList = Vec<UpdateRecord>;
     type SharedUpdates = Arc<Mutex<UpdateList>>;
 
+    /// Test repository access implementation for testing
     #[derive(Clone)]
     struct TestRepoAccess {
         updates: SharedUpdates,
@@ -520,6 +522,7 @@ mod tests {
         }
     }
 
+    /// Test authentication service implementation for testing
     struct TestAuth;
 
     #[async_trait]
@@ -540,6 +543,7 @@ mod tests {
         }
     }
 
+    /// Receive-pack stream decodes the pack, updates refs, and reports status (SHA-1).
     #[tokio::test]
     async fn test_receive_pack_stream_status_report() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -651,6 +655,7 @@ mod tests {
         assert!(repo_access.post_hook_called());
     }
 
+    /// info-refs rejects SHA-256 wire format when repository refs are still SHA-1.
     #[tokio::test]
     async fn info_refs_rejects_sha256_with_sha1_refs() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1); // avoid thread-local contamination
@@ -669,5 +674,120 @@ mod tests {
             res.is_ok(),
             "expected SHA1 refs to be accepted when wire is SHA1"
         );
+    }
+
+    /// parse_capabilities should switch wire hash kind and record declared capabilities.
+    #[tokio::test]
+    async fn parse_capabilities_updates_hash_and_caps() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let repo_access = TestRepoAccess::new();
+        let auth = TestAuth;
+        let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access, auth);
+
+        smart.parse_capabilities("object-format=sha256 side-band-64k multi_ack");
+
+        assert_eq!(smart.wire_hash_kind, HashKind::Sha256);
+        assert_eq!(smart.zero_id.len(), HashKind::Sha256.hex_len());
+        assert!(
+            smart.capabilities.contains(&Capability::SideBand64k),
+            "side-band-64k should be recorded"
+        );
+    }
+
+    /// info-refs should accept SHA-256 refs and emit the matching object-format capability.
+    #[tokio::test]
+    async fn info_refs_accepts_sha256_refs_and_emits_capability() {
+        // Define a repo access that returns SHA-256 refs
+        #[derive(Clone)]
+        struct Sha256Repo;
+
+        #[async_trait]
+        impl RepositoryAccess for Sha256Repo {
+            async fn get_repository_refs(&self) -> Result<Vec<(String, String)>, ProtocolError> {
+                Ok(vec![
+                    (
+                        "HEAD".to_string(),
+                        "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                    ),
+                    (
+                        "refs/heads/main".to_string(),
+                        "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+                    ),
+                ])
+            }
+            async fn has_object(&self, _object_hash: &str) -> Result<bool, ProtocolError> {
+                Ok(true)
+            }
+            async fn get_object(&self, _object_hash: &str) -> Result<Vec<u8>, ProtocolError> {
+                Ok(vec![])
+            }
+            async fn store_pack_data(&self, _pack_data: &[u8]) -> Result<(), ProtocolError> {
+                Ok(())
+            }
+            async fn update_reference(
+                &self,
+                _ref_name: &str,
+                _old_hash: Option<&str>,
+                _new_hash: &str,
+            ) -> Result<(), ProtocolError> {
+                Ok(())
+            }
+            async fn get_objects_for_pack(
+                &self,
+                _wants: &[String],
+                _haves: &[String],
+            ) -> Result<Vec<String>, ProtocolError> {
+                Ok(vec![])
+            }
+            async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
+                Ok(false)
+            }
+            async fn post_receive_hook(&self) -> Result<(), ProtocolError> {
+                Ok(())
+            }
+        }
+
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let repo_access = Sha256Repo;
+        let auth = TestAuth;
+        let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access, auth);
+        smart.set_wire_hash_kind(HashKind::Sha256);
+
+        let resp = smart
+            .git_info_refs(ServiceType::UploadPack)
+            .await
+            .expect("sha256 refs should be accepted");
+        let resp_str = String::from_utf8(resp.to_vec()).expect("pkt-line should be valid UTF-8");
+        assert!(
+            resp_str.contains("object-format=sha256"),
+            "capability line should advertise sha256"
+        );
+    }
+
+    /// parse_receive_pack_commands should decode multiple pkt-lines into RefCommand list.
+    #[tokio::test]
+    async fn parse_receive_pack_commands_decodes_commands() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let repo_access = TestRepoAccess::new();
+        let auth = TestAuth;
+        let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access, auth);
+
+        let zero = ObjectHash::zero_str(HashKind::Sha1);
+        let mut pkt = BytesMut::new();
+        add_pkt_line_string(
+            &mut pkt,
+            format!("{zero} {zero} refs/heads/main\n"),
+        );
+        add_pkt_line_string(
+            &mut pkt,
+            format!("{zero} {zero} refs/tags/v1.0\n"),
+        );
+        pkt.put(&PKT_LINE_END_MARKER[..]);
+
+        smart.parse_receive_pack_commands(pkt.freeze());
+
+        assert_eq!(smart.command_list.len(), 2);
+        assert_eq!(smart.command_list[0].ref_name, "refs/heads/main");
+        assert_eq!(smart.command_list[1].ref_name, "refs/tags/v1.0");
     }
 }

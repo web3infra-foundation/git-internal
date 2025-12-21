@@ -275,6 +275,7 @@ pub enum SideBand {
 }
 
 impl SideBand {
+    /// Get the byte value associated with the side-band type
     pub fn value(&self) -> u8 {
         match self {
             Self::PackfileData => b'\x01',
@@ -310,6 +311,7 @@ pub struct RefCommand {
     pub error_message: Option<String>,
 }
 
+/// Status of a reference command
 #[derive(Debug, Clone)]
 pub enum CommandStatus {
     Pending,
@@ -318,6 +320,7 @@ pub enum CommandStatus {
 }
 
 impl RefCommand {
+    /// Create a new reference command
     pub fn new(old_hash: String, new_hash: String, ref_name: String) -> Self {
         // Determine ref type based on ref name
         let ref_type = if ref_name.starts_with("refs/tags/") {
@@ -337,16 +340,19 @@ impl RefCommand {
         }
     }
 
+    /// Mark the command as failed with an error message
     pub fn failed(&mut self, error: String) {
         self.status = CommandStatus::Failed;
         self.error_message = Some(error);
     }
 
+    /// Mark the command as successful
     pub fn success(&mut self) {
         self.status = CommandStatus::Success;
         self.error_message = None;
     }
 
+    /// Get the status string for the command
     pub fn get_status(&self) -> String {
         match &self.status {
             CommandStatus::Success => format!("ok {}", self.ref_name),
@@ -359,6 +365,7 @@ impl RefCommand {
     }
 }
 
+/// Command types for reference updates
 #[derive(Debug, PartialEq, Clone)]
 pub enum CommandType {
     Create,
@@ -377,3 +384,76 @@ pub const RECEIVE_CAP_LIST: &str =
     "report-status report-status-v2 delete-refs quiet atomic no-thin ";
 pub const COMMON_CAP_LIST: &str = "side-band-64k ofs-delta agent=git-internal/0.1.0";
 pub const UPLOAD_CAP_LIST: &str = "multi_ack_detailed no-done include-tag ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ServiceType parsing should accept known services and reject unknown.
+    #[test]
+    fn service_type_from_str() {
+        assert_eq!(
+            ServiceType::from_str("git-upload-pack").unwrap(),
+            ServiceType::UploadPack
+        );
+        assert_eq!(
+            ServiceType::from_str("git-receive-pack").unwrap(),
+            ServiceType::ReceivePack
+        );
+        assert!(ServiceType::from_str("git-upload-archive").is_err());
+    }
+
+    /// Capability simple flags should round-trip Display -> FromStr.
+    #[test]
+    fn capability_round_trip_simple() {
+        for cap in [
+            Capability::SideBand,
+            Capability::SideBand64k,
+            Capability::MultiAck,
+            Capability::ReportStatus,
+        ] {
+            let s = cap.to_string();
+            let parsed = Capability::from_str(&s).expect("should parse");
+            assert_eq!(parsed, cap);
+        }
+    }
+
+    /// Parameterized capabilities should preserve their payload strings.
+    #[test]
+    fn capability_parsing_parameterized() {
+        let agent = Capability::from_str("agent=git/2.41").unwrap();
+        assert_eq!(agent, Capability::Agent("git/2.41".to_string()));
+
+        let fmt = Capability::from_str("object-format=sha256").unwrap();
+        assert_eq!(fmt, Capability::ObjectFormat("sha256".to_string()));
+
+        let unknown = Capability::from_str("custom-cap").unwrap();
+        assert_eq!(unknown, Capability::Unknown("custom-cap".to_string()));
+    }
+
+    /// SideBand variants should map to the expected byte tags.
+    #[test]
+    fn sideband_values() {
+        assert_eq!(SideBand::PackfileData.value(), b'\x01');
+        assert_eq!(SideBand::ProgressInfo.value(), b'\x02');
+        assert_eq!(SideBand::Error.value(), b'\x03');
+    }
+
+    /// RefCommand should infer ref type and expose status strings.
+    #[test]
+    fn ref_command_defaults_and_status() {
+        let mut cmd = RefCommand::new(
+            "old".to_string(),
+            "new".to_string(),
+            "refs/tags/v1.0".to_string(),
+        );
+        assert_eq!(cmd.ref_type, RefTypeEnum::Tag);
+        assert_eq!(cmd.get_status(), "ok refs/tags/v1.0");
+
+        cmd.failed("boom".to_string());
+        assert_eq!(cmd.get_status(), "ng refs/tags/v1.0 boom");
+
+        cmd.success();
+        assert_eq!(cmd.get_status(), "ok refs/tags/v1.0");
+    }
+}

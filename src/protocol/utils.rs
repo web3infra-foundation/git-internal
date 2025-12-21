@@ -93,6 +93,9 @@ pub fn read_until_white_space(bytes: &mut Bytes) -> String {
     }
 }
 
+/// Build a smart reply packet line stream
+/// 
+/// This is the original simple implementation from ceres
 pub fn build_smart_reply(
     transport_protocol: TransportProtocol,
     ref_list: &[String],

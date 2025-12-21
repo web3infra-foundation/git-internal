@@ -270,3 +270,129 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
         Ok(Box::pin(futures::stream::once(async { Ok(result_bytes) })))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::types::TransportProtocol;
+    use async_trait::async_trait;
+    use crate::hash::HashKind;
+    
+    /// Simple mock repository that serves fixed refs and echoes wants.
+    #[derive(Clone)]
+    struct MockRepo {
+        refs: Vec<(String, String)>,
+    }
+
+    #[async_trait]
+    impl RepositoryAccess for MockRepo {
+        async fn get_repository_refs(&self) -> Result<Vec<(String, String)>, ProtocolError> {
+            Ok(self.refs.clone())
+        }
+        async fn has_object(&self, _object_hash: &str) -> Result<bool, ProtocolError> {
+            Ok(false)
+        }
+        async fn get_object(&self, _object_hash: &str) -> Result<Vec<u8>, ProtocolError> {
+            Ok(Vec::new())
+        }
+        async fn store_pack_data(&self, _pack_data: &[u8]) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+        async fn update_reference(
+            &self,
+            _ref_name: &str,
+            _old_hash: Option<&str>,
+            _new_hash: &str,
+        ) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+        async fn get_objects_for_pack(
+            &self,
+            wants: &[String],
+            _haves: &[String],
+        ) -> Result<Vec<String>, ProtocolError> {
+            Ok(wants.to_vec())
+        }
+        async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
+            Ok(false)
+        }
+        async fn post_receive_hook(&self) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+    }
+
+    /// No-op auth service for tests.
+    struct MockAuth;
+    #[async_trait]
+    impl AuthenticationService for MockAuth {
+        async fn authenticate_http(
+            &self,
+            _headers: &std::collections::HashMap<String, String>,
+        ) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+        async fn authenticate_ssh(
+            &self,
+            _username: &str,
+            _public_key: &[u8],
+        ) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+    }
+
+    /// Convenience builder for GitProtocol with mock repo/auth.
+    fn make_protocol() -> GitProtocol<MockRepo, MockAuth> {
+        GitProtocol::new(
+            MockRepo {
+                refs: vec![
+                    ("refs/heads/main".to_string(), ObjectHash::default().to_string()),
+                    ("HEAD".to_string(), ObjectHash::default().to_string()),
+                ],
+            },
+            MockAuth,
+        )
+    }
+
+    /// info_refs should include refs, capabilities, and object-format.
+    #[tokio::test]
+    async fn info_refs_includes_refs_and_caps() {
+        let proto = make_protocol();
+        let bytes = proto.info_refs("git-upload-pack").await.expect("info_refs");
+        let text = String::from_utf8(bytes).expect("utf8");
+        assert!(text.contains("refs/heads/main"));
+        assert!(text.contains("capabilities"));
+        assert!(text.contains("object-format"));
+    }
+
+    /// Invalid service name should return InvalidService.
+    #[tokio::test]
+    async fn info_refs_invalid_service_errors() {
+        let proto = make_protocol();
+        let err = proto.info_refs("git-invalid").await.unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidService(_)));
+    }
+
+    /// Ensure set_transport can switch protocols without panic.
+    #[tokio::test]
+    async fn can_switch_transport() {
+        let mut proto = make_protocol();
+        proto.set_transport(TransportProtocol::Ssh);
+        // if set_transport did not panic, we consider this path covered
+    }
+
+    /// Wire hash kind expects SHA1 length; providing SHA256 refs should error.
+    #[tokio::test]
+    async fn info_refs_hash_length_mismatch_errors() {
+        let proto = GitProtocol::new(
+            MockRepo {
+                refs: vec![(
+                    "refs/heads/main".to_string(),
+                    "f".repeat(HashKind::Sha256.hex_len()),
+                )],
+            },
+            MockAuth,
+        );
+        let err = proto.info_refs("git-upload-pack").await.unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidRequest(_)));
+    }
+}
