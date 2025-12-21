@@ -1,8 +1,8 @@
 //! Integration tests that decode fixture packs, rebuild their `.idx` files, and assert offsets match
 //! the originals for both SHA-1 and SHA-256 object formats.
 
-use std::collections::HashMap;
 use std::{
+    collections::HashMap,
     convert::TryInto,
     fs,
     io::BufReader,

@@ -86,7 +86,7 @@ pub enum GitError {
     #[error("IO Error: {0}")]
     IOError(#[from] std::io::Error),
 
-    /// Invalid SHA1 hash formatting or value.
+    /// Invalid SHA1/SHA256 hash formatting or value.
     #[error("The {0} is not a valid Hash value ")]
     InvalidHashValue(String),
 

@@ -194,11 +194,11 @@ impl TreeItem {
     /// ```rust
     /// use std::str::FromStr;
     /// use git_internal::internal::object::tree::{TreeItem, TreeItemMode};
-    /// use git_internal::hash::SHA1;
+    /// use git_internal::hash::ObjectHash;
     ///
     /// let tree_item = TreeItem::new(
     ///     TreeItemMode::Blob,
-    ///     SHA1::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
+    ///     ObjectHash::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
     ///     "hello-world".to_string(),
     /// );
     ///

@@ -12,9 +12,9 @@ use similar::{Algorithm, ChangeTag, TextDiff};
 
 use crate::hash::ObjectHash;
 
-/// This struct is returned by diff operations and contains:
-/// - `path`: The file path being diffed.
-/// - `data`: The complete unified diff output string for that file, or a large-file marker if the file is too large to diff.
+/// Result item for a single file diff:
+/// - `path`: logical file path
+/// - `data`: unified diff text or a large-file marker
 #[derive(Debug, Clone)]
 pub struct DiffItem {
     /// The file path being diffed.
@@ -23,6 +23,7 @@ pub struct DiffItem {
     pub data: String,
 }
 
+/// Unified diff generator and helpers.
 pub struct Diff;
 
 /// Diff line operation types primarily used by blame computation to map parent/child lines.
@@ -33,6 +34,7 @@ pub enum DiffOperation {
     Equal { old_line: usize, new_line: usize },
 }
 
+/// Internal representation of diff lines used while assembling unified hunks.
 #[derive(Debug, Clone, Copy)]
 enum EditLine<'a> {
     // old_line, new_line, text
@@ -44,6 +46,7 @@ enum EditLine<'a> {
 }
 
 impl Diff {
+    /// Compute Myers line-level operations (equal/insert/delete) for blame/line mapping.
     fn compute_line_operations(old_lines: &[String], new_lines: &[String]) -> Vec<DiffOperation> {
         if old_lines.is_empty() && new_lines.is_empty() {
             return Vec::new();
@@ -153,7 +156,7 @@ impl Diff {
         }
     }
 
-    /// Build maps, union file set, and apply filter/path checks
+    /// Build maps, union file set, and apply filter/path checks.
     fn prepare_diff_data(
         old_blobs: Vec<(PathBuf, ObjectHash)>,
         new_blobs: Vec<(PathBuf, ObjectHash)>,
@@ -181,6 +184,7 @@ impl Diff {
         (processed_files, old_blobs_map, new_blobs_map)
     }
 
+    /// Filter by path and hash equality; only process differing or unmatched files.
     fn should_process(
         file: &PathBuf,
         filter: &[PathBuf],
@@ -198,12 +202,14 @@ impl Diff {
         old_blobs.get(file) != new_blobs.get(file)
     }
 
+    /// Check whether `path` is under `parent` (absolutized).
     fn sub_of(path: &PathBuf, parent: &PathBuf) -> Result<bool, std::io::Error> {
         let path_abs: PathBuf = path.absolutize()?.to_path_buf();
         let parent_abs: PathBuf = parent.absolutize()?.to_path_buf();
         Ok(path_abs.starts_with(parent_abs))
     }
 
+    /// Shorten hash to 7 chars for diff headers; return zeros if missing.
     fn short_hash(hash: Option<&ObjectHash>) -> String {
         hash.map(|h| {
             let hex = h.to_string();
@@ -493,6 +499,7 @@ mod tests {
     use super::{Diff, DiffOperation, compute_diff};
     use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 
+    /// Helper: run our diff on in-memory blobs and return diff text plus their hashes.
     fn run_diff(
         logical_path: &str,
         old_bytes: &[u8],
@@ -519,10 +526,12 @@ mod tests {
         (diff, old_hash, new_hash)
     }
 
+    /// Helper: shorten hash to 7 chars for diff header normalization.
     fn short_hash(hash: &ObjectHash) -> String {
         hash.to_string().chars().take(7).collect()
     }
 
+    /// Helper: run `git diff --no-index` on temp files and normalize headers for comparison.
     fn normalized_git_diff(
         logical_path: &str,
         old_bytes: &[u8],
@@ -575,6 +584,7 @@ mod tests {
         Some(normalized.join("\n") + "\n")
     }
 
+    /// Basic text diff should include headers and expected +/- markers.
     #[test]
     fn unified_diff_basic_changes() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -592,6 +602,7 @@ mod tests {
         assert!(diff.contains("+d"));
     }
 
+    /// Non-text inputs should yield a binary files notice.
     #[test]
     fn binary_files_detection() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -601,6 +612,7 @@ mod tests {
         assert!(diff.contains("Binary files differ"));
     }
 
+    /// Fixture diff should match git's inserted/deleted lines.
     #[test]
     fn diff_matches_git_for_fixture() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256); //use it to test SHA1/SHA-256 diffs as well
@@ -642,6 +654,7 @@ mod tests {
         );
     }
 
+    /// Large input should still match git's inserted/deleted sets.
     #[test]
     fn diff_matches_git_for_large_change() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -685,6 +698,7 @@ mod tests {
         assert_eq!(ours_ins, git_ins, "inserted lines differ from git output");
     }
 
+    /// Line mapping operations should match expected Equal/Delete/Insert sequence.
     #[test]
     fn compute_diff_operations_basic_mapping() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);

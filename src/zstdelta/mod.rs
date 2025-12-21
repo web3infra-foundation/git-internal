@@ -152,12 +152,14 @@ mod tests {
 
     use super::*;
 
+    /// Helper: diff/apply round-trip for a given base/data pair.
     fn check_round_trip(base: &[u8], data: &[u8]) -> bool {
         let delta = diff(base, data).expect("delta");
         let reconstructed = apply(base, &delta).expect("apply");
         reconstructed[..] == data[..]
     }
 
+    /// Deterministic round-trip cases (empty, shrink, grow) to ensure zstd delta apply works.
     #[test]
     fn test_round_trip_manual() {
         assert!(check_round_trip(b"", b""));
@@ -167,6 +169,7 @@ mod tests {
         assert!(check_round_trip(b"3", b"1234567890"));
     }
 
+    /// Efficiency smoke test: random 1MB base with few byte flips should produce a small delta.
     #[test]
     fn test_delta_efficiency() {
         // 1 MB incompressible random data
@@ -185,6 +188,7 @@ mod tests {
     }
 
     quickcheck! {
+        /// Property test: for arbitrary inputs, diff/apply should round-trip.
         fn test_round_trip_quickcheck(a: Vec<u8>, b: Vec<u8>) -> bool {
             check_round_trip(&a, &b)
         }
