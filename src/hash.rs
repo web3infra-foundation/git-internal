@@ -1,7 +1,6 @@
-//! In Git, the SHA-1 hash algorithm is widely used to generate unique identifiers for Git objects.
-//! Each Git object corresponds to a unique SHA-1 hash value, which is used to identify the object's
-//! location in the Git internal and mega database.
-//!
+//! Hash utilities for Git objects with selectable algorithms (SHA-1 and SHA-256).
+//! Hash kind is stored thread-locally; set once at startup to match your repository format.
+//! Defaults to SHA-1.
 
 use std::{cell::RefCell, fmt::Display, hash::Hash, io, str::FromStr};
 
@@ -11,14 +10,10 @@ use serde::{Deserialize, Serialize};
 use sha1::Digest;
 
 use crate::internal::object::types::ObjectType;
-pub type SHA1 = ObjectHash;
-/// The [`SHA1`] struct, encapsulating a `[u8; 20]` array, is specifically designed to represent Git hash IDs.
-/// In Git's context, these IDs are 40-character hexadecimal strings generated via the SHA-1 algorithm.
-/// Each Git object receives a unique hash ID based on its content, serving as an identifier for its location
-/// within the Git internal database. Utilizing a dedicated struct for these hash IDs enhances code readability and
-/// maintainability by providing a clear, structured format for their manipulation and storage.
-///
-/// The [`HashKind`] enum represents different types of hash algorithms supported in Git,
+
+/// Supported hash algorithms for object IDs (selector only, no data attached).
+/// Used to configure which hash algorithm to use globally (thread-local).
+/// Defaults to SHA-1.
 #[derive(
     Clone,
     Copy,
@@ -39,8 +34,8 @@ pub enum HashKind {
     Sha1,
     Sha256,
 }
-/// Implementation of methods for the [`HashKind`] enum.
 impl HashKind {
+    /// Byte length of the hash output.
     pub const fn size(&self) -> usize {
         match self {
             HashKind::Sha1 => 20,
@@ -48,12 +43,14 @@ impl HashKind {
             // Add more hash kinds here as needed
         }
     }
+    /// Hex string length of the hash output.
     pub const fn hex_len(&self) -> usize {
         match self {
             HashKind::Sha1 => 40,
             HashKind::Sha256 => 64,
         }
     }
+    /// Lowercase name of the hash algorithm.
     pub const fn as_str(&self) -> &'static str {
         match self {
             HashKind::Sha1 => "sha1",
@@ -81,6 +78,9 @@ impl std::str::FromStr for HashKind {
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, Encode, Decode,
 )]
+/// Concrete object ID value carrying the bytes for the selected algorithm (SHA-1 or SHA-256).
+/// Used for Git object hashes.
+/// Supports conversion to/from hex strings, byte slices, and stream reading.
 pub enum ObjectHash {
     Sha1([u8; 20]),
     Sha256([u8; 32]),
@@ -103,12 +103,7 @@ impl AsRef<[u8]> for ObjectHash {
         }
     }
 }
-/// Implementation of the [`std::str::FromStr`] trait for the [`ObjectHash`] enum.
-/// To effectively use the `from_str` method for converting a string to an `ObjectHash` object, consider the following:
-///   1. The input string `s` should be a pre-calculated hexadecimal string, either 40 characters in length for SHA1 or 64 characters for SHA256.
-///      This string represents a hash and should conform to the standard hash format.
-///   2. It is necessary to explicitly import the `FromStr` trait to utilize the `from_str` method. Include the import
-///      statement `use std::str::FromStr;` in your code before invoking the `from_str` function. This import ensures
+/// Parse hex (40 for SHA1, 64 for SHA-256) into `ObjectHash`.
 impl FromStr for ObjectHash {
     type Err = String;
 
@@ -131,22 +126,8 @@ impl FromStr for ObjectHash {
     }
 }
 
-/// Implementation of methods for the [`ObjectHash`] enum.
-/// 1. The `kind` method determines the type of hash (SHA1 or SHA256) based on the variant of the `ObjectHash` enum.
-/// 2. The `size` method returns the size of the hash in bytes, utilizing the `kind` method to determine the appropriate size.
-/// 3. The `new` method computes the hash of the provided data using the specified hash kind (SHA1 or SHA256) and returns
-///    an `ObjectHash` instance containing the computed hash.
-/// 4. `from` Prefix:Methods to create an `ObjectHash` from different sources:
-///   - `from_type_and_data`: Constructs an `ObjectHash` from an object type and its associated data.
-///  - `from_bytes`: Creates an `ObjectHash` from a byte slice, ensuring the length matches the expected hash size.
-/// - `from_stream`: Reads bytes from a stream to create an `ObjectHash`, ensuring the correct number of bytes are read based on the hash kind.
-/// 5. `to` Prefix:Methods to convert an `ObjectHash` to different formats:
-///  - `to_color_str`: Converts the hash to a colored string representation for display purposes
-/// - `to_data`: Converts the hash to a byte vector.
-/// - `_to_string`: Converts the hash to a hexadecimal string representation.
-///
 impl ObjectHash {
-    /// returns a zeroed hash value for the given hash kind
+    /// Zero-filled hex string for a given hash kind.
     pub fn zero_str(kind: HashKind) -> String {
         match kind {
             HashKind::Sha1 => "0000000000000000000000000000000000000000".to_string(),
@@ -156,19 +137,19 @@ impl ObjectHash {
         }
     }
 
-    /// returns the kind of hash
+    /// Return the hash kind for this value.
     pub fn kind(&self) -> HashKind {
         match self {
             ObjectHash::Sha1(_) => HashKind::Sha1,
             ObjectHash::Sha256(_) => HashKind::Sha256,
         }
     }
-    /// returns the size of hash in bytes
+    /// Return the hash size in bytes.
     pub fn size(&self) -> usize {
         self.kind().size()
     }
 
-    /// Calculates the hash of the given data using the specified hash kind.
+    /// Compute hash of data using current thread-local `HashKind`.
     pub fn new(data: &[u8]) -> ObjectHash {
         match get_hash_kind() {
             HashKind::Sha1 => {
@@ -195,7 +176,7 @@ impl ObjectHash {
         d.extend(data);
         ObjectHash::new(&d)
     }
-    /// Create ObjectHash from a byte slice
+    /// Create `ObjectHash` from raw bytes matching the current hash size.
     pub fn from_bytes(bytes: &[u8]) -> Result<ObjectHash, String> {
         let expected_len = get_hash_kind().size();
         if bytes.len() != expected_len {
@@ -219,7 +200,7 @@ impl ObjectHash {
             }
         }
     }
-    /// Create ObjectHash from a stream
+    /// Read hash bytes from a stream according to current hash size.
     pub fn from_stream(data: &mut impl io::Read) -> io::Result<ObjectHash> {
         match get_hash_kind() {
             HashKind::Sha1 => {
@@ -235,23 +216,22 @@ impl ObjectHash {
         }
     }
 
-    /// Export sha1 value to String with the color
+    /// Format hash as colored string (for terminal display).
     pub fn to_color_str(self) -> String {
         self.to_string().red().bold().to_string()
     }
 
-    /// Export sha1 value to a byte array
+    /// Return raw bytes of the hash.
     pub fn to_data(self) -> Vec<u8> {
         self.as_ref().to_vec()
     }
 
-    /// [`core::fmt::Display`] is somewhat expensive,
-    /// use this hack to get a string more efficiently
+    /// Faster string conversion than `Display`.
     pub fn _to_string(&self) -> String {
         hex::encode(self.as_ref())
     }
 
-    /// Get mutable hash as byte slice
+    /// Get mutable access to inner byte slice.
     pub fn as_mut_bytes(&mut self) -> &mut [u8] {
         match self {
             ObjectHash::Sha1(bytes) => bytes.as_mut_slice(),
@@ -265,6 +245,7 @@ thread_local! {
     /// without interfering with each other.
     static CURRENT_HASH_KIND: RefCell<HashKind> = RefCell::new(HashKind::default());
 }
+/// Set the thread-local hash kind (configure once at startup to match repo format).
 pub fn set_hash_kind(kind: HashKind) {
     CURRENT_HASH_KIND.with(|h| {
         *h.borrow_mut() = kind;
@@ -303,6 +284,7 @@ mod tests {
 
     use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 
+    /// Hashing "Hello, world!" with SHA1 should match known value.
     #[test]
     fn test_sha1_new() {
         // Set hash kind to SHA1 for this test
@@ -318,6 +300,8 @@ mod tests {
 
         assert_eq!(sha1.to_string(), expected_sha1_hash);
     }
+
+    /// Hashing "Hello, world!" with SHA256 should match known value.
     #[test]
     fn test_sha256_new() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -328,6 +312,7 @@ mod tests {
         assert_eq!(sha256.to_string(), expected_sha256_hash);
     }
 
+    /// Read pack trailer for SHA1 pack should yield SHA1 hash.
     #[test]
     fn test_signature_without_delta() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -343,6 +328,8 @@ mod tests {
         let signature = ObjectHash::from_bytes(buffer.as_ref()).unwrap();
         assert_eq!(signature.kind(), HashKind::Sha1);
     }
+
+    /// Read pack trailer for SHA256 pack should yield SHA256 hash.
     #[test]
     fn test_signature_without_delta_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -359,6 +346,7 @@ mod tests {
         assert_eq!(signature.kind(), HashKind::Sha256);
     }
 
+    /// Construct SHA1 from raw bytes.
     #[test]
     fn test_sha1_from_bytes() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -370,6 +358,8 @@ mod tests {
 
         assert_eq!(sha1.to_string(), "8ab686eafeb1f44702738c8b0f24f2567c36da6d");
     }
+
+    /// Construct SHA256 from raw bytes.
     #[test]
     fn test_sha256_from_bytes() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -387,6 +377,7 @@ mod tests {
         );
     }
 
+    /// Read hash from stream for SHA1.
     #[test]
     fn test_from_stream() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -398,6 +389,8 @@ mod tests {
         let sha1 = ObjectHash::from_stream(&mut reader).unwrap();
         assert_eq!(sha1.to_string(), "8ab686eafeb1f44702738c8b0f24f2567c36da6d");
     }
+
+    /// Read hash from stream for SHA256.
     #[test]
     fn test_sha256_from_stream() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -413,6 +406,8 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
+
+    /// Parse SHA1 from hex string.
     #[test]
     fn test_sha1_from_str() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -425,6 +420,8 @@ mod tests {
             Err(e) => println!("Error: {e}"),
         }
     }
+
+    /// Parse SHA256 from hex string.
     #[test]
     fn test_sha256_from_str() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -440,6 +437,8 @@ mod tests {
             Err(e) => println!("Error: {e}"),
         }
     }
+
+    /// SHA1 to_string should round-trip.
     #[test]
     fn test_sha1_to_string() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -452,6 +451,8 @@ mod tests {
             Err(e) => println!("Error: {e}"),
         }
     }
+
+    /// SHA256 to_string should round-trip.
     #[test]
     fn test_sha256_to_string() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
@@ -466,6 +467,8 @@ mod tests {
             Err(e) => println!("Error: {e}"),
         }
     }
+
+    /// SHA1 to_data should produce expected bytes.
     #[test]
     fn test_sha1_to_data() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -484,6 +487,8 @@ mod tests {
             Err(e) => println!("Error: {e}"),
         }
     }
+
+    /// SHA256 to_data should produce expected bytes.
     #[test]
     fn test_sha256_to_data() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);

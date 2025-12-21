@@ -2,8 +2,10 @@
 //! helpers for authenticating connections, parsing SSH commands, and serving upload/receive-pack
 //! requests over interactive channels.
 
-use super::core::{AuthenticationService, GitProtocol, RepositoryAccess};
-use super::types::{ProtocolError, ProtocolStream};
+use super::{
+    core::{AuthenticationService, GitProtocol, RepositoryAccess},
+    types::{ProtocolError, ProtocolStream},
+};
 
 /// SSH Git protocol handler
 pub struct SshGitHandler<R: RepositoryAccess, A: AuthenticationService> {

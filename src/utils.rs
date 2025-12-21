@@ -9,12 +9,14 @@ use std::{
 use sha1::{Digest, Sha1};
 
 use crate::hash::{HashKind, ObjectHash, get_hash_kind};
+/// Read exactly `len` bytes from the given reader.
 pub fn read_bytes(file: &mut impl Read, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = vec![0; len];
     file.read_exact(&mut buf)?;
     Ok(buf)
 }
 
+/// Read an object hash from the given reader.
 pub fn read_sha(file: &mut impl Read) -> io::Result<ObjectHash> {
     ObjectHash::from_stream(file)
 }
@@ -37,6 +39,8 @@ impl<R> CountingReader<R> {
 }
 
 impl<R: Read> Read for CountingReader<R> {
+    /// Reads data into the provided buffer, updating the byte count.
+    /// Returns the number of bytes read.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.bytes_read += n as u64;
@@ -45,10 +49,15 @@ impl<R: Read> Read for CountingReader<R> {
 }
 
 impl<R: BufRead> BufRead for CountingReader<R> {
+    /// Fills the internal buffer and returns a slice to it.
+    /// Updates the byte count.
+    /// Returns the number of bytes read.
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         self.inner.fill_buf()
     }
 
+    /// Consumes `amt` bytes from the internal buffer, updating the byte count.
+    /// Returns the number of bytes consumed.
     fn consume(&mut self, amt: usize) {
         self.bytes_read += amt as u64;
         self.inner.consume(amt);
@@ -78,6 +87,7 @@ impl HashAlgorithm {
             HashAlgorithm::Sha256(hasher) => hasher.finalize().to_vec(),
         }
     }
+    /// Create a new hash algorithm instance based on the current hash kind.
     pub fn new() -> Self {
         match get_hash_kind() {
             HashKind::Sha1 => HashAlgorithm::Sha1(Sha1::new()),
