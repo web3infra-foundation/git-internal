@@ -250,6 +250,7 @@ impl Display for Tree {
 }
 
 impl Tree {
+    /// Create a new Tree from a list of TreeItems
     pub fn from_tree_items(tree_items: Vec<TreeItem>) -> Result<Self, GitError> {
         if tree_items.is_empty() {
             return Err(GitError::EmptyTreeItems(
@@ -350,192 +351,78 @@ mod tests {
         internal::object::tree::{Tree, TreeItem, TreeItemMode},
     };
 
-    #[test]
-    fn test_tree_item_new() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let tree_item = TreeItem::new(
+    /// Helper: roundtrip a single TreeItem under a given hash kind.
+    fn tree_item_round_trip(kind: HashKind, id_hex: &str) {
+        let _guard = set_hash_kind_for_test(kind);
+        let item = TreeItem::new(
             TreeItemMode::Blob,
-            ObjectHash::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
+            ObjectHash::from_str(id_hex).unwrap(),
             "hello-world".to_string(),
         );
 
-        assert_eq!(tree_item.mode, TreeItemMode::Blob);
-        assert_eq!(
-            tree_item.id.to_string(),
-            "8ab686eafeb1f44702738c8b0f24f2567c36da6d"
-        );
-    }
-    #[test]
-    fn test_tree_item_new_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let tree_item = TreeItem::new(
-            TreeItemMode::Blob,
-            ObjectHash::from_str(
-                "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
-            )
-            .unwrap(),
-            "hello-world".to_string(),
-        );
+        let bytes = item.to_data();
+        let parsed = TreeItem::from_bytes(&bytes).unwrap();
 
-        assert_eq!(tree_item.mode, TreeItemMode::Blob);
-        assert_eq!(
-            tree_item.id.to_string(),
-            "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4"
-        );
-        assert_eq!(tree_item.name, "hello-world");
+        assert_eq!(parsed.mode, TreeItemMode::Blob);
+        assert_eq!(parsed.id, item.id);
+        assert_eq!(parsed.name, item.name);
     }
 
+    /// TreeItem new/to_data/from_bytes roundtrip with SHA-1.
     #[test]
-    fn test_tree_item_to_bytes() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let tree_item = TreeItem::new(
-            TreeItemMode::Blob,
-            ObjectHash::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
-            "hello-world".to_string(),
-        );
-
-        let bytes = tree_item.to_data();
-        assert_eq!(
-            bytes,
-            vec![
-                49, 48, 48, 54, 52, 52, 32, 104, 101, 108, 108, 111, 45, 119, 111, 114, 108, 100,
-                0, 138, 182, 134, 234, 254, 177, 244, 71, 2, 115, 140, 139, 15, 36, 242, 86, 124,
-                54, 218, 109
-            ]
-        );
+    fn tree_item_round_trip_sha1() {
+        tree_item_round_trip(HashKind::Sha1, "8ab686eafeb1f44702738c8b0f24f2567c36da6d");
     }
+
+    /// TreeItem new/to_data/from_bytes roundtrip with SHA-256.
     #[test]
-    fn test_tree_item_to_bytes_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let tree_item = TreeItem::new(
-            TreeItemMode::Blob,
-            ObjectHash::from_str(
-                "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
-            )
-            .unwrap(),
-            "hello-world".to_string(),
-        );
-
-        let bytes = tree_item.to_data();
-
-        // a small helper: convert hex string to byte sequence
-        fn hex_to_bytes(s: &str) -> Vec<u8> {
-            assert!(s.len() % 2 == 0);
-            let mut out = Vec::with_capacity(s.len() / 2);
-            for i in (0..s.len()).step_by(2) {
-                let byte = u8::from_str_radix(&s[i..i + 2], 16).unwrap();
-                out.push(byte);
-            }
-            out
-        }
-
-        // expected encoding: `"100644 hello-world\0" + <32-byte blob hash>`
-        let mut expected = b"100644 hello-world\0".to_vec();
-        expected.extend_from_slice(&hex_to_bytes(
+    fn tree_item_round_trip_sha256() {
+        tree_item_round_trip(
+            HashKind::Sha256,
             "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
-        ));
-
-        assert_eq!(bytes, expected);
+        );
     }
 
-    #[test]
-    fn test_tree_item_from_bytes() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let item = TreeItem::new(
-            TreeItemMode::Blob,
-            ObjectHash::from_str("8ab686eafeb1f44702738c8b0f24f2567c36da6d").unwrap(),
-            "hello-world".to_string(),
-        );
-
-        let bytes = item.to_data();
-        let tree_item = TreeItem::from_bytes(bytes.as_slice()).unwrap();
-
-        assert_eq!(tree_item.mode, TreeItemMode::Blob);
-        assert_eq!(tree_item.id.to_string(), item.id.to_string());
-    }
-    #[test]
-    fn test_tree_item_from_bytes_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let item = TreeItem::new(
-            TreeItemMode::Blob,
-            ObjectHash::from_str(
-                "1111111111111111111111111111111111111111111111111111111111111111",
-            )
-            .unwrap(),
-            "hello-world".to_string(),
-        );
-        let bytes = item.to_data();
-        let tree_item = TreeItem::from_bytes(bytes.as_slice()).unwrap();
-
-        assert_eq!(tree_item.mode, TreeItemMode::Blob);
-        assert_eq!(tree_item.id.to_string(), item.id.to_string());
+    /// Helper: build a tree from items and assert the resulting ID.
+    fn tree_round_trip(kind: HashKind, items: Vec<(&str, &str)>, expected_id: &str) {
+        let _guard = set_hash_kind_for_test(kind);
+        let tree_items = items
+            .into_iter()
+            .map(|(name, id_hex)| {
+                TreeItem::new(
+                    TreeItemMode::Blob,
+                    ObjectHash::from_str(id_hex).unwrap(),
+                    name.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let tree = Tree::from_tree_items(tree_items).unwrap();
+        assert_eq!(tree.id.to_string(), expected_id);
     }
 
+    /// Tree construction from items (SHA-1).
     #[test]
-    fn test_from_tree_items() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let item = TreeItem::new(
-            TreeItemMode::Blob,
-            ObjectHash::from_str("17288789afffb273c8c394bc65e87d899b92897b").unwrap(),
-            "hello-world".to_string(),
-        );
-        let tree = Tree::from_tree_items(vec![item]).unwrap();
-        println!("{}", tree.id);
-        assert_eq!(
+    fn tree_from_items_sha1() {
+        tree_round_trip(
+            HashKind::Sha1,
+            vec![("hello-world", "17288789afffb273c8c394bc65e87d899b92897b")],
             "cf99336fa61439a2f074c7e6de1c1a05579550e2",
-            tree.id.to_string()
         );
     }
+
+    /// Tree construction from items (SHA-256).
     #[test]
-    fn test_from_tree_items_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let items = vec![
-            TreeItem::new(
-                TreeItemMode::Blob,
-                ObjectHash::from_str(
-                    "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
-                )
-                .unwrap(),
-                "a.txt".to_string(),
-            ),
-            TreeItem::new(
-                TreeItemMode::Blob,
-                ObjectHash::from_str(
-                    "fc2593998f8e1dec9c3a8be11557888134dad90ef5c7a2d6236ed75534c7698e",
-                )
-                .unwrap(),
-                "b.txt".to_string(),
-            ),
-            TreeItem::new(
-                TreeItemMode::Blob,
-                ObjectHash::from_str(
-                    "21513dcb4d6f9eb247db3b4c52158395d94f809cbaa2630bd2a7a474d9b39fab",
-                )
-                .unwrap(),
-                "c.txt".to_string(),
-            ),
-            TreeItem::new(
-                TreeItemMode::Blob,
-                ObjectHash::from_str(
-                    "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
-                )
-                .unwrap(),
-                "hello-world".to_string(),
-            ),
-            TreeItem::new(
-                TreeItemMode::Blob,
-                ObjectHash::from_str(
-                    "9ba9ae56288652bf32f074f922e37d3e95df8920b3cdfc053309595b8f86cbc6",
-                )
-                .unwrap(),
-                "message.txt".to_string(),
-            ),
-        ];
-        let tree = Tree::from_tree_items(items).unwrap();
-        println!("{}", tree.id);
-        assert_eq!(
+    fn tree_from_items_sha256() {
+        tree_round_trip(
+            HashKind::Sha256,
+            vec![
+                ("a.txt", "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4"),
+                ("b.txt", "fc2593998f8e1dec9c3a8be11557888134dad90ef5c7a2d6236ed75534c7698e"),
+                ("c.txt", "21513dcb4d6f9eb247db3b4c52158395d94f809cbaa2630bd2a7a474d9b39fab"),
+                ("hello-world", "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4"),
+                ("message.txt", "9ba9ae56288652bf32f074f922e37d3e95df8920b3cdfc053309595b8f86cbc6"),
+            ],
             "d712a36aadfb47cabc7aaa90cf9e515773ba3bfc1fe3783730b387ce15c49261",
-            tree.id.to_string()
         );
     }
 }

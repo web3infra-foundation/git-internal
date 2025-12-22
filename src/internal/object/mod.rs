@@ -13,7 +13,6 @@ pub mod utils;
 use std::{
     fmt::Display,
     io::{BufRead, Read},
-    str::FromStr,
 };
 
 use crate::{
@@ -22,6 +21,8 @@ use crate::{
     internal::{object::types::ObjectType, zlib::stream::inflate::ReadBoxed},
 };
 
+/// **The Object Trait**
+/// Defines the common interface for all Git object types, including blobs, trees, commits, and tags.
 pub trait ObjectTrait: Send + Sync + Display {
     /// Creates a new object from a byte slice.
     fn from_bytes(data: &[u8], hash: ObjectHash) -> Result<Self, GitError>
