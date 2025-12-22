@@ -21,6 +21,9 @@ use crate::{
     time_it,
 };
 
+/// Trait defining the interface for a multi-tier cache system.
+/// This cache supports insertion and retrieval of objects by both offset and hash,
+/// as well as memory usage tracking and clearing functionality.
 pub trait _Cache {
     fn new(mem_size: Option<usize>, tmp_path: PathBuf, thread_num: usize) -> Self
     where
@@ -40,6 +43,9 @@ impl lru_mem::HeapSize for ObjectHash {
     }
 }
 
+/// Multi-tier cache implementation combining an in-memory LRU cache with spill-to-disk storage.
+/// It uses a DashMap for offset-to-hash mapping and a DashSet to track cached hashes.
+/// The cache supports concurrent rebuild tasks using a thread pool.
 pub struct Caches {
     map_offset: DashMap<usize, ObjectHash>, // offset to hash
     hash_set: DashSet<ObjectHash>,          // item in the cache
@@ -110,6 +116,7 @@ impl Caches {
         path
     }
 
+    /// read CacheObject from temp file
     fn read_from_temp(path: &Path) -> io::Result<CacheObject> {
         let obj = CacheObject::f_load(path)?;
         // Deserializing will also create an object but without Construction outside and `::new()`
@@ -118,6 +125,7 @@ impl Caches {
         Ok(obj)
     }
 
+    /// number of queued tasks in the thread pool
     pub fn queued_tasks(&self) -> usize {
         self.pool.queued_count()
     }
@@ -189,6 +197,7 @@ impl _Cache for Caches {
         obj_arc
     }
 
+    /// get object by offset, from memory or tmp file
     fn get_by_offset(&self, offset: usize) -> Option<Arc<CacheObject>> {
         match self.map_offset.get(&offset) {
             Some(x) => self.get_by_hash(*x),
@@ -196,6 +205,7 @@ impl _Cache for Caches {
         }
     }
 
+    /// get object by hash, from memory or tmp file
     fn get_by_hash(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
         // check if the hash is in the cache( lru or tmp file)
         if self.hash_set.contains(&hash) {
@@ -246,117 +256,75 @@ mod test {
         internal::{object::types::ObjectType, pack::cache_object::CacheObjectInfo},
     };
 
+    /// Helper to build a base CacheObject with given size and hash.
+    fn make_obj(size: usize, hash: ObjectHash) -> CacheObject {
+        CacheObject {
+            info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash),
+            data_decompressed: vec![0; size],
+            mem_recorder: None,
+            offset: 0,
+            crc32: 0,
+            is_delta_in_pack: false,
+        }
+    }
+
+    /// test single-threaded cache behavior with different hash kinds and capacities
     #[test]
     fn test_cache_single_thread() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
-        let tmp_path = source.clone().join("tests/.cache_tmp");
+        for (kind, cap, size_ab, size_c, tmp_dir) in [
+            (
+                HashKind::Sha1,
+                2048usize,
+                800usize,
+                1700usize,
+                "tests/.cache_tmp",
+            ),
+            (
+                HashKind::Sha256,
+                4096usize,
+                1500usize,
+                3000usize,
+                "tests/.cache_tmp_sha256",
+            ),
+        ] {
+            let _guard = set_hash_kind_for_test(kind);
+            let source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+            let tmp_path = source.clone().join(tmp_dir);
+            if tmp_path.exists() {
+                fs::remove_dir_all(&tmp_path).unwrap();
+            }
 
-        if tmp_path.exists() {
-            fs::remove_dir_all(&tmp_path).unwrap();
+            let cache = Caches::new(Some(cap), tmp_path, 1);
+            let a_hash = ObjectHash::new(String::from("a").as_bytes());
+            let b_hash = ObjectHash::new(String::from("b").as_bytes());
+            let c_hash = ObjectHash::new(String::from("c").as_bytes());
+
+            let a = make_obj(size_ab, a_hash);
+            let b = make_obj(size_ab, b_hash);
+            let c = make_obj(size_c, c_hash);
+
+            // insert a
+            cache.insert(a.offset, a_hash, a.clone());
+            assert!(cache.hash_set.contains(&a_hash));
+            assert!(cache.try_get(a_hash).is_some());
+
+            // insert b, a should still be in cache
+            cache.insert(b.offset, b_hash, b.clone());
+            assert!(cache.hash_set.contains(&b_hash));
+            assert!(cache.try_get(b_hash).is_some());
+            assert!(cache.try_get(a_hash).is_some());
+
+            // insert c which will evict both a and b
+            cache.insert(c.offset, c_hash, c.clone());
+            assert!(cache.try_get(a_hash).is_none());
+            assert!(cache.try_get(b_hash).is_none());
+            assert!(cache.try_get(c_hash).is_some());
+            assert!(cache.get_by_hash(c_hash).is_some());
         }
-
-        let cache = Caches::new(Some(2048), tmp_path, 1);
-        let a_hash = ObjectHash::new(String::from("a").as_bytes());
-        let b_hash = ObjectHash::new(String::from("b").as_bytes());
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, a_hash),
-            data_decompressed: vec![0; 800],
-            mem_recorder: None,
-            offset: 0,
-            crc32: 0,
-            is_delta_in_pack: false,
-        };
-        let b = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, b_hash),
-            data_decompressed: vec![0; 800],
-            mem_recorder: None,
-            offset: 0,
-            crc32: 0,
-            is_delta_in_pack: false,
-        };
-        // insert a
-        cache.insert(a.offset, a_hash, a.clone());
-        assert!(cache.hash_set.contains(&a_hash));
-        assert!(cache.try_get(a_hash).is_some());
-
-        // insert b, a should still be in cache
-        cache.insert(b.offset, b_hash, b.clone());
-        assert!(cache.hash_set.contains(&b_hash));
-        assert!(cache.try_get(b_hash).is_some());
-        assert!(cache.try_get(a_hash).is_some());
-
-        let c_hash = ObjectHash::new(String::from("c").as_bytes());
-        // insert c which will evict both a and b
-        let c = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, c_hash),
-            data_decompressed: vec![0; 1700],
-            mem_recorder: None,
-            offset: 0,
-            crc32: 0,
-            is_delta_in_pack: false,
-        };
-        cache.insert(c.offset, c_hash, c.clone());
-        assert!(cache.try_get(a_hash).is_none());
-        assert!(cache.try_get(b_hash).is_none());
-        assert!(cache.try_get(c_hash).is_some());
-        assert!(cache.get_by_hash(c_hash).is_some());
     }
-    #[test]
-    fn test_cache_single_thread_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
-        let tmp_path = source.clone().join("tests/.cache_tmp_sha256");
 
-        if tmp_path.exists() {
-            fs::remove_dir_all(&tmp_path).unwrap();
-        }
-        let cache = Caches::new(Some(4096), tmp_path, 1);
-        let a_hash = ObjectHash::new(String::from("a").as_bytes());
-        let b_hash = ObjectHash::new(String::from("b").as_bytes());
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, a_hash),
-            data_decompressed: vec![0; 1500],
-            mem_recorder: None,
-            offset: 0,
-            crc32: 0,
-            is_delta_in_pack: false,
-        };
-        let b = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, b_hash),
-            data_decompressed: vec![0; 1500],
-            mem_recorder: None,
-            offset: 0,
-            crc32: 0,
-            is_delta_in_pack: false,
-        };
-        // insert a
-        cache.insert(a.offset, a_hash, a.clone());
-        assert!(cache.hash_set.contains(&a_hash));
-        assert!(cache.try_get(a_hash).is_some());
-        // insert b, a should still be in cache
-        cache.insert(b.offset, b_hash, b.clone());
-        assert!(cache.hash_set.contains(&b_hash));
-        assert!(cache.try_get(b_hash).is_some());
-        assert!(cache.try_get(a_hash).is_some());
-        let c_hash = ObjectHash::new(String::from("c").as_bytes());
-        // insert c which will evict both a and b
-        let c = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, c_hash),
-            data_decompressed: vec![0; 3000],
-            mem_recorder: None,
-            offset: 0,
-            crc32: 0,
-            is_delta_in_pack: false,
-        };
-        cache.insert(c.offset, c_hash, c.clone());
-        assert!(cache.try_get(a_hash).is_none());
-        assert!(cache.try_get(b_hash).is_none());
-        assert!(cache.try_get(c_hash).is_some());
-        assert!(cache.get_by_hash(c_hash).is_some());
-    }
-    #[test]
     /// consider the multi-threaded scenario where different threads use different hash kinds
+    #[test]
     fn test_cache_multi_thread_mixed_hash_kinds() {
         let base = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
         let tmp_path = base.join("tests/.cache_tmp_mixed");

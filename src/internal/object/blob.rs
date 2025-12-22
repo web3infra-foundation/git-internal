@@ -118,7 +118,7 @@ mod tests {
             "5dd01c177f5d7d1be5346a5bc18a569a7410c2ef"
         );
     }
-    
+
     #[test]
     fn test_blob_from_content_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);

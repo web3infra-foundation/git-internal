@@ -256,8 +256,14 @@ mod tests {
     /// get_service_from_query should return value when present.
     #[test]
     fn parse_service_from_query() {
-        assert_eq!(get_service_from_query("service=git-upload-pack"), Some("git-upload-pack"));
-        assert_eq!(get_service_from_query("foo=bar&service=git-receive-pack"), Some("git-receive-pack"));
+        assert_eq!(
+            get_service_from_query("service=git-upload-pack"),
+            Some("git-upload-pack")
+        );
+        assert_eq!(
+            get_service_from_query("foo=bar&service=git-receive-pack"),
+            Some("git-receive-pack")
+        );
         assert!(get_service_from_query("foo=bar").is_none());
     }
 
@@ -279,7 +285,10 @@ mod tests {
             .await
             .expect("info_refs");
         assert!(!data.is_empty());
-        assert_eq!(content_type, get_advertisement_content_type("git-upload-pack"));
+        assert_eq!(
+            content_type,
+            get_advertisement_content_type("git-upload-pack")
+        );
     }
 
     /// Missing service param should error.

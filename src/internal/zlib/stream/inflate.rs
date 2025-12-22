@@ -115,11 +115,11 @@ fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
     use flate2::{Compression, write::ZlibEncoder};
     use sha1::{Digest, Sha1};
-    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-    use std::io::Write;
     use std::io::Read;
+    use std::io::Write;
 
     /// Helper to build zlib-compressed bytes from input data.
     fn zlib_compress(data: &[u8]) -> Vec<u8> {

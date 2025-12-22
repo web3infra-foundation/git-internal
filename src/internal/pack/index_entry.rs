@@ -13,6 +13,7 @@ use crate::{
     },
 };
 
+/// Git index entry corresponding to a pack entry
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IndexEntry {
     pub hash: ObjectHash,
@@ -45,6 +46,7 @@ impl TryFrom<&MetaAttached<Entry, EntryMeta>> for IndexEntry {
 }
 
 impl IndexEntry {
+    /// Create a new IndexEntry from a pack Entry and its offset in the pack file.
     pub fn new(entry: &Entry, offset: usize) -> Self {
         IndexEntry {
             hash: entry.hash,
@@ -58,4 +60,100 @@ fn calculate_crc32(bytes: &[u8]) -> u32 {
     let mut hasher = Hasher::new();
     hasher.update(bytes);
     hasher.finalize()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
+        internal::metadata::{EntryMeta, MetaAttached},
+        internal::{object::types::ObjectType, pack::entry::Entry},
+    };
+
+    /// Helper to create a test Entry with given content.
+    fn create_test_entry(content: &[u8]) -> Entry {
+        Entry {
+            obj_type: ObjectType::Blob,
+            data: content.to_vec(),
+            hash: ObjectHash::new(content),
+            chain_len: 0,
+        }
+    }
+
+    #[test]
+    fn test_index_entry_new() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let entry = create_test_entry(b"test data");
+        let offset = 123;
+
+        let index_entry = IndexEntry::new(&entry, offset);
+
+        assert_eq!(index_entry.hash, entry.hash);
+        assert_eq!(index_entry.offset, offset as u64);
+
+        let mut hasher = Hasher::new();
+        hasher.update(b"test data");
+        assert_eq!(index_entry.crc32, hasher.finalize());
+    }
+
+    #[test]
+    fn test_try_from_meta_attached_with_crc() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let entry = create_test_entry(b"test data");
+        let meta = EntryMeta {
+            pack_offset: Some(456),
+            crc32: Some(0x12345678),
+            ..Default::default()
+        };
+        let meta_attached = MetaAttached { inner: entry, meta };
+
+        let index_entry = IndexEntry::try_from(&meta_attached).unwrap();
+
+        assert_eq!(index_entry.hash, meta_attached.inner.hash);
+        assert_eq!(index_entry.offset, 456);
+        assert_eq!(index_entry.crc32, 0x12345678);
+    }
+
+    #[test]
+    fn test_try_from_meta_attached_crc_fallback() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let entry_data = b"fallback crc";
+        let entry = create_test_entry(entry_data);
+        let meta = EntryMeta {
+            pack_offset: Some(789),
+            crc32: None, // CRC is not provided in meta
+            ..Default::default()
+        };
+        let meta_attached = MetaAttached { inner: entry, meta };
+
+        let index_entry = IndexEntry::try_from(&meta_attached).unwrap();
+
+        assert_eq!(index_entry.hash, meta_attached.inner.hash);
+        assert_eq!(index_entry.offset, 789);
+
+        let mut hasher = Hasher::new();
+        hasher.update(entry_data);
+        assert_eq!(index_entry.crc32, hasher.finalize());
+    }
+
+    #[test]
+    fn test_try_from_meta_attached_no_offset() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let entry = create_test_entry(b"no offset");
+        let meta = EntryMeta {
+            pack_offset: None, // Offset is not provided
+            ..Default::default()
+        };
+        let meta_attached = MetaAttached { inner: entry, meta };
+
+        let result = IndexEntry::try_from(&meta_attached);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            GitError::ConversionError(msg) => {
+                assert_eq!(msg, "empty offset in pack entry");
+            }
+            _ => panic!("Expected ConversionError"),
+        }
+    }
 }

@@ -27,7 +27,7 @@ impl EntryMeta {
         self.pack_id = Some(id.into());
         self
     }
-    
+
     /// Set the file path associated with this entry.
     pub fn set_crc32(&mut self, crc32: u32) -> &mut Self {
         self.crc32 = Some(crc32);

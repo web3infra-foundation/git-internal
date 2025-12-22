@@ -416,11 +416,26 @@ mod tests {
         tree_round_trip(
             HashKind::Sha256,
             vec![
-                ("a.txt", "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4"),
-                ("b.txt", "fc2593998f8e1dec9c3a8be11557888134dad90ef5c7a2d6236ed75534c7698e"),
-                ("c.txt", "21513dcb4d6f9eb247db3b4c52158395d94f809cbaa2630bd2a7a474d9b39fab"),
-                ("hello-world", "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4"),
-                ("message.txt", "9ba9ae56288652bf32f074f922e37d3e95df8920b3cdfc053309595b8f86cbc6"),
+                (
+                    "a.txt",
+                    "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+                ),
+                (
+                    "b.txt",
+                    "fc2593998f8e1dec9c3a8be11557888134dad90ef5c7a2d6236ed75534c7698e",
+                ),
+                (
+                    "c.txt",
+                    "21513dcb4d6f9eb247db3b4c52158395d94f809cbaa2630bd2a7a474d9b39fab",
+                ),
+                (
+                    "hello-world",
+                    "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+                ),
+                (
+                    "message.txt",
+                    "9ba9ae56288652bf32f074f922e37d3e95df8920b3cdfc053309595b8f86cbc6",
+                ),
             ],
             "d712a36aadfb47cabc7aaa90cf9e515773ba3bfc1fe3783730b387ce15c49261",
         );

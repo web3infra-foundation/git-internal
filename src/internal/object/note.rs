@@ -236,8 +236,7 @@ mod tests {
         // with target
         let (data_with_target, returned_target) = note.to_data_with_target().unwrap();
         assert_eq!(returned_target, target_id);
-        let restored =
-            Note::from_bytes_with_target(&data_with_target, note.id, target_id).unwrap();
+        let restored = Note::from_bytes_with_target(&data_with_target, note.id, target_id).unwrap();
         assert_eq!(restored, note);
         assert_eq!(restored.target_object_id, target_id);
         assert_eq!(restored.content, content);

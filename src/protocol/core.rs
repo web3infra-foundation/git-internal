@@ -274,10 +274,10 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::HashKind;
     use crate::protocol::types::TransportProtocol;
     use async_trait::async_trait;
-    use crate::hash::HashKind;
-    
+
     /// Simple mock repository that serves fixed refs and echoes wants.
     #[derive(Clone)]
     struct MockRepo {
@@ -345,7 +345,10 @@ mod tests {
         GitProtocol::new(
             MockRepo {
                 refs: vec![
-                    ("refs/heads/main".to_string(), ObjectHash::default().to_string()),
+                    (
+                        "refs/heads/main".to_string(),
+                        ObjectHash::default().to_string(),
+                    ),
                     ("HEAD".to_string(), ObjectHash::default().to_string()),
                 ],
             },

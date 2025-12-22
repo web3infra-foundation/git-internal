@@ -237,11 +237,22 @@ mod tests {
     fn round_trip(kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         let target = match kind {
-            HashKind::Sha1 => ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap(),
-            HashKind::Sha256 => ObjectHash::from_str("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef").unwrap(),
+            HashKind::Sha1 => {
+                ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap()
+            }
+            HashKind::Sha256 => ObjectHash::from_str(
+                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+            )
+            .unwrap(),
         };
         let sig = make_sig();
-        let tag = Tag::new(target, ObjectType::Commit, "v1.0.0".to_string(), sig.clone(), "release".to_string());
+        let tag = Tag::new(
+            target,
+            ObjectType::Commit,
+            "v1.0.0".to_string(),
+            sig.clone(),
+            "release".to_string(),
+        );
 
         let data = tag.to_data().unwrap();
         let parsed = Tag::from_bytes(&data, tag.id).unwrap();
@@ -256,11 +267,11 @@ mod tests {
 
     /// Tag round trip tests for both SHA-1 and SHA-256 hash kinds.
     #[tokio::test]
-    async fn tag_round_trip(){
+    async fn tag_round_trip() {
         round_trip(HashKind::Sha1);
         round_trip(HashKind::Sha256);
     }
-    
+
     /// Invalid tag missing required fields should error.
     #[test]
     fn tag_invalid_missing_fields_errors() {

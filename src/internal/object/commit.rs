@@ -318,7 +318,7 @@ signed sha256 commit for test"#;
         .unwrap();
         Commit::from_bytes(raw_commit.as_bytes(), hash).unwrap()
     }
-    
+
     /// Test creating a Commit from bytes with PGP signature
     #[test]
     fn test_from_bytes_with_gpgsig() {
@@ -344,7 +344,7 @@ signed sha256 commit for test"#;
         assert!(commit.message.contains("-----END PGP SIGNATURE-----"));
         assert!(commit.message.contains("test parse commit from bytes"));
     }
-    
+
     /// Test creating a Commit from bytes with SHA-256
     #[test]
     fn test_from_bytes_with_gpgsig_sha256() {
@@ -371,7 +371,7 @@ signed sha256 commit for test"#;
         assert!(commit.message.contains("-----END PGP SIGNATURE-----"));
         assert!(commit.message.contains("signed sha256 commit for test"));
     }
-    
+
     /// Test formatting commit message with PGP signature
     #[test]
     fn test_format_message_with_pgp_signature() {

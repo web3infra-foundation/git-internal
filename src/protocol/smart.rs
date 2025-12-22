@@ -707,11 +707,13 @@ mod tests {
                 Ok(vec![
                     (
                         "HEAD".to_string(),
-                        "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                        "0000000000000000000000000000000000000000000000000000000000000000"
+                            .to_string(),
                     ),
                     (
                         "refs/heads/main".to_string(),
-                        "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+                        "1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
                     ),
                 ])
             }
@@ -774,14 +776,8 @@ mod tests {
 
         let zero = ObjectHash::zero_str(HashKind::Sha1);
         let mut pkt = BytesMut::new();
-        add_pkt_line_string(
-            &mut pkt,
-            format!("{zero} {zero} refs/heads/main\n"),
-        );
-        add_pkt_line_string(
-            &mut pkt,
-            format!("{zero} {zero} refs/tags/v1.0\n"),
-        );
+        add_pkt_line_string(&mut pkt, format!("{zero} {zero} refs/heads/main\n"));
+        add_pkt_line_string(&mut pkt, format!("{zero} {zero} refs/tags/v1.0\n"));
         pkt.put(&PKT_LINE_END_MARKER[..]);
 
         smart.parse_receive_pack_commands(pkt.freeze());
