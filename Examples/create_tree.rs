@@ -33,7 +33,7 @@ fn main() {
     println!("Tree Hash ID: {}", tree.id);
     println!("Tree Contents:");
     for item in tree.tree_items {
-        // 输出格式: <mode> <hash> <filename>
+        // Output format: <mode> <hash> <filename>
         println!(" - {} {} {}", item.mode, item.id, item.name);
     }
 }
