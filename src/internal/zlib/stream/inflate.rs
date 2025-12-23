@@ -28,7 +28,7 @@ impl<R> ReadBoxed<R>
 where
     R: BufRead,
 {
-    /// Nen a ReadBoxed for zlib read, the Output ReadBoxed is for the Common Object,
+    /// New a ReadBoxed for zlib read, the Output ReadBoxed is for the Common Object,
     /// but not for the Delta Object,if that ,see new_for_delta method below.
     pub fn new(inner: R, obj_type: ObjectType, size: usize) -> Self {
         // Initialize the hash with the object header.
@@ -45,7 +45,7 @@ where
         }
     }
 
-    /// Nen a ReadBoxed for zlib read, the Output ReadBoxed is for the Delta Object,
+    /// New a ReadBoxed for zlib read, the Output ReadBoxed is for the Delta Object,
     /// which does not need to calculate the hash value.
     pub fn new_for_delta(inner: R) -> Self {
         ReadBoxed {

@@ -25,7 +25,7 @@ use crate::{
 
 /// The `Commit` struct is used to represent a commit object.
 ///
-/// - The tree object SHA1/ SHA-256 hashpoints to the top level tree for this commit, which reflects the complete
+/// - The tree object SHA-1/SHA-256 hashpoints to the top level tree for this commit, which reflects the complete
 ///   state of the repository at the time of the commit. The tree object in turn points to blobs and
 ///   subtrees which represent the files in the repository.
 /// - The parent commit SHAs allow Git to construct a linked list of commits and build the full
