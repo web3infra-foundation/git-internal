@@ -136,6 +136,7 @@ impl ObjectType {
 mod tests {
     use crate::internal::object::types::ObjectType;
 
+    /// Verify ObjectType::Blob converts to its ASCII byte representation "blob".
     #[test]
     fn test_object_type_to_data() {
         let blob = ObjectType::Blob;
@@ -143,12 +144,14 @@ mod tests {
         assert_eq!(blob_bytes, vec![0x62, 0x6c, 0x6f, 0x62]);
     }
 
+    /// Verify parsing "tree" string returns ObjectType::Tree.
     #[test]
     fn test_object_type_from_string() {
         let tree = ObjectType::from_string("tree").unwrap();
         assert_eq!(tree, ObjectType::Tree);
     }
 
+    /// Verify ObjectType::Commit converts to pack type number 1.
     #[test]
     fn test_object_type_to_u8() {
         let commit = ObjectType::Commit;
@@ -156,6 +159,7 @@ mod tests {
         assert_eq!(commit_number, 1);
     }
 
+    /// Verify pack type number 4 parses to ObjectType::Tag.
     #[test]
     fn test_object_type_from_u8() {
         let tag_number = 4;

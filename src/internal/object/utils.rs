@@ -101,6 +101,7 @@ pub fn compress_zlib(data: &[u8]) -> io::Result<Vec<u8>> {
 mod tests {
     use crate::internal::object::utils::parse_size_from_bytes;
 
+    /// Verify that a decimal size string can be parsed back to the original usize value.
     #[test]
     fn test_parse_size_from_bytes() -> Result<(), Box<dyn std::error::Error>> {
         let size: usize = 12345;
