@@ -119,6 +119,7 @@ mod tests {
         );
     }
 
+    /// Test creating a Blob from content string using SHA-256 hash algorithm.
     #[test]
     fn test_blob_from_content_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);

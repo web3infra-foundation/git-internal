@@ -322,6 +322,7 @@ impl<T: ArcWrapperBounds> ArcWrapper<T> {
             store_path: None,
         }
     }
+    /// Sets the file path where this object will be persisted when evicted from cache.
     pub fn set_store_path(&mut self, path: PathBuf) {
         self.store_path = Some(path);
     }
