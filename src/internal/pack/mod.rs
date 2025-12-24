@@ -25,6 +25,8 @@ use crate::{
 };
 
 const DEFAULT_TMP_DIR: &str = "./.cache_temp";
+
+/// Representation of a Git pack file in memory.
 pub struct Pack {
     pub number: usize,
     pub signature: ObjectHash,

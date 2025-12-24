@@ -5,8 +5,8 @@ use std::io::{self, Read, Write};
 
 use flate2::{Compression, write::ZlibEncoder};
 
-const TYPE_BITS: u8 = 3;
-const VAR_INT_ENCODING_BITS: u8 = 7;
+const TYPE_BITS: u8 = 3; // Number of bits used to represent the object type
+const VAR_INT_ENCODING_BITS: u8 = 7; // Number of bits used in each byte of variable-length integer encoding
 const TYPE_BYTE_SIZE_BITS: u8 = VAR_INT_ENCODING_BITS - TYPE_BITS;
 const VAR_INT_CONTINUE_FLAG: u8 = 1 << VAR_INT_ENCODING_BITS;
 

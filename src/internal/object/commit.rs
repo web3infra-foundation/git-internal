@@ -25,7 +25,7 @@ use crate::{
 
 /// The `Commit` struct is used to represent a commit object.
 ///
-/// - The tree object SHA points to the top level tree for this commit, which reflects the complete
+/// - The tree object SHA-1/SHA-256 hashpoints to the top level tree for this commit, which reflects the complete
 ///   state of the repository at the time of the commit. The tree object in turn points to blobs and
 ///   subtrees which represent the files in the repository.
 /// - The parent commit SHAs allow Git to construct a linked list of commits and build the full
@@ -256,6 +256,7 @@ mod tests {
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
 
+    /// Create a basic commit object for testing
     fn basic_commit() -> Commit {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let raw_commit = br#"tree 341e54913a3a43069f2927cc0f703e5a9f730df1
@@ -286,6 +287,7 @@ test parse commit from bytes
         Commit::from_bytes(raw_commit, hash).unwrap()
     }
 
+    /// Create a basic commit object with SHA-256 for testing
     fn basic_commit_sha256() -> Commit {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let raw_commit = br#"tree 0250024cf99636335fff1070e4220c5d8f67cb8633572d54b304629ad5382760
@@ -316,6 +318,8 @@ signed sha256 commit for test"#;
         .unwrap();
         Commit::from_bytes(raw_commit.as_bytes(), hash).unwrap()
     }
+
+    /// Test creating a Commit from bytes with PGP signature
     #[test]
     fn test_from_bytes_with_gpgsig() {
         let commit = basic_commit();
@@ -340,6 +344,8 @@ signed sha256 commit for test"#;
         assert!(commit.message.contains("-----END PGP SIGNATURE-----"));
         assert!(commit.message.contains("test parse commit from bytes"));
     }
+
+    /// Test creating a Commit from bytes with SHA-256
     #[test]
     fn test_from_bytes_with_gpgsig_sha256() {
         let commit = basic_commit_sha256();
@@ -365,12 +371,16 @@ signed sha256 commit for test"#;
         assert!(commit.message.contains("-----END PGP SIGNATURE-----"));
         assert!(commit.message.contains("signed sha256 commit for test"));
     }
+
+    /// Test formatting commit message with PGP signature
     #[test]
     fn test_format_message_with_pgp_signature() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let commit = basic_commit();
         assert_eq!(commit.format_message(), "test parse commit from bytes");
     }
+
+    /// Test formatting commit message with SHA-256 PGP signature
     #[test]
     fn test_format_message_with_pgp_signature_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);

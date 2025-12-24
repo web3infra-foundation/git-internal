@@ -204,6 +204,7 @@ fn encode_one_object(entry: &Entry, offset: Option<usize>) -> Result<Vec<u8>, Gi
     Ok(encoded_data)
 }
 
+/// Magic sort function for entries
 fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryMeta>) -> Ordering {
     let path_a = a.meta.file_path.as_ref();
     let path_b = b.meta.file_path.as_ref();
@@ -242,12 +243,14 @@ fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryM
     (a as *const MetaAttached<Entry, EntryMeta>).cmp(&(b as *const MetaAttached<Entry, EntryMeta>))
 }
 
+/// Calculate hash of data
 fn calc_hash(data: &[u8]) -> u64 {
     let mut hasher = AHasher::default();
     data.hash(&mut hasher);
     hasher.finish()
 }
 
+/// Cheap check if two byte slices are similar by comparing their hashes of the first 128 bytes.
 fn cheap_similar(a: &[u8], b: &[u8]) -> bool {
     let k = a.len().min(b.len()).min(128);
     if k == 0 {
@@ -329,6 +332,7 @@ impl PackEncoder {
         }
     }
 
+    /// Encode with zstdelta
     pub async fn encode_with_zstdelta(
         &mut self,
         entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -705,6 +709,7 @@ impl PackEncoder {
         }))
     }
 
+    /// async version of encode_with_zstdelta, result data will be returned by JoinHandle.
     pub async fn encode_async_with_zstdelta(
         mut self,
         rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -715,6 +720,7 @@ impl PackEncoder {
         }))
     }
 
+    /// Generate idx file after pack file has been generated
     pub async fn encode_idx_file(&mut self) -> Result<(), GitError> {
         if self.idx_sender.is_none() {
             return Err(GitError::PackEncodeError(String::from(
@@ -745,6 +751,7 @@ mod tests {
         time_it,
     };
 
+    /// Check if the given data is a valid pack file format by attempting to decode it.
     fn check_format(data: &Vec<u8>) {
         let mut p = Pack::new(
             None,

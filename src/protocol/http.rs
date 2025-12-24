@@ -173,3 +173,143 @@ pub fn get_service_from_query(query: &str) -> Option<&str> {
 pub struct InfoRefsParams {
     pub service: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::core::{AuthenticationService, RepositoryAccess};
+    use async_trait::async_trait;
+
+    /// Mock repository access for testing
+    #[derive(Clone)]
+    struct MockRepo;
+
+    #[async_trait]
+    impl RepositoryAccess for MockRepo {
+        async fn get_repository_refs(&self) -> Result<Vec<(String, String)>, ProtocolError> {
+            Ok(vec![("refs/heads/main".into(), "0".repeat(40))])
+        }
+        async fn has_object(&self, _object_hash: &str) -> Result<bool, ProtocolError> {
+            Ok(false)
+        }
+        async fn get_object(&self, _object_hash: &str) -> Result<Vec<u8>, ProtocolError> {
+            Ok(Vec::new())
+        }
+        async fn store_pack_data(&self, _pack_data: &[u8]) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+        async fn update_reference(
+            &self,
+            _ref_name: &str,
+            _old_hash: Option<&str>,
+            _new_hash: &str,
+        ) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+        async fn get_objects_for_pack(
+            &self,
+            _wants: &[String],
+            _haves: &[String],
+        ) -> Result<Vec<String>, ProtocolError> {
+            Ok(Vec::new())
+        }
+        async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
+            Ok(false)
+        }
+        async fn post_receive_hook(&self) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+    }
+
+    struct MockAuth;
+    #[async_trait]
+    impl AuthenticationService for MockAuth {
+        async fn authenticate_http(
+            &self,
+            _headers: &std::collections::HashMap<String, String>,
+        ) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+        async fn authenticate_ssh(
+            &self,
+            _username: &str,
+            _public_key: &[u8],
+        ) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+    }
+
+    /// Helper to create HttpGitHandler with mock repo and auth
+    fn make_handler() -> HttpGitHandler<MockRepo, MockAuth> {
+        HttpGitHandler::new(MockRepo, MockAuth)
+    }
+
+    /// extract_repo_path should strip known suffixes.
+    #[test]
+    fn extract_repo_path_variants() {
+        assert_eq!(extract_repo_path("/repo/info/refs"), Some("/repo"));
+        assert_eq!(extract_repo_path("/repo/git-upload-pack"), Some("/repo"));
+        assert_eq!(extract_repo_path("/repo/git-receive-pack"), Some("/repo"));
+        assert!(extract_repo_path("/repo/other").is_none());
+    }
+
+    /// get_service_from_query should return value when present.
+    #[test]
+    fn parse_service_from_query() {
+        assert_eq!(
+            get_service_from_query("service=git-upload-pack"),
+            Some("git-upload-pack")
+        );
+        assert_eq!(
+            get_service_from_query("foo=bar&service=git-receive-pack"),
+            Some("git-receive-pack")
+        );
+        assert!(get_service_from_query("foo=bar").is_none());
+    }
+
+    /// is_git_request should recognize Git smart protocol endpoints.
+    #[test]
+    fn detect_git_request() {
+        assert!(is_git_request("/repo/info/refs"));
+        assert!(is_git_request("/repo/git-upload-pack"));
+        assert!(is_git_request("/repo/git-receive-pack"));
+        assert!(!is_git_request("/repo/other"));
+    }
+
+    /// handle_info_refs should succeed on valid path/service and return content-type.
+    #[tokio::test]
+    async fn handle_info_refs_ok() {
+        let mut handler = make_handler();
+        let (data, content_type) = handler
+            .handle_info_refs("/repo/info/refs", "service=git-upload-pack")
+            .await
+            .expect("info_refs");
+        assert!(!data.is_empty());
+        assert_eq!(
+            content_type,
+            get_advertisement_content_type("git-upload-pack")
+        );
+    }
+
+    /// Missing service param should error.
+    #[tokio::test]
+    async fn handle_info_refs_missing_service_errors() {
+        let mut handler = make_handler();
+        let err = handler
+            .handle_info_refs("/repo/info/refs", "")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidRequest(_)));
+    }
+
+    /// Non-git paths should error.
+    #[tokio::test]
+    async fn handle_info_refs_non_git_path_errors() {
+        let mut handler = make_handler();
+        let err = handler
+            .handle_info_refs("/repo/other", "service=git-upload-pack")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidRequest(_)));
+    }
+}

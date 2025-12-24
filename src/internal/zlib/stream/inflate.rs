@@ -4,9 +4,9 @@
 use std::{io, io::BufRead};
 
 use flate2::{Decompress, FlushDecompress, Status};
-use sha1::{Digest, Sha1, digest::core_api::CoreWrapper};
 
 use crate::internal::object::types::ObjectType;
+use crate::utils::HashAlgorithm;
 
 /// ReadBoxed is to unzip information from a  DEFLATE stream,
 /// which hash [`BufRead`] trait.
@@ -20,19 +20,22 @@ pub struct ReadBoxed<R> {
     pub decompressor: Box<Decompress>,
     /// the [`count_hash`] decide whether to calculate the hash value in the [`read`] method
     count_hash: bool,
-    pub hash: CoreWrapper<sha1::Sha1Core>,
+    /// The current hash state for the decompressed data.
+    /// It is updated as data is read from the stream.
+    pub hash: HashAlgorithm,
 }
 impl<R> ReadBoxed<R>
 where
     R: BufRead,
 {
-    /// Nen a ReadBoxed for zlib read, the Output ReadBoxed is for the Common Object,
+    /// New a ReadBoxed for zlib read, the Output ReadBoxed is for the Common Object,
     /// but not for the Delta Object,if that ,see new_for_delta method below.
     pub fn new(inner: R, obj_type: ObjectType, size: usize) -> Self {
-        let mut hash = sha1::Sha1::new();
+        // Initialize the hash with the object header.
+        let mut hash = HashAlgorithm::new();
         hash.update(obj_type.to_bytes());
         hash.update(b" ");
-        hash.update(size.to_string());
+        hash.update(size.to_string().as_bytes());
         hash.update(b"\0");
         ReadBoxed {
             inner,
@@ -42,10 +45,12 @@ where
         }
     }
 
+    /// New a ReadBoxed for zlib read, the Output ReadBoxed is for the Delta Object,
+    /// which does not need to calculate the hash value.
     pub fn new_for_delta(inner: R) -> Self {
         ReadBoxed {
             inner,
-            hash: Sha1::new(),
+            hash: HashAlgorithm::new(),
             count_hash: false,
             decompressor: Box::new(Decompress::new(true)),
         }
@@ -104,5 +109,96 @@ fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -> io
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
+    use flate2::{Compression, write::ZlibEncoder};
+    use sha1::{Digest, Sha1};
+    use std::io::Read;
+    use std::io::Write;
+
+    /// Helper to build zlib-compressed bytes from input data.
+    fn zlib_compress(data: &[u8]) -> Vec<u8> {
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    /// ReadBoxed::new should inflate data and accumulate SHA-1 over the object header + body.
+    #[test]
+    fn inflate_object_counts_hash() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let body = b"hello\n";
+        let compressed = zlib_compress(body);
+        let cursor = io::Cursor::new(compressed);
+
+        let mut reader = ReadBoxed::new(cursor, ObjectType::Blob, body.len());
+        let mut out = Vec::new();
+        reader.read_to_end(&mut out).unwrap();
+        assert_eq!(out, body);
+
+        // Expected hash: header "blob <len>\\0" + body
+        let mut expected = Sha1::new();
+        expected.update(ObjectType::Blob.to_bytes());
+        expected.update(b" ");
+        expected.update(body.len().to_string());
+        expected.update(b"\0");
+        expected.update(body);
+        assert_eq!(reader.hash.finalize(), expected.finalize().to_vec());
+    }
+
+    /// ReadBoxed::new_for_delta should inflate data without touching the hash accumulator.
+    #[test]
+    fn inflate_delta_skips_hash() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let body = b"delta bytes";
+        let compressed = zlib_compress(body);
+        let cursor = io::Cursor::new(compressed);
+
+        let mut reader = ReadBoxed::new_for_delta(cursor);
+        let mut out = Vec::new();
+        reader.read_to_end(&mut out).unwrap();
+        assert_eq!(out, body);
+
+        // Hash should remain the initial zero-state (Sha1 of empty string)
+        let empty_hash = Sha1::new().finalize();
+        assert_eq!(reader.hash.finalize(), empty_hash.to_vec());
+    }
+
+    /// Corrupt deflate stream should surface as InvalidInput.
+    #[test]
+    fn corrupt_stream_returns_error() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let data = b"not a valid zlib stream";
+        let mut reader = ReadBoxed::new(io::Cursor::new(data), ObjectType::Blob, data.len());
+        let mut out = [0u8; 16];
+        let err = reader.read(&mut out).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// With SHA-256 configured, hash accumulation should match SHA-256 object ID.
+    #[test]
+    fn inflate_object_counts_hash_sha256() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let body = b"content";
+        let compressed = zlib_compress(body);
+        let cursor = io::Cursor::new(compressed);
+
+        let mut reader = ReadBoxed::new(cursor, ObjectType::Blob, body.len());
+        let mut out = Vec::new();
+        reader.read_to_end(&mut out).unwrap();
+        assert_eq!(out, body);
+
+        // Reader uses repository hash kind (SHA-256) internally.
+        let reader_hash = reader.hash.finalize();
+        let expected = ObjectHash::from_type_and_data(ObjectType::Blob, body);
+
+        assert_eq!(reader_hash.len(), 32);
+        assert_eq!(expected.as_ref().len(), 32);
+        assert_eq!(reader_hash.as_slice(), expected.as_ref());
     }
 }

@@ -397,7 +397,7 @@ mod tests {
         assert!(!is_eof(&mut reader));
     }
 
-    // Test case for a byte without a continuation bit (most significant bit is 0)
+    ///  Test case for a byte without a continuation bit (most significant bit is 0)
     #[test]
     fn test_read_byte_and_check_continuation_no_continuation() {
         let data = [0b0101_0101]; // 85 in binary, highest bit is 0
@@ -408,7 +408,7 @@ mod tests {
         assert!(!more_bytes); // No more bytes are expected
     }
 
-    // Test case for a byte with a continuation bit (most significant bit is 1)
+    /// Test case for a byte with a continuation bit (most significant bit is 1)
     #[test]
     fn test_read_byte_and_check_continuation_with_continuation() {
         let data = [0b1010_1010]; // 170 in binary, highest bit is 1
@@ -419,7 +419,7 @@ mod tests {
         assert!(more_bytes); // More bytes are expected
     }
 
-    // Test cases for edge values, like the minimum and maximum byte values
+    /// Test cases for edge values, like the minimum and maximum byte values
     #[test]
     fn test_read_byte_and_check_continuation_edge_cases() {
         // Test the minimum value (0)
@@ -439,7 +439,7 @@ mod tests {
         assert!(more_bytes); // More bytes are expected
     }
 
-    // Test with a single byte where msb is 0 (no continuation)
+    /// Test with a single byte where msb is 0 (no continuation)
     #[test]
     fn test_single_byte_no_continuation() {
         let data = [0b0101_0101]; // Type: 5 (101), Size: 5 (0101)
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(size, 5); // Expected size is 5
     }
 
-    // Test with multiple bytes, where continuation occurs
+    /// Test with multiple bytes, where continuation occurs
     #[test]
     fn test_multiple_bytes_with_continuation() {
         // Type: 5 (101), Sizes: 5 (0101), 3 (0000011) in little-endian order
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(size, 53);
     }
 
-    // Test with edge case where size is spread across multiple bytes
+    /// Test with edge case where size is spread across multiple bytes
     #[test]
     fn test_edge_case_size_spread_across_bytes() {
         // Type: 1 (001), Sizes: 15 (1111) in little-endian order
@@ -483,6 +483,7 @@ mod tests {
         assert_eq!(size, 15);
     }
 
+    /// Test reading VarInt encoded in little-endian format from a stream.
     #[test]
     fn test_read_varint_le_single_byte() {
         // Single byte: 0x05 (binary: 0000 0101)
@@ -495,6 +496,7 @@ mod tests {
         assert_eq!(offset, 1);
     }
 
+    /// Test reading VarInt encoded in little-endian format with multiple bytes from a stream.
     #[test]
     fn test_read_varint_le_multiple_bytes() {
         // Two bytes: 0x85, 0x01 (binary: 1000 0101, 0000 0001)
@@ -507,6 +509,7 @@ mod tests {
         assert_eq!(offset, 2);
     }
 
+    /// Test reading VarInt encoded in little-endian format with multiple bytes from a stream.
     #[test]
     fn test_read_varint_le_large_number() {
         // Five bytes: 0xFF, 0xFF, 0xFF, 0xFF, 0xF (binary: 1111 1111, 1111 1111, 1111 1111, 1111 1111, 0000 1111)
@@ -519,6 +522,7 @@ mod tests {
         assert_eq!(offset, 5);
     }
 
+    /// Test reading VarInt encoded in little-endian format with zero value.
     #[test]
     fn test_read_varint_le_zero() {
         // Single byte: 0x00 (binary: 0000 0000)
@@ -531,6 +535,7 @@ mod tests {
         assert_eq!(offset, 1);
     }
 
+    /// Test reading VarInt encoded in little-endian format that is too long.
     #[test]
     fn test_read_varint_le_too_long() {
         let data = vec![
@@ -542,6 +547,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Test reading offset encoding for an OffsetDelta object.
     #[test]
     fn test_read_offset_encoding() {
         let data: Vec<u8> = vec![0b_1101_0101, 0b_0000_0101];

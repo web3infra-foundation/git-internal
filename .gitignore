@@ -9,3 +9,4 @@ buck-out/
 
 src/.DS_Store
 .DS_Store
+examples/output_packs

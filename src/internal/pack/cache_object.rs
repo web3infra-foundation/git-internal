@@ -27,7 +27,6 @@ use crate::{
     },
 };
 
-// /// record heap-size of all CacheObjects, used for memory limit.
 // static CACHE_OBJS_MEM_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// file load&store trait
@@ -38,6 +37,7 @@ pub trait FileLoadStore: Serialize + for<'a> Deserialize<'a> {
 
 // trait alias, so that impl FileLoadStore == impl Serialize + Deserialize
 impl<T: Serialize + for<'a> Deserialize<'a>> FileLoadStore for T {
+    /// load object from file
     fn f_load(path: &Path) -> Result<T, io::Error> {
         let data = fs::read(path)?;
         let obj: T = bincode::serde::decode_from_slice(&data, bincode::config::standard())
@@ -93,6 +93,7 @@ impl CacheObjectInfo {
     }
 }
 
+/// Represents a cached object in memory, which may be a delta or a base object.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CacheObject {
     pub(crate) info: CacheObjectInfo,
@@ -263,6 +264,7 @@ impl CacheObject {
         }
     }
 
+    /// transform the CacheObject to MetaAttached<Entry, EntryMeta>
     pub fn to_entry_metadata(&self) -> MetaAttached<Entry, EntryMeta> {
         match self.info {
             CacheObjectInfo::BaseObject(obj_type, hash) => {
@@ -393,193 +395,108 @@ mod test {
 
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
+
+    /// Helper to build a base CacheObject with the given size.
+    fn make_obj(size: usize) -> CacheObject {
+        CacheObject {
+            info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
+            offset: 0,
+            crc32: 0,
+            data_decompressed: vec![0; size],
+            mem_recorder: None,
+            is_delta_in_pack: false,
+        }
+    }
+
+    /// Test that the memory size recording works correctly for CacheObject.
     #[test]
     fn test_heap_size_record() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let mut obj = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 1024],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        let mem = Arc::new(AtomicUsize::default());
-        assert_eq!(mem.load(Ordering::Relaxed), 0);
-        obj.set_mem_recorder(mem.clone());
-        obj.record_mem_size();
-        assert_eq!(mem.load(Ordering::Relaxed), obj.mem_size());
-        drop(obj);
-        assert_eq!(mem.load(Ordering::Relaxed), 0);
-    }
-    #[test]
-    fn test_heap_size_record_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let mut obj = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 2048],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        let mem = Arc::new(AtomicUsize::default());
-        assert_eq!(mem.load(Ordering::Relaxed), 0);
-        obj.set_mem_recorder(mem.clone());
-        obj.record_mem_size();
-        assert_eq!(mem.load(Ordering::Relaxed), obj.mem_size());
-        drop(obj);
-        assert_eq!(mem.load(Ordering::Relaxed), 0);
+        for (kind, size) in [(HashKind::Sha1, 1024usize), (HashKind::Sha256, 2048usize)] {
+            let _guard = set_hash_kind_for_test(kind);
+            let mut obj = make_obj(size);
+            let mem = Arc::new(AtomicUsize::default());
+            assert_eq!(mem.load(Ordering::Relaxed), 0);
+            obj.set_mem_recorder(mem.clone());
+            obj.record_mem_size();
+            assert_eq!(mem.load(Ordering::Relaxed), obj.mem_size());
+            drop(obj);
+            assert_eq!(mem.load(Ordering::Relaxed), 0);
+        }
     }
 
+    /// Test that the heap size of CacheObject and ArcWrapper are the same.
     #[test]
     fn test_cache_object_with_same_size() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 1024],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        assert!(a.heap_size() == 1024);
+        for (kind, size) in [(HashKind::Sha1, 1024usize), (HashKind::Sha256, 2048usize)] {
+            let _guard = set_hash_kind_for_test(kind);
+            let a = make_obj(size);
+            assert_eq!(a.heap_size(), size);
 
-        // let b = ArcWrapper(Arc::new(a.clone()));
-        let b = ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(false)), None);
-        assert!(b.heap_size() == 1024);
-    }
-    #[test]
-    fn test_cache_object_with_same_size_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 2048],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        assert!(a.heap_size() == 2048);
-
-        // let b = ArcWrapper(Arc::new(a.clone()));
-        let b = ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(false)), None);
-        assert!(b.heap_size() == 2048);
+            let b = ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(false)), None);
+            assert_eq!(b.heap_size(), size);
+        }
     }
 
+    /// Test that the LRU cache correctly ejects the least recently used object when capacity is exceeded.
     #[test]
     fn test_cache_object_with_lru() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let mut cache = LruCache::new(2048);
+        for (kind, cap, size_a, size_b) in [
+            (
+                HashKind::Sha1,
+                2048usize,
+                1024usize,
+                (1024.0 * 1.5) as usize,
+            ),
+            (
+                HashKind::Sha256,
+                4096usize,
+                2048usize,
+                (2048.0 * 1.5) as usize,
+            ),
+        ] {
+            let _guard = set_hash_kind_for_test(kind);
+            let mut cache = LruCache::new(cap);
 
-        let hash_a = ObjectHash::default();
-        let hash_b = ObjectHash::new(b"b"); // whatever different hash
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_a),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 1024],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        println!("a.heap_size() = {}", a.heap_size());
+            let hash_a = ObjectHash::default();
+            let hash_b = ObjectHash::new(b"b"); // whatever different hash
+            let a = make_obj(size_a);
+            let b = make_obj(size_b);
 
-        let b = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_b),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; (1024.0 * 1.5) as usize],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        {
-            let r = cache.insert(
-                hash_a.to_string(),
-                ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(true)), None),
-            );
-            assert!(r.is_ok())
-        }
-        {
-            let r = cache.try_insert(
-                hash_b.to_string(),
-                ArcWrapper::new(Arc::new(b.clone()), Arc::new(AtomicBool::new(true)), None),
-            );
-            assert!(r.is_err());
-            if let Err(lru_mem::TryInsertError::WouldEjectLru { .. }) = r {
-                // match the specified error, no extra action needed
-            } else {
-                panic!("Expected WouldEjectLru error");
+            {
+                let r = cache.insert(
+                    hash_a.to_string(),
+                    ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(true)), None),
+                );
+                assert!(r.is_ok());
             }
-            // insert b with a different key, so a will be ejected
-            let r = cache.insert(
-                hash_b.to_string(),
-                ArcWrapper::new(Arc::new(b.clone()), Arc::new(AtomicBool::new(true)), None),
-            );
-            assert!(r.is_ok());
-        }
-        {
-            // a should be ejected
-            let r = cache.get(&hash_a.to_string());
-            assert!(r.is_none());
-        }
-    }
-    #[test]
-    fn test_cache_object_with_lru_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let mut cache = LruCache::new(4096);
 
-        let hash_a = ObjectHash::default();
-        let hash_b = ObjectHash::new(b"b"); // whatever different hash
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_a),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 2048],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        println!("a.heap_size() = {}", a.heap_size());
+            {
+                let r = cache.try_insert(
+                    hash_b.to_string(),
+                    ArcWrapper::new(Arc::new(b.clone()), Arc::new(AtomicBool::new(true)), None),
+                );
+                assert!(r.is_err());
+                if let Err(lru_mem::TryInsertError::WouldEjectLru { .. }) = r {
+                    // expected
+                } else {
+                    panic!("Expected WouldEjectLru error");
+                }
 
-        let b = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, hash_b),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 3072],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        {
-            let r = cache.insert(
-                hash_a.to_string(),
-                ArcWrapper::new(Arc::new(a.clone()), Arc::new(AtomicBool::new(true)), None),
-            );
-            assert!(r.is_ok())
-        }
-        {
-            let r = cache.try_insert(
-                hash_b.to_string(),
-                ArcWrapper::new(Arc::new(b.clone()), Arc::new(AtomicBool::new(true)), None),
-            );
-            assert!(r.is_err());
-            if let Err(lru_mem::TryInsertError::WouldEjectLru { .. }) = r {
-                // 匹配到指定错误，不需要额外操作
-            } else {
-                panic!("Expected WouldEjectLru error");
+                let r = cache.insert(
+                    hash_b.to_string(),
+                    ArcWrapper::new(Arc::new(b.clone()), Arc::new(AtomicBool::new(true)), None),
+                );
+                assert!(r.is_ok());
             }
-            // 使用不同的键插入b，这样a会被驱逐
-            let r = cache.insert(
-                hash_b.to_string(),
-                ArcWrapper::new(Arc::new(b.clone()), Arc::new(AtomicBool::new(true)), None),
-            );
-            assert!(r.is_ok());
-        }
-        {
-            // a should be ejected
-            let r = cache.get(&hash_a.to_string());
-            assert!(r.is_none());
+
+            {
+                let r = cache.get(&hash_a.to_string());
+                assert!(r.is_none());
+            }
         }
     }
 
+    /// test that the Drop trait is called when an object is ejected from the LRU cache
     #[derive(Serialize, Deserialize)]
     struct Test {
         a: usize,
@@ -644,41 +561,17 @@ mod test {
 
     #[test]
     fn test_cache_object_serialize() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 1024],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        let s = bincode::serde::encode_to_vec(&a, bincode::config::standard()).unwrap();
-        let b: CacheObject = bincode::serde::decode_from_slice(&s, bincode::config::standard())
-            .unwrap()
-            .0;
-        assert_eq!(a.info, b.info);
-        assert_eq!(a.data_decompressed, b.data_decompressed);
-        assert_eq!(a.offset, b.offset);
-    }
-    #[test]
-    fn test_cache_object_serialize_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let a = CacheObject {
-            info: CacheObjectInfo::BaseObject(ObjectType::Blob, ObjectHash::default()),
-            offset: 0,
-            crc32: 0,
-            data_decompressed: vec![0; 2048],
-            mem_recorder: None,
-            is_delta_in_pack: false,
-        };
-        let s = bincode::serde::encode_to_vec(&a, bincode::config::standard()).unwrap();
-        let b: CacheObject = bincode::serde::decode_from_slice(&s, bincode::config::standard())
-            .unwrap()
-            .0;
-        assert_eq!(a.info, b.info);
-        assert_eq!(a.data_decompressed, b.data_decompressed);
-        assert_eq!(a.offset, b.offset);
+        for (kind, size) in [(HashKind::Sha1, 1024usize), (HashKind::Sha256, 2048usize)] {
+            let _guard = set_hash_kind_for_test(kind);
+            let a = make_obj(size);
+            let s = bincode::serde::encode_to_vec(&a, bincode::config::standard()).unwrap();
+            let b: CacheObject = bincode::serde::decode_from_slice(&s, bincode::config::standard())
+                .unwrap()
+                .0;
+            assert_eq!(a.info, b.info);
+            assert_eq!(a.data_decompressed, b.data_decompressed);
+            assert_eq!(a.offset, b.offset);
+        }
     }
 
     #[test]
