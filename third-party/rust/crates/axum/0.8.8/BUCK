@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "buildscript_run", "rust_binary", "rust_library")
 
 http_archive(
     name = "axum-vendor",
-    urls = ["https://static.crates.io/crates/axum/axum-0.8.7.crate"],
-    sha256 = "5b098575ebe77cb6d14fc7f32749631a6e44edbef6b796f89b020e99ba20d425",
+    urls = ["https://static.crates.io/crates/axum/axum-0.8.8.crate"],
+    sha256 = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8",
     type = "tar.gz",
-    strip_prefix = "axum-0.8.7",
+    strip_prefix = "axum-0.8.8",
     out = "vendor",
 )
 
