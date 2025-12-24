@@ -217,3 +217,67 @@ impl ObjectTrait for Tag {
         Ok(data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
+    use crate::internal::object::signature::{Signature, SignatureType};
+
+    /// Helper to build a deterministic signature for tests.
+    fn make_sig() -> Signature {
+        Signature::new(
+            SignatureType::Tagger,
+            "tagger".to_string(),
+            "tagger@example.com".to_string(),
+        )
+    }
+
+    /// Tag creation should serialize/deserialize correctly under the given hash kind.
+    fn round_trip(kind: HashKind) {
+        let _guard = set_hash_kind_for_test(kind);
+        let target = match kind {
+            HashKind::Sha1 => {
+                ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap()
+            }
+            HashKind::Sha256 => ObjectHash::from_str(
+                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+            )
+            .unwrap(),
+        };
+        let sig = make_sig();
+        let tag = Tag::new(
+            target,
+            ObjectType::Commit,
+            "v1.0.0".to_string(),
+            sig.clone(),
+            "release".to_string(),
+        );
+
+        let data = tag.to_data().unwrap();
+        let parsed = Tag::from_bytes(&data, tag.id).unwrap();
+
+        assert_eq!(parsed.id, tag.id);
+        assert_eq!(parsed.object_hash, target);
+        assert_eq!(parsed.object_type, ObjectType::Commit);
+        assert_eq!(parsed.tag_name, "v1.0.0");
+        assert_eq!(parsed.message, "release");
+        assert_eq!(parsed.tagger.to_string(), sig.to_string());
+    }
+
+    /// Tag round trip tests for both SHA-1 and SHA-256 hash kinds.
+    #[tokio::test]
+    async fn tag_round_trip() {
+        round_trip(HashKind::Sha1);
+        round_trip(HashKind::Sha256);
+    }
+
+    /// Invalid tag missing required fields should error.
+    #[test]
+    fn tag_invalid_missing_fields_errors() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let bad = b"type commit\ntag v1.0.0\n\nno object line".to_vec();
+        let hash = ObjectHash::from_str("ffffffffffffffffffffffffffffffffffffffff").unwrap();
+        assert!(Tag::from_bytes(&bad, hash).is_err());
+    }
+}

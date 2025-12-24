@@ -75,3 +75,42 @@ pub fn is_git_ssh_command(command: &str) -> bool {
 pub fn extract_repo_path_from_args(args: &[String]) -> Option<&str> {
     args.first().map(|s| s.as_str())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// parse_ssh_command should split the command and arguments when present.
+    #[test]
+    fn parse_command_with_args() {
+        let input = "git-upload-pack /repos/demo.git";
+        let parsed = parse_ssh_command(input).expect("command should parse");
+        assert_eq!(parsed.0, "git-upload-pack");
+        assert_eq!(parsed.1, vec!["/repos/demo.git".to_string()]);
+    }
+
+    /// parse_ssh_command should return None for empty input.
+    #[test]
+    fn parse_command_empty_returns_none() {
+        assert!(parse_ssh_command("").is_none());
+        assert!(parse_ssh_command("   ").is_none());
+    }
+
+    /// is_git_ssh_command identifies upload-pack and receive-pack only.
+    #[test]
+    fn validate_git_ssh_commands() {
+        assert!(is_git_ssh_command("git-upload-pack"));
+        assert!(is_git_ssh_command("git-receive-pack"));
+        assert!(!is_git_ssh_command("git-upload-archive"));
+        assert!(!is_git_ssh_command("other"));
+    }
+
+    /// extract_repo_path_from_args returns the first argument if present.
+    #[test]
+    fn extract_repo_path_from_first_arg() {
+        let args = vec!["/repos/demo.git".to_string(), "--stateless-rpc".to_string()];
+        assert_eq!(extract_repo_path_from_args(&args), Some("/repos/demo.git"));
+        let empty: Vec<String> = vec![];
+        assert_eq!(extract_repo_path_from_args(&empty), None);
+    }
+}

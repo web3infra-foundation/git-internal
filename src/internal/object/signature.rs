@@ -77,6 +77,7 @@ impl SignatureType {
     }
 }
 
+/// Represents a Git signature, including the author's name, email, timestamp, and timezone.
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub struct Signature {
     pub signature_type: SignatureType,
@@ -97,6 +98,7 @@ impl Display for Signature {
 }
 
 impl Signature {
+    /// The `from_data` method is used to convert a `Vec<u8>` to a `Signature` struct.
     pub fn from_data(data: Vec<u8>) -> Result<Signature, GitError> {
         // Make a mutable copy of the input data vector.
         let mut sign = data;
@@ -153,6 +155,7 @@ impl Signature {
         })
     }
 
+    /// The `to_data` method is used to convert a `Signature` struct to a `Vec<u8>`.
     pub fn to_data(&self) -> Result<Vec<u8>, GitError> {
         // Create a new empty vector to store the encoded data.
         let mut sign = Vec::new();
@@ -216,6 +219,7 @@ mod tests {
 
     use crate::internal::object::signature::{Signature, SignatureType};
 
+    /// Test conversion from string to SignatureType enum.
     #[test]
     fn test_signature_type_from_str() {
         assert_eq!(
@@ -229,6 +233,7 @@ mod tests {
         );
     }
 
+    /// Test conversion from SignatureType enum to string.
     #[test]
     fn test_signature_type_from_data() {
         assert_eq!(
@@ -242,6 +247,7 @@ mod tests {
         );
     }
 
+    /// Test conversion from SignatureType enum to bytes.
     #[test]
     fn test_signature_type_to_bytes() {
         assert_eq!(
@@ -255,6 +261,7 @@ mod tests {
         );
     }
 
+    /// Test conversion from data bytes to Signature struct.
     #[test]
     fn test_signature_new_from_data() {
         let sign = Signature::from_data(
@@ -271,6 +278,7 @@ mod tests {
         assert_eq!(sign.timezone, "+0800");
     }
 
+    /// Test conversion from Signature struct to data bytes.
     #[test]
     fn test_signature_to_data() {
         let sign = Signature::from_data(

@@ -198,163 +198,69 @@ mod tests {
     use super::*;
     use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 
-    #[test]
-    fn test_note_creation_and_serialization() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let target_id = ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap();
+    /// Helper to build a Note, serialize/deserialize with/without target under given hash kind.
+    fn round_trip(kind: HashKind) {
+        let _guard = set_hash_kind_for_test(kind);
+        let (target_id, hash_len) = match kind {
+            HashKind::Sha1 => (
+                ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap(),
+                40,
+            ),
+            HashKind::Sha256 => (
+                ObjectHash::from_str(
+                    "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                )
+                .unwrap(),
+                64,
+            ),
+        };
         let content = "This commit needs review".to_string();
         let note = Note::new(target_id, content.clone());
 
         assert_eq!(note.target_object_id, target_id);
         assert_eq!(note.content, content);
-        assert_ne!(note.id, ObjectHash::default());
         assert_eq!(note.get_type(), ObjectType::Blob);
+        assert_eq!(note.id.to_string().len(), hash_len);
 
-        // Test serialization
+        // serialization without target
         let data = note.to_data().unwrap();
         assert_eq!(data, content.as_bytes());
         assert_eq!(note.get_size(), content.len());
-    }
-    #[test]
-    fn test_note_creation_and_serialization_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let target_id = ObjectHash::from_str(
-            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-        )
-        .unwrap();
-        let content = "This commit needs review".to_string();
-        let note = Note::new(target_id, content.clone());
 
-        assert_eq!(note.target_object_id, target_id);
-        assert_eq!(note.content, content);
-        assert_ne!(note.id, ObjectHash::default());
-        assert_eq!(note.get_type(), ObjectType::Blob);
+        // basic deserialization (target remains default)
+        let basic = Note::from_bytes(&data, note.id).unwrap();
+        assert_eq!(basic.content, content);
+        assert_eq!(basic.id, note.id);
+        assert_eq!(basic.target_object_id, ObjectHash::default());
 
-        // Test serialization
-        let data = note.to_data().unwrap();
-        assert_eq!(data, content.as_bytes());
-        assert_eq!(note.get_size(), content.len());
-    }
-
-    #[test]
-    fn test_note_deserialization() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let content = "Deserialization test content";
-        let hash = ObjectHash::from_str("fedcba0987654321fedcba0987654321fedcba09").unwrap();
-        let target_id = ObjectHash::from_str("abcdef1234567890abcdef1234567890abcdef12").unwrap();
-
-        // Test basic deserialization
-        let note = Note::from_bytes(content.as_bytes(), hash).unwrap();
-        assert_eq!(note.content, content);
-        assert_eq!(note.id, hash);
-        assert_eq!(note.target_object_id, ObjectHash::default());
-
-        // Test deserialization with target
-        let note_with_target =
-            Note::from_bytes_with_target(content.as_bytes(), hash, target_id).unwrap();
-        assert_eq!(note_with_target.content, content);
-        assert_eq!(note_with_target.id, hash);
-        assert_eq!(note_with_target.target_object_id, target_id);
-    }
-    #[test]
-    fn test_note_deserialization_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let content = "Deserialization test content";
-        let hash = ObjectHash::from_str(
-            "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
-        )
-        .unwrap();
-        let target_id = ObjectHash::from_str(
-            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-        )
-        .unwrap();
-
-        // Test basic deserialization
-        let note = Note::from_bytes(content.as_bytes(), hash).unwrap();
-        assert_eq!(note.content, content);
-        assert_eq!(note.id, hash);
-        assert_eq!(note.target_object_id, ObjectHash::default());
-
-        // Test deserialization with target
-        let note_with_target =
-            Note::from_bytes_with_target(content.as_bytes(), hash, target_id).unwrap();
-        assert_eq!(note_with_target.content, content);
-        assert_eq!(note_with_target.id, hash);
-        assert_eq!(note_with_target.target_object_id, target_id);
-    }
-
-    #[test]
-    fn test_note_with_target_methods() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let target_id = ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap();
-        let content = "Test note with target methods";
-        let note = Note::new(target_id, content.to_string());
-
-        // Test serialization with target
-        let (data, returned_target) = note.to_data_with_target().unwrap();
-        assert_eq!(data, content.as_bytes());
+        // with target
+        let (data_with_target, returned_target) = note.to_data_with_target().unwrap();
         assert_eq!(returned_target, target_id);
-
-        // Test deserialization with target
-        let restored_note = Note::from_bytes_with_target(&data, note.id, target_id).unwrap();
-        assert_eq!(restored_note, note);
-        assert_eq!(restored_note.target_object_id, target_id);
-        assert_eq!(restored_note.content, content);
-    }
-    #[test]
-    fn test_note_with_target_methods_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let target_id = ObjectHash::from_str(
-            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-        )
-        .unwrap();
-        let content = "Test note with target methods";
-        let note = Note::new(target_id, content.to_string());
-
-        // Test serialization with target
-        let (data, returned_target) = note.to_data_with_target().unwrap();
-        assert_eq!(data, content.as_bytes());
-        assert_eq!(returned_target, target_id);
-
-        // Test deserialization with target
-        let restored_note = Note::from_bytes_with_target(&data, note.id, target_id).unwrap();
-        assert_eq!(restored_note, note);
-        assert_eq!(restored_note.target_object_id, target_id);
-        assert_eq!(restored_note.content, content);
+        let restored = Note::from_bytes_with_target(&data_with_target, note.id, target_id).unwrap();
+        assert_eq!(restored, note);
+        assert_eq!(restored.target_object_id, target_id);
+        assert_eq!(restored.content, content);
     }
 
+    /// Test round-trip Note serialization/deserialization with SHA-1 and SHA-256
+    #[tokio::test]
+    async fn note_async_round_trip() {
+        round_trip(HashKind::Sha1);
+        round_trip(HashKind::Sha256);
+    }
+
+    /// Invalid UTF-8 content should return an error in both constructors.
     #[test]
-    fn test_note_error_handling() {
+    fn note_invalid_utf8_errors() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        // Test invalid UTF-8
         let invalid_utf8 = vec![0xFF, 0xFE, 0xFD];
         let hash = ObjectHash::from_str("3333333333333333333333333333333333333333").unwrap();
         let target = ObjectHash::from_str("4444444444444444444444444444444444444444").unwrap();
-        let result = Note::from_bytes(&invalid_utf8, hash);
-        assert!(result.is_err());
-
-        let result_with_target = Note::from_bytes_with_target(&invalid_utf8, hash, target);
-        assert!(result_with_target.is_err());
+        assert!(Note::from_bytes(&invalid_utf8, hash).is_err());
+        assert!(Note::from_bytes_with_target(&invalid_utf8, hash, target).is_err());
     }
-    #[test]
-    fn test_note_error_handling_sha256() {
-        let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        // Test invalid UTF-8
-        let invalid_utf8 = vec![0xFF, 0xFE, 0xFD];
-        let hash = ObjectHash::from_str(
-            "3333333333333333333333333333333333333333333333333333333333333333",
-        )
-        .unwrap();
-        let target = ObjectHash::from_str(
-            "4444444444444444444444444444444444444444444444444444444444444444",
-        )
-        .unwrap();
-        let result = Note::from_bytes(&invalid_utf8, hash);
-        assert!(result.is_err());
 
-        let result_with_target = Note::from_bytes_with_target(&invalid_utf8, hash, target);
-        assert!(result_with_target.is_err());
-    }
+    /// Test Note demo functionality showcasing best practices
     #[test]
     fn test_note_demo_functionality() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -410,6 +316,8 @@ mod tests {
         assert_eq!(note, complete_note);
         assert_eq!(target_id, commit_id);
     }
+
+    /// Test Note demo functionality showcasing best practices with SHA-256
     #[test]
     fn test_note_demo_functionality_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);

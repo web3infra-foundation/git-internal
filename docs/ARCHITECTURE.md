@@ -115,5 +115,3 @@ Client ─pkt-line─▶ SmartProtocol
 - docs/GIT_PROTOCOL_GUIDE.md: protocol details and layering.
 - docs/GIT_OBJECTS.md: Git objects overview.
 - tests/data/: real pack/index fixtures for decode/idx roundtrip testing.
-
-This view lets you trace from protocol entry to object parsing and pack encode/decode, and adapt it to custom storage/transport scenarios.

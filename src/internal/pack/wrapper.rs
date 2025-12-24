@@ -44,6 +44,7 @@ where
         }
     }
 
+    /// Returns the number of bytes read so far.
     pub fn bytes_read(&self) -> usize {
         self.bytes_read
     }
@@ -119,13 +120,33 @@ mod tests {
     use sha1::{Digest, Sha1};
 
     use crate::{
-        hash::{HashKind, set_hash_kind},
+        hash::{HashKind, ObjectHash, set_hash_kind},
         internal::pack::wrapper::Wrapper,
     };
-    #[test]
-    fn test_wrapper_read() -> io::Result<()> {
-        let _guard = set_hash_kind(HashKind::Sha1);
+
+    /// Helper function to test wrapper read functionality for different hash kinds.
+    fn wrapper_read(kind: HashKind) {
+        let _guard = set_hash_kind(kind);
         let data = b"Hello, world!"; // Sample data
+        let cursor = Cursor::new(data.as_ref());
+        let buf_reader = BufReader::new(cursor);
+        let mut wrapper = Wrapper::new(buf_reader);
+
+        let mut buffer = vec![0; data.len()];
+        wrapper.read_exact(&mut buffer).unwrap();
+
+        assert_eq!(buffer, data);
+    }
+    #[test]
+    fn test_wrapper_read() {
+        wrapper_read(HashKind::Sha1);
+        wrapper_read(HashKind::Sha256);
+    }
+
+    /// Helper function to test wrapper hash functionality for different hash kinds.
+    fn wrapper_hash_with_kind(kind: HashKind) -> io::Result<()> {
+        let _guard = set_hash_kind(kind);
+        let data = b"Hello, world!";
         let cursor = Cursor::new(data.as_ref());
         let buf_reader = BufReader::new(cursor);
         let mut wrapper = Wrapper::new(buf_reader);
@@ -133,60 +154,19 @@ mod tests {
         let mut buffer = vec![0; data.len()];
         wrapper.read_exact(&mut buffer)?;
 
-        assert_eq!(buffer, data);
+        let hash_result = wrapper.final_hash();
+        let expected_hash = match kind {
+            HashKind::Sha1 => ObjectHash::from_bytes(&Sha1::digest(data)).unwrap(),
+            HashKind::Sha256 => ObjectHash::from_bytes(&sha2::Sha256::digest(data)).unwrap(),
+        };
+
+        assert_eq!(hash_result, expected_hash);
         Ok(())
     }
-    #[test]
-    fn test_wrapper_read_sha256() -> io::Result<()> {
-        let _guard = set_hash_kind(HashKind::Sha256);
-        let data = b"Hello, world!"; // Sample data
-        let cursor = Cursor::new(data.as_ref());
-        let buf_reader = BufReader::new(cursor);
-        let mut wrapper = Wrapper::new(buf_reader);
-
-        let mut buffer = vec![0; data.len()];
-        wrapper.read_exact(&mut buffer)?;
-
-        assert_eq!(buffer, data);
-        Ok(())
-    }
-
     #[test]
     fn test_wrapper_hash() -> io::Result<()> {
-        let _guard = set_hash_kind(HashKind::Sha1);
-        let data = b"Hello, world!";
-        let cursor = Cursor::new(data.as_ref());
-        let buf_reader = BufReader::new(cursor);
-        let mut wrapper = Wrapper::new(buf_reader);
-
-        let mut buffer = vec![0; data.len()];
-        wrapper.read_exact(&mut buffer)?;
-
-        let hash_result = wrapper.final_hash();
-        let mut hasher = Sha1::new();
-        hasher.update(data);
-        let expected_hash: [u8; 20] = hasher.finalize().into();
-
-        assert_eq!(hash_result.as_ref(), expected_hash);
-        Ok(())
-    }
-    #[test]
-    fn test_wrapper_hash_sha256() -> io::Result<()> {
-        let _guard = set_hash_kind(HashKind::Sha256);
-        let data = b"Hello, world!";
-        let cursor = Cursor::new(data.as_ref());
-        let buf_reader = BufReader::new(cursor);
-        let mut wrapper = Wrapper::new(buf_reader);
-
-        let mut buffer = vec![0; data.len()];
-        wrapper.read_exact(&mut buffer)?;
-
-        let hash_result = wrapper.final_hash();
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(data);
-        let expected_hash: [u8; 32] = hasher.finalize().into();
-
-        assert_eq!(hash_result.as_ref(), &expected_hash);
+        wrapper_hash_with_kind(HashKind::Sha1)?;
+        wrapper_hash_with_kind(HashKind::Sha256)?;
         Ok(())
     }
 }

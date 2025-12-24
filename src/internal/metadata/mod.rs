@@ -6,6 +6,7 @@ use std::fmt;
 
 pub use entry_meta::EntryMeta;
 
+/// Trait for types that can carry metadata.
 pub trait MetadataExt {
     type Meta: Clone + std::fmt::Debug + Send + Sync + 'static;
 
@@ -15,6 +16,7 @@ pub trait MetadataExt {
     //fn clear_metadata(&mut self);
 }
 
+/// Wrapper type that attaches metadata to an inner type.
 #[derive(Debug, Clone)]
 pub struct MetaAttached<T, M> {
     pub inner: T,

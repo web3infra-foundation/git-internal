@@ -6,6 +6,12 @@ use tokio::sync::mpsc;
 pub use crate::internal::pack::index_entry::IndexEntry;
 use crate::{errors::GitError, hash::ObjectHash, utils::HashAlgorithm};
 
+/// Builder for Git pack index (.idx) files that streams data through an async channel.
+/// # Arguments
+/// * `object_number` - Total number of objects in the pack file.
+/// * `sender` - Async channel sender to stream idx data.
+/// * `pack_hash` - Hash of the corresponding pack file (used in the idx trailer).
+/// * `inner_hash` - Hash algorithm instance to compute the idx file hash.
 pub struct IdxBuilder {
     sender: Option<mpsc::Sender<Vec<u8>>>,
     inner_hash: HashAlgorithm, //  idx trailer
@@ -14,6 +20,7 @@ pub struct IdxBuilder {
 }
 
 impl IdxBuilder {
+    /// Create a new IdxBuilder.
     pub fn new(object_number: usize, sender: mpsc::Sender<Vec<u8>>, pack_hash: ObjectHash) -> Self {
         Self {
             sender: Some(sender),
@@ -23,10 +30,12 @@ impl IdxBuilder {
         }
     }
 
+    /// Drop the sender to close the channel.
     pub fn drop_sender(&mut self) {
         self.sender.take(); // Take the sender out, dropping it
     }
 
+    /// Send data through the channel and update the inner hash.
     async fn send_data(&mut self, data: Vec<u8>) -> Result<(), GitError> {
         if let Some(sender) = &self.sender {
             self.inner_hash.update(&data);
@@ -40,6 +49,7 @@ impl IdxBuilder {
         Ok(())
     }
 
+    /// Send data through the channel without updating the inner hash.
     async fn send_data_without_update_hash(&mut self, data: Vec<u8>) -> Result<(), GitError> {
         if let Some(sender) = &self.sender {
             sender.send(data).await.map_err(|e| {
@@ -52,11 +62,12 @@ impl IdxBuilder {
         Ok(())
     }
 
+    /// send u32 value (big-endian)
     async fn send_u32(&mut self, v: u32) -> Result<(), GitError> {
         self.send_data(v.to_be_bytes().to_vec()).await
     }
 
-    /// 发送 u64 值（大端序）
+    /// send u64 value (big-endian)
     async fn send_u64(&mut self, v: u64) -> Result<(), GitError> {
         self.send_data(v.to_be_bytes().to_vec()).await
     }
@@ -70,6 +81,7 @@ impl IdxBuilder {
         self.send_data(header.to_vec()).await
     }
 
+    /// Write the fanout table for the index.
     async fn write_fanout(&mut self, entries: &mut [IndexEntry]) -> Result<(), GitError> {
         entries.sort_by(|a, b| a.hash.cmp(&b.hash));
         let mut fanout = [0u32; 256];
@@ -77,18 +89,20 @@ impl IdxBuilder {
             fanout[entry.hash.to_data()[0] as usize] += 1;
         }
 
-        // 计算累积计数
+        // Calculate cumulative counts
         for i in 1..fanout.len() {
             fanout[i] += fanout[i - 1];
         }
 
-        // 发送所有 256 个累积计数
+        // Send all 256 cumulative counts
         for &count in fanout.iter() {
             self.send_u32(count).await?;
         }
 
         Ok(())
     }
+
+    /// Write the object names (hashes) to the index.
     async fn write_names(&mut self, entries: &Vec<IndexEntry>) -> Result<(), GitError> {
         for e in entries {
             self.send_data(e.hash.to_data().clone()).await?;
@@ -97,6 +111,7 @@ impl IdxBuilder {
         Ok(())
     }
 
+    /// Write the CRC32 checksums for each object in the index.
     async fn write_crc32(&mut self, entries: &Vec<IndexEntry>) -> Result<(), GitError> {
         for e in entries {
             self.send_u32(e.crc32).await?;
@@ -105,6 +120,7 @@ impl IdxBuilder {
         Ok(())
     }
 
+    /// Write the offsets for each object in the index, handling large offsets.
     async fn write_offsets(&mut self, entries: &Vec<IndexEntry>) -> Result<(), GitError> {
         let mut large = vec![];
         for e in entries {
@@ -124,6 +140,7 @@ impl IdxBuilder {
         Ok(())
     }
 
+    /// Write the idx trailer containing the pack hash and idx file hash.
     async fn write_trailer(&mut self) -> Result<(), GitError> {
         // pack hash
         self.send_data_without_update_hash(self.pack_hash.to_data().clone())
@@ -135,6 +152,7 @@ impl IdxBuilder {
         Ok(())
     }
 
+    /// Write the complete idx file by sending header, fanout, names, CRCs, offsets, and trailer.
     pub async fn write_idx(&mut self, mut entries: Vec<IndexEntry>) -> Result<(), GitError> {
         // check entries length
         if entries.len() != self.object_number {
@@ -167,12 +185,12 @@ mod tests {
         internal::pack::{index_entry::IndexEntry, pack_index::IdxBuilder},
     };
 
-    /// 构造一个假的哈希（长度必须符合 Sha1 或 Sha256）
+    /// construct fake sha1 hash
     fn fake_sha1(n: u8) -> ObjectHash {
         ObjectHash::Sha1([n; 20])
     }
 
-    /// 构造 entries (hash 从 1、2、3… 便于 fanout 测试)
+    /// construct entries (hashes from 1, 2, 3… for fanout testing)
     fn build_entries_sha1(n: usize) -> Vec<IndexEntry> {
         (0..n)
             .map(|i| IndexEntry {
@@ -183,9 +201,10 @@ mod tests {
             .collect()
     }
 
+    /// Test basic idx building for SHA1 pack index.
     #[tokio::test]
     async fn test_idx_builder_sha1_basic() -> Result<(), GitError> {
-        // mock channel 捕获输出
+        // mock channel catcher
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4096);
 
         let object_number = 3;
@@ -195,26 +214,26 @@ mod tests {
 
         let entries = build_entries_sha1(object_number);
 
-        // 执行 idx 写入
+        // execute idx write
         builder.write_idx(entries).await?;
 
-        // 收集所有写入的字节片段
+        // collect all written byte chunks
         let mut out: Vec<u8> = Vec::new();
         while let Some(chunk) = rx.recv().await {
             out.extend_from_slice(&chunk);
         }
 
-        // ------- 断言 header -------
+        // ------- assert header -------
         // .idx v2 magic: FF 74 4F 63 00000002
         assert_eq!(&out[0..8], &[0xFF, 0x74, 0x4F, 0x63, 0, 0, 0, 2]);
 
         // ------- fanout -------
-        // fanout 共 256 * 4 字节，从 offset 8 开始
+        // fanout has 256 * 4 bytes, starting from offset 8
         let fanout_start = 8;
         let fanout_end = fanout_start + 256 * 4;
         let fanout_bytes = &out[fanout_start..fanout_end];
 
-        // 因为 hash 第一字节是 0,1,2，所以 fanout[0]=1 fanout[1]=2 fanout[2]=3，其余=3
+        // Because the first byte of the hash is 0,1,2, fanout[0]=1 fanout[1]=2 fanout[2]=3, the rest=3
         let mut fanout = [0u32; 256];
         fanout[0] = 1;
         fanout[1] = 2;
@@ -282,7 +301,7 @@ mod tests {
         let pack_hash_bytes = &out[trailer_pack_hash_start..trailer_pack_hash_end];
         assert!(pack_hash_bytes.iter().all(|b| *b == 0xAA));
 
-        // ------- idx hash（无法与 git 完全一致，但应该有值） -------
+        // ------- idx hash (cannot be exactly the same as git, but should have a value) -------
         let idx_hash = &out[trailer_pack_hash_end..trailer_pack_hash_end + 20];
         assert_eq!(idx_hash.len(), 20);
 
