@@ -152,7 +152,7 @@ impl Display for TreeItem {
 }
 
 impl TreeItem {
-    // Create a new TreeItem from a mode, id and name
+    /// Creates a new [`TreeItem`] with the given mode, object ID, and name.
     pub fn new(mode: TreeItemMode, id: ObjectHash, name: String) -> Self {
         TreeItem { mode, id, name }
     }
@@ -216,10 +216,12 @@ impl TreeItem {
         bytes
     }
 
+    /// Returns `true` if this item represents a subdirectory (tree).
     pub fn is_tree(&self) -> bool {
         self.mode == TreeItemMode::Tree
     }
 
+    /// Returns `true` if this item represents a regular file (blob).
     pub fn is_blob(&self) -> bool {
         self.mode == TreeItemMode::Blob
     }

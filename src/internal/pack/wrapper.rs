@@ -137,6 +137,8 @@ mod tests {
 
         assert_eq!(buffer, data);
     }
+
+    /// Verify Wrapper correctly reads data for both SHA-1 and SHA-256 hash modes.
     #[test]
     fn test_wrapper_read() {
         wrapper_read(HashKind::Sha1);

@@ -3,7 +3,7 @@
 version = 1
 
 [fingerprints]
-"path+file://($WORKSPACE)#0.3.0" = "8fc153cd10a1afe762643d375cf6dcb1b3e66fb188f65027d0716a5b300c5b79"
+"path+file://($WORKSPACE)#0.3.0" = "41a8d2cdd28fb784a0711174d601e5c0898baaf0ec1fac1dcecc4f3cba48b839"
 "registry+https://github.com/rust-lang/crates.io-index#adler2@2.0.1" = "7081ce7693ca45bff0e855374e6b7f386805bba1de9f7c288b1c706b99abef7f"
 "registry+https://github.com/rust-lang/crates.io-index#ahash@0.7.8" = "263bbc26dec8ade458658cf9dae3ef8fc606e85f04c7b47abb4f9255319689ac"
 "registry+https://github.com/rust-lang/crates.io-index#ahash@0.8.12" = "a383722a12d8343396b1965bfe77f1cebeafb12ccc571747b2b54614e3e1a1ea"
@@ -20,7 +20,7 @@ version = 1
 "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.0" = "bb77c9fe6700bdb8368b3560d69b131e91fda567a5bf1d71453b1f1ab579e551"
 "registry+https://github.com/rust-lang/crates.io-index#axum-core@0.5.5" = "f6ebee0212c333f10d6ef84beaa26c024ff87386e877cf9522b154cab54b2800"
 "registry+https://github.com/rust-lang/crates.io-index#axum-macros@0.5.0" = "3e5a942bb67e6cb70c2845c0cea03d54ada82430ba49ffd2ee53e1e429b98ebc"
-"registry+https://github.com/rust-lang/crates.io-index#axum@0.8.7" = "b04b7c711c61c10b7b655423e623b8198d4e04b3e1f78b59b7e9c9a2babcc1da"
+"registry+https://github.com/rust-lang/crates.io-index#axum@0.8.8" = "9520f7c0ad75dbdd19cc9a0d0baa6dab9779dc014e7df0167d9cdfda0e04ee03"
 "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1" = "515d0850a06d4dec36805d42bfd7cb6c8d287e894b16cf7ded43a3d1cdd98192"
 "registry+https://github.com/rust-lang/crates.io-index#base64ct@1.8.1" = "866a57dd8efb8c621bdf0d32f62488792eb50f0dcdf9374d1abc7a7a77d48182"
 "registry+https://github.com/rust-lang/crates.io-index#bigdecimal@0.4.9" = "f88bba28db672a65c61e84f5a91f481f570167555da21311619efea9efe3e4c5"
@@ -209,7 +209,7 @@ version = 1
 "registry+https://github.com/rust-lang/crates.io-index#rust_decimal@1.39.0" = "f0a399b0fe2c8f68f117a07bd3cf11e2b566fd90897d6e96930a70ca0eb17f1c"
 "registry+https://github.com/rust-lang/crates.io-index#rustc-hash@2.1.1" = "0679bb21a175710a797b96bedea9bb8d694b5c2110360190bb128ea90c196143"
 "registry+https://github.com/rust-lang/crates.io-index#rustc_version@0.4.1" = "151a5417e3d8e8cb75fb66d5633ca22bbf4557ba427427529179e3da85b3d795"
-"registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.2" = "ba89eb7e4c2e337cf6bdb4d8a02100147a1097f4fe17238deee1562a1c40a497"
+"registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.3" = "e80c7b24219999847b65892e679473bc55fd45ac9beea1acf0dd361ebbc78e9f"
 "registry+https://github.com/rust-lang/crates.io-index#rustversion@1.0.22" = "6cbed1a03b1abaa0c695a90fcbc859f57e5cfd5394ea17ade5c7fa4274d2c79e"
 "registry+https://github.com/rust-lang/crates.io-index#ryu@1.0.20" = "0b880d45160a7f70777d7137bcd2c4726589afcce9ec373650dc4da0f33d86f0"
 "registry+https://github.com/rust-lang/crates.io-index#scopeguard@1.2.0" = "0baa527d86d4a1c5caf29ed5f5bdd5dde46639205aa6cdbbbfb97f5115865ec0"
@@ -257,7 +257,7 @@ version = 1
 "registry+https://github.com/rust-lang/crates.io-index#sync_wrapper@1.0.2" = "002de477898e20cf93af9ae1e72196c8d46965d848700f1e1001a943971efb1e"
 "registry+https://github.com/rust-lang/crates.io-index#synstructure@0.13.2" = "a0fce44b849ef90c97e01cbcceb3cfd12a9e502355a3bff34028dbf2f663ab44"
 "registry+https://github.com/rust-lang/crates.io-index#tap@1.0.1" = "65ddab397aff4ea57dcd56004a95d452cffa0185eb41e938b71d4ffb883ca673"
-"registry+https://github.com/rust-lang/crates.io-index#tempfile@3.23.0" = "fe5b7a97419413ebd44ef7a2f165b8ea60639db22713ee11e7dfcdfd89dde1ac"
+"registry+https://github.com/rust-lang/crates.io-index#tempfile@3.24.0" = "cd1abdfba6338367de1b5516e7a93165a82f8d7b1956a812eb3bba9c56acf374"
 "registry+https://github.com/rust-lang/crates.io-index#thiserror-impl@2.0.17" = "2338288ccd0ae6b9bf46193a7f67d2800879ddb941ffa997693348ddbd3b2919"
 "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.17" = "c0e03513bc2b34bdb63c50135c81053a0f5dbdfb86153d0bcce4d2f4e88f16d7"
 "registry+https://github.com/rust-lang/crates.io-index#thread_local@1.1.9" = "2a6251ab49209b1905fabf4146850ec260b2411857bb5a5ad48e68bb38b8eb55"
