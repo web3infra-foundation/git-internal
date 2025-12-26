@@ -20,7 +20,7 @@ pub fn read_pkt_line(bytes: &mut Bytes) -> (usize, Bytes) {
         return (0, Bytes::new());
     }
 
-    let pkt_length = bytes.copy_to_bytes(4);
+    let pkt_length = bytes.slice(0..4);
     let pkt_length_str = match core::str::from_utf8(&pkt_length) {
         Ok(s) => s,
         Err(_) => {
@@ -38,6 +38,7 @@ pub fn read_pkt_line(bytes: &mut Bytes) -> (usize, Bytes) {
     };
 
     if pkt_length == 0 {
+        bytes.advance(4);
         return (4, Bytes::new()); // Consumed 4 bytes for the "0000" marker
     }
 
@@ -46,17 +47,18 @@ pub fn read_pkt_line(bytes: &mut Bytes) -> (usize, Bytes) {
         return (0, Bytes::new());
     }
 
-    let data_length = pkt_length - 4;
-    if bytes.len() < data_length {
+    if bytes.len() < pkt_length {
         tracing::warn!(
             "Insufficient data: need {} bytes, have {}",
-            data_length,
+            pkt_length,
             bytes.len()
         );
         return (0, Bytes::new());
     }
 
     // this operation will change the original bytes
+    bytes.advance(4);
+    let data_length = pkt_length - 4;
     let pkt_line = bytes.copy_to_bytes(data_length);
     tracing::debug!("pkt line: {:?}", pkt_line);
 
@@ -119,4 +121,21 @@ pub fn search_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+
+    /// Test that read_pkt_line correctly reads a complete packet line
+    #[test]
+    fn read_pkt_line_incomplete_does_not_consume() {
+        let mut buf = Bytes::from_static(b"0009do");
+        let before = buf.len();
+        let (len, data) = read_pkt_line(&mut buf);
+        assert_eq!(len, 0);
+        assert!(data.is_empty());
+        assert_eq!(buf.len(), before);
+    }
 }

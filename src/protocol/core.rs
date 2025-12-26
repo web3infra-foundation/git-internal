@@ -5,7 +5,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::StreamExt;
 
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
     internal::object::ObjectTrait,
     protocol::{
         smart::SmartProtocol,
-        types::{ProtocolError, ProtocolStream, ServiceType},
+        types::{Capability, ProtocolError, ProtocolStream, ServiceType, SideBand},
     },
 };
 
@@ -252,9 +252,49 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
         &mut self,
         request_data: &[u8],
     ) -> Result<ProtocolStream, ProtocolError> {
+        const SIDE_BAND_PACKET_LEN: usize = 1000;
+        const SIDE_BAND_64K_PACKET_LEN: usize = 65520;
+        const SIDE_BAND_HEADER_LEN: usize = 5; // 4-byte length + 1-byte band
+
         let request_bytes = bytes::Bytes::from(request_data.to_vec());
-        let (stream, _) = self.smart_protocol.git_upload_pack(request_bytes).await?;
-        Ok(Box::pin(stream.map(|data| Ok(Bytes::from(data)))))
+        let (pack_stream, protocol_buf) = self.smart_protocol.git_upload_pack(request_bytes).await?;
+        let ack_bytes = protocol_buf.freeze();
+
+        let ack_stream: ProtocolStream = if ack_bytes.is_empty() {
+            Box::pin(futures::stream::empty::<Result<Bytes, ProtocolError>>())
+        } else {
+            Box::pin(futures::stream::once(async move { Ok(ack_bytes) }))
+        };
+
+        let sideband_max = if self
+            .smart_protocol
+            .capabilities
+            .contains(&Capability::SideBand64k)
+        {
+            Some(SIDE_BAND_64K_PACKET_LEN - SIDE_BAND_HEADER_LEN)
+        } else if self
+            .smart_protocol
+            .capabilities
+            .contains(&Capability::SideBand)
+        {
+            Some(SIDE_BAND_PACKET_LEN - SIDE_BAND_HEADER_LEN)
+        } else {
+            None
+        };
+
+        let data_stream: ProtocolStream = if let Some(max_payload) = sideband_max {
+            let stream = pack_stream.flat_map(move |chunk| {
+                let packets = build_side_band_packets(&chunk, max_payload);
+                futures::stream::iter(packets.into_iter().map(Ok))
+            });
+            let stream =
+                stream.chain(futures::stream::once(async { Ok(Bytes::from_static(b"0000")) }));
+            Box::pin(stream)
+        } else {
+            Box::pin(pack_stream.map(|data| Ok(Bytes::from(data))))
+        };
+
+        Ok(Box::pin(ack_stream.chain(data_stream)))
     }
 
     /// Handle git-receive-pack request (for push)
@@ -262,21 +302,82 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
         &mut self,
         request_stream: ProtocolStream,
     ) -> Result<ProtocolStream, ProtocolError> {
+        const SIDE_BAND_PACKET_LEN: usize = 1000;
+        const SIDE_BAND_64K_PACKET_LEN: usize = 65520;
+        const SIDE_BAND_HEADER_LEN: usize = 5; // 4-byte length + 1-byte band
+
         let result_bytes = self
             .smart_protocol
             .git_receive_pack_stream(request_stream)
             .await?;
-        // Return the report status as a single-chunk stream
-        Ok(Box::pin(futures::stream::once(async { Ok(result_bytes) })))
+
+        let sideband_max = if self
+            .smart_protocol
+            .capabilities
+            .contains(&Capability::SideBand64k)
+        {
+            Some(SIDE_BAND_64K_PACKET_LEN - SIDE_BAND_HEADER_LEN)
+        } else if self
+            .smart_protocol
+            .capabilities
+            .contains(&Capability::SideBand)
+        {
+            Some(SIDE_BAND_PACKET_LEN - SIDE_BAND_HEADER_LEN)
+        } else {
+            None
+        };
+
+        // Wrap report-status in side-band if negotiated by the client.
+        if let Some(max_payload) = sideband_max {
+            let packets = build_side_band_packets(result_bytes.as_ref(), max_payload);
+            let stream = futures::stream::iter(packets.into_iter().map(Ok))
+                .chain(futures::stream::once(async { Ok(Bytes::from_static(b"0000")) }));
+            Ok(Box::pin(stream))
+        } else {
+            // Return the report status as a single-chunk stream
+            Ok(Box::pin(futures::stream::once(async { Ok(result_bytes) })))
+        }
     }
+}
+
+fn build_side_band_packets(chunk: &[u8], max_payload: usize) -> Vec<Bytes> {
+    if chunk.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut offset = 0;
+
+    while offset < chunk.len() {
+        let end = (offset + max_payload).min(chunk.len());
+        let payload = &chunk[offset..end];
+        let length = payload.len() + 5; // 4-byte length + 1-byte band
+        let mut pkt = BytesMut::with_capacity(length);
+        pkt.put(Bytes::from(format!("{length:04x}")));
+        pkt.put_u8(SideBand::PackfileData.value());
+        pkt.put(payload);
+        out.push(pkt.freeze());
+        offset = end;
+    }
+
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::HashKind;
+    use crate::hash::{HashKind, set_hash_kind_for_test};
     use crate::protocol::types::TransportProtocol;
+    use crate::protocol::utils;
     use async_trait::async_trait;
+    use bytes::{Bytes, BytesMut};
+    use futures::StreamExt;
+    use crate::internal::object::{
+        blob::Blob,
+        commit::Commit,
+        signature::{Signature, SignatureType},
+        tree::{Tree, TreeItem, TreeItemMode},
+    };
 
     /// Simple mock repository that serves fixed refs and echoes wants.
     #[derive(Clone)]
@@ -354,6 +455,180 @@ mod tests {
             },
             MockAuth,
         )
+    }
+
+    /// Mock repo that serves a single commit, tree, and blobs.
+    #[derive(Clone)]
+    struct SideBandRepo {
+        commit: Commit,
+        tree: Tree,
+        blobs: Vec<Blob>,
+    }
+    #[async_trait]
+    impl RepositoryAccess for SideBandRepo {
+        async fn get_repository_refs(&self) -> Result<Vec<(String, String)>, ProtocolError> {
+            Ok(vec![(
+                "refs/heads/main".to_string(),
+                self.commit.id.to_string(),
+            )])
+        }
+
+        async fn has_object(&self, object_hash: &str) -> Result<bool, ProtocolError> {
+            let known = object_hash == self.commit.id.to_string()
+                || object_hash == self.tree.id.to_string()
+                || self
+                    .blobs
+                    .iter()
+                    .any(|b| b.id.to_string() == object_hash);
+            Ok(known)
+        }
+
+        async fn get_object(&self, _object_hash: &str) -> Result<Vec<u8>, ProtocolError> {
+            Ok(Vec::new())
+        }
+
+        async fn store_pack_data(&self, _pack_data: &[u8]) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+
+        async fn update_reference(
+            &self,
+            _ref_name: &str,
+            _old_hash: Option<&str>,
+            _new_hash: &str,
+        ) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+
+        async fn get_objects_for_pack(
+            &self,
+            _wants: &[String],
+            _haves: &[String],
+        ) -> Result<Vec<String>, ProtocolError> {
+            Ok(Vec::new())
+        }
+
+        async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
+            Ok(true)
+        }
+
+        async fn post_receive_hook(&self) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+
+        async fn get_commit(&self, commit_hash: &str) -> Result<Commit, ProtocolError> {
+            if commit_hash == self.commit.id.to_string() {
+                Ok(self.commit.clone())
+            } else {
+                Err(ProtocolError::ObjectNotFound(commit_hash.to_string()))
+            }
+        }
+
+        async fn get_tree(&self, tree_hash: &str) -> Result<Tree, ProtocolError> {
+            if tree_hash == self.tree.id.to_string() {
+                Ok(self.tree.clone())
+            } else {
+                Err(ProtocolError::ObjectNotFound(tree_hash.to_string()))
+            }
+        }
+
+        async fn get_blob(&self, blob_hash: &str) -> Result<Blob, ProtocolError> {
+            self.blobs
+                .iter()
+                .find(|b| b.id.to_string() == blob_hash)
+                .cloned()
+                .ok_or_else(|| ProtocolError::ObjectNotFound(blob_hash.to_string()))
+        }
+    }
+
+    fn build_repo_with_objects() -> (SideBandRepo, Commit) {
+        let blob = Blob::from_content("hello");
+        let item = TreeItem::new(TreeItemMode::Blob, blob.id, "hello.txt".to_string());
+        let tree = Tree::from_tree_items(vec![item]).unwrap();
+        let author = Signature::new(
+            SignatureType::Author,
+            "tester".to_string(),
+            "tester@example.com".to_string(),
+        );
+        let committer = Signature::new(
+            SignatureType::Committer,
+            "tester".to_string(),
+            "tester@example.com".to_string(),
+        );
+        let commit = Commit::new(author, committer, tree.id, vec![], "init commit");
+
+        let repo = SideBandRepo {
+            commit: commit.clone(),
+            tree,
+            blobs: vec![blob],
+        };
+
+        (repo, commit)
+    }
+
+    /// upload-pack should emit NAK before sending pack data.
+    #[tokio::test]
+    async fn upload_pack_emits_ack_before_pack() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (repo, commit) = build_repo_with_objects();
+        let mut proto = GitProtocol::new(repo, MockAuth);
+        let mut request = BytesMut::new();
+        utils::add_pkt_line_string(&mut request, format!("want {}\n", commit.id));
+        utils::add_pkt_line_string(&mut request, "done\n".to_string());
+
+        let mut stream = proto
+            .upload_pack(&request)
+            .await
+            .expect("upload-pack");
+        let mut out = BytesMut::new();
+        while let Some(chunk) = stream.next().await {
+            out.extend_from_slice(&chunk.expect("stream chunk"));
+        }
+
+        let mut out_bytes = out.freeze();
+        let (_len, line) = utils::read_pkt_line(&mut out_bytes);
+        assert_eq!(line, Bytes::from_static(b"NAK\n"));
+        assert!(
+            out_bytes.as_ref().starts_with(b"PACK"),
+            "pack should follow ack"
+        );
+    }
+
+    /// upload-pack with side-band should wrap pack data in side-band packets.
+    #[tokio::test]
+    async fn upload_pack_sideband_frames_pack() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (repo, commit) = build_repo_with_objects();
+
+        let mut proto = GitProtocol::new(repo, MockAuth);
+        let mut request = BytesMut::new();
+        utils::add_pkt_line_string(
+            &mut request,
+            format!("want {} side-band-64k\n", commit.id),
+        );
+        utils::add_pkt_line_string(&mut request, "done\n".to_string());
+
+        let mut stream = proto
+            .upload_pack(&request)
+            .await
+            .expect("upload-pack");
+        let mut out = BytesMut::new();
+        while let Some(chunk) = stream.next().await {
+            out.extend_from_slice(&chunk.expect("stream chunk"));
+        }
+
+        let mut out_bytes = out.freeze();
+        let (_len, line) = utils::read_pkt_line(&mut out_bytes);
+        assert_eq!(line, Bytes::from_static(b"NAK\n"));
+
+        let raw = out_bytes.as_ref();
+        assert!(raw.len() > 9, "side-band packet should include PACK header");
+        let len_hex = std::str::from_utf8(&raw[..4]).expect("hex length");
+        let pkt_len = usize::from_str_radix(len_hex, 16).expect("parse length");
+        assert!(pkt_len > 5, "side-band packet should contain data");
+        assert_eq!(raw[4], SideBand::PackfileData.value());
+        assert_eq!(&raw[5..9], b"PACK");
+        assert!(raw.ends_with(b"0000"), "side-band stream should flush");
     }
 
     /// info_refs should include refs, capabilities, and object-format.
