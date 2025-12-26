@@ -11,7 +11,7 @@
 //! A) Prepare a bare repo and start the server:
 //! ```bash
 //! mkdir -p /tmp/git-http-demo && git init --bare /tmp/git-http-demo/demo.git
-//! GIT_REPO_ROOT=/tmp/git-http-demo cargo run --example http_server 
+//! GIT_REPO_ROOT=/tmp/git-http-demo cargo run --example http_server
 //! ```
 //! This creates a server-side repo and starts the HTTP server on port 3000.
 //!
@@ -35,12 +35,12 @@
 
 use async_trait::async_trait;
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
 };
 use flate2::{Compression, write::ZlibEncoder};
 use futures::StreamExt;
@@ -155,11 +155,15 @@ impl FsRepository {
                 .ok_or_else(|| ProtocolError::invalid_request("Missing tree hash"))?;
 
             let mode_norm = mode_raw.trim_start_matches('0');
-            let mode_bytes = if mode_norm.is_empty() { b"0" } else { mode_norm.as_bytes() };
+            let mode_bytes = if mode_norm.is_empty() {
+                b"0"
+            } else {
+                mode_norm.as_bytes()
+            };
             let mode = TreeItemMode::tree_item_type_from_bytes(mode_bytes)
                 .map_err(|e| ProtocolError::repository_error(e.to_string()))?;
-            let id = ObjectHash::from_str(hash_str)
-                .map_err(|e| ProtocolError::repository_error(e))?;
+            let id =
+                ObjectHash::from_str(hash_str).map_err(|e| ProtocolError::repository_error(e))?;
 
             items.push(TreeItem::new(mode, id, name.to_string()));
         }
@@ -267,9 +271,9 @@ impl RepositoryAccess for FsRepository {
     /// Check if the repository has a default branch (main or master).
     async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
         let refs = self.get_repository_refs().await?;
-        Ok(refs.iter().any(|(name, _)| {
-            name == "refs/heads/main" || name == "refs/heads/master"
-        }))
+        Ok(refs
+            .iter()
+            .any(|(name, _)| name == "refs/heads/main" || name == "refs/heads/master"))
     }
 
     /// Post-receive hook (not implemented in this example).
@@ -283,8 +287,8 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(commit_hash.to_string()));
         }
-        let hash = ObjectHash::from_str(commit_hash)
-            .map_err(|e| ProtocolError::repository_error(e))?;
+        let hash =
+            ObjectHash::from_str(commit_hash).map_err(|e| ProtocolError::repository_error(e))?;
         Commit::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -295,8 +299,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(tree_hash.to_string()));
         }
-        let id = ObjectHash::from_str(tree_hash)
-            .map_err(|e| ProtocolError::repository_error(e))?;
+        let id = ObjectHash::from_str(tree_hash).map_err(|e| ProtocolError::repository_error(e))?;
         let items = self.parse_tree_listing(&output.stdout)?;
         if items.is_empty() {
             return Ok(Tree {
@@ -304,8 +307,7 @@ impl RepositoryAccess for FsRepository {
                 tree_items: Vec::new(),
             });
         }
-        Tree::from_tree_items(items)
-            .map_err(|e| ProtocolError::repository_error(e.to_string()))
+        Tree::from_tree_items(items).map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
 
     /// Get a Blob object by hash.
@@ -314,8 +316,8 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(blob_hash.to_string()));
         }
-        let hash = ObjectHash::from_str(blob_hash)
-            .map_err(|e| ProtocolError::repository_error(e))?;
+        let hash =
+            ObjectHash::from_str(blob_hash).map_err(|e| ProtocolError::repository_error(e))?;
         Blob::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -329,21 +331,21 @@ impl RepositoryAccess for FsRepository {
     ) -> Result<(), ProtocolError> {
         // Store unpacked objects as loose objects (enough for this example server).
         for blob in blobs {
-            let data = blob.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("serialize blob: {e}"))
-            })?;
+            let data = blob
+                .to_data()
+                .map_err(|e| ProtocolError::repository_error(format!("serialize blob: {e}")))?;
             self.write_loose_object(ObjectType::Blob, &data)?;
         }
         for tree in trees {
-            let data = tree.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("serialize tree: {e}"))
-            })?;
+            let data = tree
+                .to_data()
+                .map_err(|e| ProtocolError::repository_error(format!("serialize tree: {e}")))?;
             self.write_loose_object(ObjectType::Tree, &data)?;
         }
         for commit in commits {
-            let data = commit.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("serialize commit: {e}"))
-            })?;
+            let data = commit
+                .to_data()
+                .map_err(|e| ProtocolError::repository_error(format!("serialize commit: {e}")))?;
             self.write_loose_object(ObjectType::Commit, &data)?;
         }
         Ok(())
@@ -372,7 +374,6 @@ impl AuthenticationService for AllowAllAuth {
     }
 }
 
-
 /// GitHTTP Handlers
 #[derive(Clone)]
 struct AppState {
@@ -399,7 +400,10 @@ async fn main() {
 
     let addr = "0.0.0.0:3000";
     println!("HTTP Git server on http://{addr}");
-    println!("Repo root: {}", std::env::var("GIT_REPO_ROOT").unwrap_or_else(|_| "./repos".into()));
+    println!(
+        "Repo root: {}",
+        std::env::var("GIT_REPO_ROOT").unwrap_or_else(|_| "./repos".into())
+    );
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -427,10 +431,7 @@ async fn info_refs(
     let request_path = format!("/{}/info/refs", repo_name);
     let query = format!("service={}", service);
 
-    if let Err(e) = handler
-        .authenticate_http(&headers_to_map(&headers))
-        .await
-    {
+    if let Err(e) = handler.authenticate_http(&headers_to_map(&headers)).await {
         return (StatusCode::UNAUTHORIZED, e.to_string()).into_response();
     }
 
@@ -457,10 +458,7 @@ async fn upload_pack(
     let mut handler = HttpGitHandler::new(repo, state.auth.clone());
     let request_path = format!("/{}/git-upload-pack", repo_name);
 
-    if let Err(e) = handler
-        .authenticate_http(&headers_to_map(&headers))
-        .await
-    {
+    if let Err(e) = handler.authenticate_http(&headers_to_map(&headers)).await {
         return (StatusCode::UNAUTHORIZED, e.to_string()).into_response();
     }
 
@@ -489,21 +487,14 @@ async fn receive_pack(
     let mut handler = HttpGitHandler::new(repo, state.auth.clone());
     let request_path = format!("/{}/git-receive-pack", repo_name);
 
-    if let Err(e) = handler
-        .authenticate_http(&headers_to_map(&headers))
-        .await
-    {
+    if let Err(e) = handler.authenticate_http(&headers_to_map(&headers)).await {
         return (StatusCode::UNAUTHORIZED, e.to_string()).into_response();
     }
 
     // Convert Axum body into ProtocolStream for git-internal.
-    let stream: ProtocolStream = Box::pin(
-        body.into_data_stream().map(|r| {
-            r.map_err(|e| {
-                ProtocolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-            })
-        }),
-    );
+    let stream: ProtocolStream = Box::pin(body.into_data_stream().map(|r| {
+        r.map_err(|e| ProtocolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))
+    }));
 
     match handler.handle_receive_pack(&request_path, stream).await {
         Ok((stream, content_type)) => {

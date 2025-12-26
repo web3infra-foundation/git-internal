@@ -257,7 +257,8 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
         const SIDE_BAND_HEADER_LEN: usize = 5; // 4-byte length + 1-byte band
 
         let request_bytes = bytes::Bytes::from(request_data.to_vec());
-        let (pack_stream, protocol_buf) = self.smart_protocol.git_upload_pack(request_bytes).await?;
+        let (pack_stream, protocol_buf) =
+            self.smart_protocol.git_upload_pack(request_bytes).await?;
         let ack_bytes = protocol_buf.freeze();
 
         let ack_stream: ProtocolStream = if ack_bytes.is_empty() {
@@ -287,8 +288,9 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
                 let packets = build_side_band_packets(&chunk, max_payload);
                 futures::stream::iter(packets.into_iter().map(Ok))
             });
-            let stream =
-                stream.chain(futures::stream::once(async { Ok(Bytes::from_static(b"0000")) }));
+            let stream = stream.chain(futures::stream::once(async {
+                Ok(Bytes::from_static(b"0000"))
+            }));
             Box::pin(stream)
         } else {
             Box::pin(pack_stream.map(|data| Ok(Bytes::from(data))))
@@ -330,8 +332,9 @@ impl<R: RepositoryAccess, A: AuthenticationService> GitProtocol<R, A> {
         // Wrap report-status in side-band if negotiated by the client.
         if let Some(max_payload) = sideband_max {
             let packets = build_side_band_packets(result_bytes.as_ref(), max_payload);
-            let stream = futures::stream::iter(packets.into_iter().map(Ok))
-                .chain(futures::stream::once(async { Ok(Bytes::from_static(b"0000")) }));
+            let stream = futures::stream::iter(packets.into_iter().map(Ok)).chain(
+                futures::stream::once(async { Ok(Bytes::from_static(b"0000")) }),
+            );
             Ok(Box::pin(stream))
         } else {
             // Return the report status as a single-chunk stream
@@ -367,17 +370,17 @@ fn build_side_band_packets(chunk: &[u8], max_payload: usize) -> Vec<Bytes> {
 mod tests {
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
-    use crate::protocol::types::TransportProtocol;
-    use crate::protocol::utils;
-    use async_trait::async_trait;
-    use bytes::{Bytes, BytesMut};
-    use futures::StreamExt;
     use crate::internal::object::{
         blob::Blob,
         commit::Commit,
         signature::{Signature, SignatureType},
         tree::{Tree, TreeItem, TreeItemMode},
     };
+    use crate::protocol::types::TransportProtocol;
+    use crate::protocol::utils;
+    use async_trait::async_trait;
+    use bytes::{Bytes, BytesMut};
+    use futures::StreamExt;
 
     /// Simple mock repository that serves fixed refs and echoes wants.
     #[derive(Clone)]
@@ -476,10 +479,7 @@ mod tests {
         async fn has_object(&self, object_hash: &str) -> Result<bool, ProtocolError> {
             let known = object_hash == self.commit.id.to_string()
                 || object_hash == self.tree.id.to_string()
-                || self
-                    .blobs
-                    .iter()
-                    .any(|b| b.id.to_string() == object_hash);
+                || self.blobs.iter().any(|b| b.id.to_string() == object_hash);
             Ok(known)
         }
 
@@ -576,10 +576,7 @@ mod tests {
         utils::add_pkt_line_string(&mut request, format!("want {}\n", commit.id));
         utils::add_pkt_line_string(&mut request, "done\n".to_string());
 
-        let mut stream = proto
-            .upload_pack(&request)
-            .await
-            .expect("upload-pack");
+        let mut stream = proto.upload_pack(&request).await.expect("upload-pack");
         let mut out = BytesMut::new();
         while let Some(chunk) = stream.next().await {
             out.extend_from_slice(&chunk.expect("stream chunk"));
@@ -602,16 +599,10 @@ mod tests {
 
         let mut proto = GitProtocol::new(repo, MockAuth);
         let mut request = BytesMut::new();
-        utils::add_pkt_line_string(
-            &mut request,
-            format!("want {} side-band-64k\n", commit.id),
-        );
+        utils::add_pkt_line_string(&mut request, format!("want {} side-band-64k\n", commit.id));
         utils::add_pkt_line_string(&mut request, "done\n".to_string());
 
-        let mut stream = proto
-            .upload_pack(&request)
-            .await
-            .expect("upload-pack");
+        let mut stream = proto.upload_pack(&request).await.expect("upload-pack");
         let mut out = BytesMut::new();
         while let Some(chunk) = stream.next().await {
             out.extend_from_slice(&chunk.expect("stream chunk"));

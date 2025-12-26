@@ -63,8 +63,8 @@ use git_internal::{
     protocol::{
         core::{AuthenticationService, RepositoryAccess},
         ssh::{SshGitHandler, parse_ssh_command},
-        utils::{read_pkt_line, read_until_white_space},
         types::{ProtocolError, ProtocolStream},
+        utils::{read_pkt_line, read_until_white_space},
     },
 };
 use std::{
@@ -172,11 +172,15 @@ impl FsRepository {
                 .ok_or_else(|| ProtocolError::invalid_request("Missing tree hash"))?;
 
             let mode_norm = mode_raw.trim_start_matches('0');
-            let mode_bytes = if mode_norm.is_empty() { b"0" } else { mode_norm.as_bytes() };
+            let mode_bytes = if mode_norm.is_empty() {
+                b"0"
+            } else {
+                mode_norm.as_bytes()
+            };
             let mode = TreeItemMode::tree_item_type_from_bytes(mode_bytes)
                 .map_err(|e| ProtocolError::repository_error(e.to_string()))?;
-            let id = ObjectHash::from_str(hash_str)
-                .map_err(|e| ProtocolError::repository_error(e))?;
+            let id =
+                ObjectHash::from_str(hash_str).map_err(|e| ProtocolError::repository_error(e))?;
 
             items.push(TreeItem::new(mode, id, name.to_string()));
         }
@@ -277,9 +281,9 @@ impl RepositoryAccess for FsRepository {
 
     async fn has_default_branch(&self) -> Result<bool, ProtocolError> {
         let refs = self.get_repository_refs().await?;
-        Ok(refs.iter().any(|(name, _)| {
-            name == "refs/heads/main" || name == "refs/heads/master"
-        }))
+        Ok(refs
+            .iter()
+            .any(|(name, _)| name == "refs/heads/main" || name == "refs/heads/master"))
     }
 
     async fn post_receive_hook(&self) -> Result<(), ProtocolError> {
@@ -291,8 +295,8 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(commit_hash.to_string()));
         }
-        let hash = ObjectHash::from_str(commit_hash)
-            .map_err(|e| ProtocolError::repository_error(e))?;
+        let hash =
+            ObjectHash::from_str(commit_hash).map_err(|e| ProtocolError::repository_error(e))?;
         Commit::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -302,8 +306,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(tree_hash.to_string()));
         }
-        let id = ObjectHash::from_str(tree_hash)
-            .map_err(|e| ProtocolError::repository_error(e))?;
+        let id = ObjectHash::from_str(tree_hash).map_err(|e| ProtocolError::repository_error(e))?;
         let items = self.parse_tree_listing(&output.stdout)?;
         if items.is_empty() {
             return Ok(Tree {
@@ -311,8 +314,7 @@ impl RepositoryAccess for FsRepository {
                 tree_items: Vec::new(),
             });
         }
-        Tree::from_tree_items(items)
-            .map_err(|e| ProtocolError::repository_error(e.to_string()))
+        Tree::from_tree_items(items).map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
 
     async fn get_blob(&self, blob_hash: &str) -> Result<Blob, ProtocolError> {
@@ -320,8 +322,8 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(blob_hash.to_string()));
         }
-        let hash = ObjectHash::from_str(blob_hash)
-            .map_err(|e| ProtocolError::repository_error(e))?;
+        let hash =
+            ObjectHash::from_str(blob_hash).map_err(|e| ProtocolError::repository_error(e))?;
         Blob::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -334,27 +336,26 @@ impl RepositoryAccess for FsRepository {
     ) -> Result<(), ProtocolError> {
         // Store unpacked objects as loose objects (enough for this example server).
         for blob in blobs {
-            let data = blob.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("serialize blob: {e}"))
-            })?;
+            let data = blob
+                .to_data()
+                .map_err(|e| ProtocolError::repository_error(format!("serialize blob: {e}")))?;
             self.write_loose_object(ObjectType::Blob, &data)?;
         }
         for tree in trees {
-            let data = tree.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("serialize tree: {e}"))
-            })?;
+            let data = tree
+                .to_data()
+                .map_err(|e| ProtocolError::repository_error(format!("serialize tree: {e}")))?;
             self.write_loose_object(ObjectType::Tree, &data)?;
         }
         for commit in commits {
-            let data = commit.to_data().map_err(|e| {
-                ProtocolError::repository_error(format!("serialize commit: {e}"))
-            })?;
+            let data = commit
+                .to_data()
+                .map_err(|e| ProtocolError::repository_error(format!("serialize commit: {e}")))?;
             self.write_loose_object(ObjectType::Commit, &data)?;
         }
         Ok(())
     }
 }
-
 
 /// Auth
 #[derive(Clone)]
@@ -377,7 +378,6 @@ impl AuthenticationService for AllowAllAuth {
         Ok(())
     }
 }
-
 
 /// SSH Exec Handler
 #[tokio::main]
@@ -460,7 +460,7 @@ async fn main() {
                 .map(|result| result.map_err(ProtocolError::Io));
             let stream: ProtocolStream = Box::pin(stream);
             handler.handle_receive_pack(stream).await.unwrap()
-        },
+        }
         _ => unreachable!("unsupported command: {command}"),
     };
 

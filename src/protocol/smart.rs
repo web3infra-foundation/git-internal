@@ -350,9 +350,7 @@ where
                 .handle_pack_objects(commits, trees, blobs)
                 .await
                 .map_err(|e| {
-                    ProtocolError::repository_error(format!(
-                        "Failed to store pack objects: {e}"
-                    ))
+                    ProtocolError::repository_error(format!("Failed to store pack objects: {e}"))
                 })?;
         }
 
@@ -694,8 +692,7 @@ mod tests {
         request.extend_from_slice(&pack_bytes);
 
         // Create request stream
-        let request_stream =
-            Box::pin(futures::stream::once(async { Ok(request.freeze()) }));
+        let request_stream = Box::pin(futures::stream::once(async { Ok(request.freeze()) }));
 
         // Execute receive-pack
         let result_bytes = smart
