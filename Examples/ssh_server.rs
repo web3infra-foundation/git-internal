@@ -17,7 +17,7 @@
 //! shift
 //! export SSH_ORIGINAL_COMMAND="$*"
 //! export GIT_REPO_ROOT=/tmp/git-ssh-demo
-//! exec /Users/jackie/rustprogram/git-internal/target/debug/examples/ssh_server
+//! exec /path/to/git-internal/target/debug/examples/ssh_server
 //! EOF
 //! chmod +x /tmp/git-ssh-wrapper
 //! ```
