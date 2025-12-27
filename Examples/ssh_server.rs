@@ -469,7 +469,10 @@ async fn main() {
         let data = chunk.unwrap();
         stdout.write_all(&data).await.unwrap();
     }
-    stdout.flush().await.unwrap();
+    if let Err(err) = stdout.flush().await {
+        eprintln!("failed to flush stdout to client: {err}");
+        std::process::exit(1);
+    }
 }
 
 fn upload_pack_request_complete(buf: &BytesMut) -> bool {
