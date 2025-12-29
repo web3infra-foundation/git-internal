@@ -158,6 +158,8 @@ where
         &mut self,
         upload_request: Bytes,
     ) -> Result<(ReceiverStream<Vec<u8>>, BytesMut), ProtocolError> {
+        self.capabilities.clear();
+        self.set_wire_hash_kind(self.local_hash_kind);
         let mut upload_request = upload_request;
         let mut want: Vec<String> = Vec::new();
         let mut have: Vec<String> = Vec::new();
@@ -238,9 +240,6 @@ where
             &mut protocol_buf,
             format!("ACK {last_common_commit} ready\n"),
         );
-        protocol_buf.put(&PKT_LINE_END_MARKER[..]);
-
-        add_pkt_line_string(&mut protocol_buf, format!("ACK {last_common_commit} \n"));
 
         let pack_stream = pack_generator.generate_incremental_pack(want, have).await?;
 
@@ -249,6 +248,10 @@ where
 
     /// Parse receive pack commands from protocol bytes
     pub fn parse_receive_pack_commands(&mut self, mut protocol_bytes: Bytes) {
+        self.command_list.clear();
+        self.capabilities.clear();
+        self.set_wire_hash_kind(self.local_hash_kind);
+        let mut first_line = true;
         loop {
             let (bytes_take, pkt_line) = read_pkt_line(&mut protocol_bytes);
 
@@ -258,6 +261,14 @@ where
 
             if pkt_line.is_empty() {
                 break;
+            }
+
+            if first_line {
+                if let Some(pos) = pkt_line.iter().position(|b| *b == b'\0') {
+                    let caps = String::from_utf8_lossy(&pkt_line[(pos + 1)..]).to_string();
+                    self.parse_capabilities(&caps);
+                }
+                first_line = false;
             }
 
             let ref_command = self.parse_ref_command(&mut pkt_line.clone());
@@ -270,29 +281,78 @@ where
         &mut self,
         data_stream: ProtocolStream,
     ) -> Result<Bytes, ProtocolError> {
-        // Collect all pack data from stream
-        let mut pack_data = BytesMut::new();
+        // Collect all request data from stream
+        let mut request_data = BytesMut::new();
         let mut stream = data_stream;
 
         while let Some(chunk_result) = futures::StreamExt::next(&mut stream).await {
             let chunk = chunk_result
                 .map_err(|e| ProtocolError::invalid_request(&format!("Stream error: {e}")))?;
-            pack_data.extend_from_slice(&chunk);
+            request_data.extend_from_slice(&chunk);
         }
 
-        // Create pack generator for unpacking
-        let pack_generator = PackGenerator::new(&self.repo_storage);
+        let mut protocol_bytes = request_data.freeze();
+        self.command_list.clear();
+        self.capabilities.clear();
+        self.set_wire_hash_kind(self.local_hash_kind);
+        let mut first_line = true;
+        let mut saw_flush = false;
+        loop {
+            let (bytes_take, pkt_line) = read_pkt_line(&mut protocol_bytes);
 
-        // Unpack the received data
-        let (commits, trees, blobs) = pack_generator.unpack_stream(pack_data.freeze()).await?;
+            if bytes_take == 0 {
+                if protocol_bytes.is_empty() {
+                    break;
+                }
+                return Err(ProtocolError::invalid_request(
+                    "Invalid pkt-line in receive-pack request",
+                ));
+            }
 
-        // Store the unpacked objects via the repository access trait
-        self.repo_storage
-            .handle_pack_objects(commits, trees, blobs)
-            .await
-            .map_err(|e| {
-                ProtocolError::repository_error(format!("Failed to store pack objects: {e}"))
-            })?;
+            if pkt_line.is_empty() {
+                saw_flush = true;
+                break;
+            }
+
+            if first_line {
+                if let Some(pos) = pkt_line.iter().position(|b| *b == b'\0') {
+                    let caps = String::from_utf8_lossy(&pkt_line[(pos + 1)..]).to_string();
+                    self.parse_capabilities(&caps);
+                }
+                first_line = false;
+            }
+
+            let ref_command = self.parse_ref_command(&mut pkt_line.clone());
+            self.command_list.push(ref_command);
+        }
+
+        if !saw_flush {
+            return Err(ProtocolError::invalid_request(
+                "Missing flush before pack data",
+            ));
+        }
+
+        // Remaining bytes (if any) are pack data.
+        let pack_data = if protocol_bytes.is_empty() {
+            None
+        } else {
+            Some(protocol_bytes)
+        };
+
+        if let Some(pack_data) = pack_data {
+            // Create pack generator for unpacking
+            let pack_generator = PackGenerator::new(&self.repo_storage);
+            // Unpack the received data
+            let (commits, trees, blobs) = pack_generator.unpack_stream(pack_data).await?;
+
+            // Store the unpacked objects via the repository access trait
+            self.repo_storage
+                .handle_pack_objects(commits, trees, blobs)
+                .await
+                .map_err(|e| {
+                    ProtocolError::repository_error(format!("Failed to store pack objects: {e}"))
+                })?;
+        }
 
         // Build status report
         let mut report_status = BytesMut::new();
@@ -405,12 +465,11 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use bytes::{Bytes, BytesMut};
+    use bytes::BytesMut;
     use futures;
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::protocol::types::RefCommand; // import sibling types
     use crate::protocol::utils; // import sibling module
     use crate::{
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
@@ -615,19 +674,25 @@ mod tests {
             pack_bytes.extend_from_slice(&chunk);
         }
 
-        // Prepare protocol and command
+        // Prepare protocol and request
         let repo_access = TestRepoAccess::new();
         let auth = TestAuth;
         let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access.clone(), auth);
         smart.set_wire_hash_kind(HashKind::Sha1);
-        smart.command_list.push(RefCommand::new(
-            smart.zero_id.to_string(),
-            commit.id.to_string(),
-            "refs/heads/main".to_string(),
-        ));
+
+        let mut request = BytesMut::new();
+        add_pkt_line_string(
+            &mut request,
+            format!(
+                "{} {} refs/heads/main\0report-status\n",
+                smart.zero_id, commit.id
+            ),
+        );
+        request.put(&PKT_LINE_END_MARKER[..]);
+        request.extend_from_slice(&pack_bytes);
 
         // Create request stream
-        let request_stream = Box::pin(futures::stream::once(async { Ok(Bytes::from(pack_bytes)) }));
+        let request_stream = Box::pin(futures::stream::once(async { Ok(request.freeze()) }));
 
         // Execute receive-pack
         let result_bytes = smart
@@ -785,5 +850,25 @@ mod tests {
         assert_eq!(smart.command_list.len(), 2);
         assert_eq!(smart.command_list[0].ref_name, "refs/heads/main");
         assert_eq!(smart.command_list[1].ref_name, "refs/tags/v1.0");
+    }
+
+    /// receive-pack should error if ref commands are not terminated by a flush.
+    #[tokio::test]
+    async fn receive_pack_missing_flush_errors() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let repo_access = TestRepoAccess::new();
+        let auth = TestAuth;
+        let mut smart = SmartProtocol::new(TransportProtocol::Http, repo_access, auth);
+
+        let zero = ObjectHash::zero_str(HashKind::Sha1);
+        let mut pkt = BytesMut::new();
+        add_pkt_line_string(&mut pkt, format!("{zero} {zero} refs/heads/main\n"));
+
+        let request_stream = Box::pin(futures::stream::once(async { Ok(pkt.freeze()) }));
+        let err = smart
+            .git_receive_pack_stream(request_stream)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidRequest(_)));
     }
 }
