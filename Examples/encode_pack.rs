@@ -1,7 +1,7 @@
 //! An example demonstrating how to encode Git objects into a pack file using git-internal crate.
 //! This example creates several Blob objects from string data, encodes them into a pack file,
 //! and writes the resulting pack file to disk.
-//! 
+//!
 //! Make sure to check the output directory for the generated pack file after running this example.
 //! The example assumes SHA-1 hashing for simplicity.
 
