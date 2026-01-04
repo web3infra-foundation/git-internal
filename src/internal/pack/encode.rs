@@ -133,7 +133,7 @@ fn encode_header(object_number: usize) -> Vec<u8> {
         0, 0, 0, 2, // generates version 2 only.
     ];
     assert_ne!(object_number, 0); // guarantee self.number_of_objects!=0
-    assert!(object_number < (1 << 32));
+    assert!(object_number <= u32::MAX as usize);
     //TODO: GitError:numbers of objects should < 4G ,
     result.append((object_number as u32).to_be_bytes().to_vec().as_mut()); // to 4 bytes (network byte order aka. big-endian)
     result
