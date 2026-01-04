@@ -759,8 +759,13 @@ mod tests {
         } else {
             2u64 * 1024 * 1024 * 1024
         };
-        let max_pack_size = usize::try_from(max_pack_size_u64)
-            .expect("pack size cap should fit in usize for this target");
+        let max_pack_size = usize::try_from(max_pack_size_u64).unwrap_or_else(|_| {
+            panic!(
+                "internal assertion failed: pack size cap {} does not fit in usize on this \
+                 target; this should be unreachable given the target_pointer_width configuration",
+                max_pack_size_u64
+            )
+        });
         let mut p = Pack::new(
             None,
             Some(max_pack_size), // 6GB on 64-bit, 2GB on 32-bit
