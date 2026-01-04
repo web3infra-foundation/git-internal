@@ -753,9 +753,17 @@ mod tests {
 
     /// Check if the given data is a valid pack file format by attempting to decode it.
     fn check_format(data: &Vec<u8>) {
+        // Use a smaller cap on 32-bit targets to avoid usize overflow.
+        let max_pack_size_u64 = if cfg!(target_pointer_width = "64") {
+            6u64 * 1024 * 1024 * 1024
+        } else {
+            2u64 * 1024 * 1024 * 1024
+        };
+        let max_pack_size = usize::try_from(max_pack_size_u64)
+            .expect("pack size cap should fit in usize for this target");
         let mut p = Pack::new(
             None,
-            Some(1024 * 1024 * 1024 * 6), // 6GB
+            Some(max_pack_size), // 6GB on 64-bit, 2GB on 32-bit
             Some(PathBuf::from("/tmp/.cache_temp")),
             true,
         );
