@@ -694,12 +694,15 @@ mod tests {
     /// Test saving Index to file
     #[test]
     fn test_index_to_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_path = temp_dir.path().join("index-760");
+
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/index/index-760");
 
         let index = Index::from_file(source).unwrap();
-        index.to_file("/tmp/index-760").unwrap();
-        let new_index = Index::from_file("/tmp/index-760").unwrap();
+        index.to_file(&temp_path).unwrap();
+        let new_index = Index::from_file(temp_path).unwrap();
         assert_eq!(index.size(), new_index.size());
     }
 
