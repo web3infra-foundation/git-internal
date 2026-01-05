@@ -113,7 +113,10 @@ impl Pack {
             temp_path.pop();
         }
         let thread_num = thread_num.unwrap_or_else(num_cpus::get);
-        let cache_mem_size = mem_limit.map(|mem_limit| mem_limit * 4 / 5);
+        let cache_mem_size = mem_limit.map(|mem_limit| {
+            // Use wider math to avoid 32-bit overflow when computing 80%.
+            ((mem_limit as u128) * 4 / 5) as usize
+        });
         Pack {
             number: 0,
             signature: ObjectHash::default(),
@@ -836,6 +839,20 @@ mod tests {
             }
             Err(e) => panic!("Decompression failed: {e:?}"),
         }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "32")]
+    fn test_pack_new_mem_limit_no_overflow_32bit() {
+        // In the old code, 1.2B * 4 produced an intermediate 4.8B value, which exceeds
+        // 32-bit usize::MAX (~4.29B) and overflowed before a later division; this test
+        // covers that former panic path.
+        let mem_limit = 1_200_000_000usize;
+        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let result = std::panic::catch_unwind(|| {
+            let _p = Pack::new(Some(1), Some(mem_limit), Some(tmp), true);
+        });
+        assert!(result.is_ok(), "Pack::new should not panic on 32-bit");
     }
 
     /// Helper function to run decode tests without delta objects
