@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "buildscript_run", "rust_binary", "rust_library")
 
 http_archive(
     name = "tokio-vendor",
-    urls = ["https://static.crates.io/crates/tokio/tokio-1.48.0.crate"],
-    sha256 = "ff360e02eab121e0bc37a2d3b4d4dc622e6eda3a8e5253d5435ecf5bd4c68408",
+    urls = ["https://static.crates.io/crates/tokio/tokio-1.49.0.crate"],
+    sha256 = "72a2903cd7736441aac9df9d7688bd0ce48edccaadf181c3b90be801e81d3d86",
     type = "tar.gz",
-    strip_prefix = "tokio-1.48.0",
+    strip_prefix = "tokio-1.49.0",
     out = "vendor",
 )
 
@@ -50,7 +50,7 @@ rust_library(
     visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/bytes/1.11.0:bytes",
-        "//third-party/rust/crates/libc/0.2.178:libc",
+        "//third-party/rust/crates/libc/0.2.179:libc",
         "//third-party/rust/crates/mio/1.1.1:mio",
         "//third-party/rust/crates/parking_lot/0.12.5:parking_lot",
         "//third-party/rust/crates/pin-project-lite/0.2.16:pin-project-lite",
