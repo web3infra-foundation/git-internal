@@ -120,13 +120,13 @@ mod tests {
     use sha1::{Digest, Sha1};
 
     use crate::{
-        hash::{HashKind, ObjectHash, set_hash_kind},
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::pack::wrapper::Wrapper,
     };
 
     /// Helper function to test wrapper read functionality for different hash kinds.
     fn wrapper_read(kind: HashKind) {
-        let _guard = set_hash_kind(kind);
+        let _guard = set_hash_kind_for_test(kind);
         let data = b"Hello, world!"; // Sample data
         let cursor = Cursor::new(data.as_ref());
         let buf_reader = BufReader::new(cursor);
@@ -147,7 +147,7 @@ mod tests {
 
     /// Helper function to test wrapper hash functionality for different hash kinds.
     fn wrapper_hash_with_kind(kind: HashKind) -> io::Result<()> {
-        let _guard = set_hash_kind(kind);
+        let _guard = set_hash_kind_for_test(kind);
         let data = b"Hello, world!";
         let cursor = Cursor::new(data.as_ref());
         let buf_reader = BufReader::new(cursor);

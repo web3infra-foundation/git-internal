@@ -5,8 +5,7 @@ use std::{io, io::BufRead};
 
 use flate2::{Decompress, FlushDecompress, Status};
 
-use crate::internal::object::types::ObjectType;
-use crate::utils::HashAlgorithm;
+use crate::{internal::object::types::ObjectType, utils::HashAlgorithm};
 
 /// ReadBoxed is to unzip information from a  DEFLATE stream,
 /// which hash [`BufRead`] trait.
@@ -114,12 +113,13 @@ fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -> io
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
+    use std::io::{Read, Write};
+
     use flate2::{Compression, write::ZlibEncoder};
     use sha1::{Digest, Sha1};
-    use std::io::Read;
-    use std::io::Write;
+
+    use super::*;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 
     /// Helper to build zlib-compressed bytes from input data.
     fn zlib_compress(data: &[u8]) -> Vec<u8> {

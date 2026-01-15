@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "buildscript_run", "rust_binary", "rust_library")
 
 http_archive(
     name = "flate2-vendor",
-    urls = ["https://static.crates.io/crates/flate2/flate2-1.1.5.crate"],
-    sha256 = "bfe33edd8e85a12a67454e37f8c75e730830d83e313556ab9ebf9ee7fbeb3bfb",
+    urls = ["https://static.crates.io/crates/flate2/flate2-1.1.8.crate"],
+    sha256 = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369",
     type = "tar.gz",
-    strip_prefix = "flate2-1.1.5",
+    strip_prefix = "flate2-1.1.8",
     out = "vendor",
 )
 
@@ -24,6 +24,7 @@ rust_library(
     crate_root = "vendor/src/lib.rs",
     edition = "2018",
     features = [
+        "any_c_zlib",
         "any_impl",
         "any_zlib",
         "default",

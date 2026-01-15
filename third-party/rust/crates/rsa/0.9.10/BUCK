@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "buildscript_run", "rust_binary", "rust_library")
 
 http_archive(
     name = "rsa-vendor",
-    urls = ["https://static.crates.io/crates/rsa/rsa-0.9.9.crate"],
-    sha256 = "40a0376c50d0358279d9d643e4bf7b7be212f1f4ff1da9070a7b54d22ef75c88",
+    urls = ["https://static.crates.io/crates/rsa/rsa-0.9.10.crate"],
+    sha256 = "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d",
     type = "tar.gz",
-    strip_prefix = "rsa-0.9.9",
+    strip_prefix = "rsa-0.9.10",
     out = "vendor",
 )
 

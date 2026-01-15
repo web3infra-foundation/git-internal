@@ -1,8 +1,10 @@
 //! An example demonstrating how to use the hashing functionality in git-internal,
 //! including how to switch between SHA-1 and SHA-256.
 
-use git_internal::hash::{HashKind, ObjectHash, set_hash_kind};
-use git_internal::internal::object::types::ObjectType;
+use git_internal::{
+    hash::{HashKind, ObjectHash, set_hash_kind_for_test},
+    internal::object::types::ObjectType,
+};
 
 fn main() {
     let data = b"This is some data to be hashed.";
@@ -13,7 +15,7 @@ fn main() {
     {
         // Set the hash kind for the current thread to SHA-1.
         // The guard ensures the hash kind is restored when it goes out of scope.
-        let _guard = set_hash_kind(HashKind::Sha1);
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
         println!("Using HashKind: {:?}", HashKind::Sha1);
 
         // Create a hash for a blob object. The library automatically prepends
@@ -39,7 +41,8 @@ fn main() {
     // --- SHA-256 Hashing ---
     {
         // Set the hash kind for the current thread to SHA-256.
-        let _guard = set_hash_kind(HashKind::Sha256);
+        // The guard ensures the hash kind is restored when it goes out of scope.
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         println!("Using HashKind: {:?}", HashKind::Sha256);
 
         let blob_hash = ObjectHash::from_type_and_data(ObjectType::Blob, data);
