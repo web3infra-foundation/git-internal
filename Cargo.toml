@@ -42,7 +42,7 @@ zstd-sys = { version = "2.0.16+zstd.1.5.7", features = ["experimental"] }
 sea-orm = { version = "1.1.17", features = ["sqlx-sqlite"] }
 flate2 = { version = "1.1.5", features = ["zlib"] }
 serde = { version = "1.0.228", features = ["derive"] }
-chrono = { version = "0.4.42", features = ["serde"] }
+chrono = { version = "0.4.43", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 tokio = { version = "1.49.0", features = ["fs", "io-util"] }
 bincode = { version = "2.0.1", features = ["serde"] }
