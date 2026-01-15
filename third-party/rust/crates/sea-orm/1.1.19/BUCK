@@ -49,7 +49,7 @@ rust_library(
         "//third-party/rust/crates/async-stream/0.3.6:async-stream",
         "//third-party/rust/crates/async-trait/0.1.89:async-trait",
         "//third-party/rust/crates/bigdecimal/0.4.9:bigdecimal",
-        "//third-party/rust/crates/chrono/0.4.42:chrono",
+        "//third-party/rust/crates/chrono/0.4.43:chrono",
         "//third-party/rust/crates/derive_more/2.1.0:derive_more",
         "//third-party/rust/crates/futures-util/0.3.31:futures-util",
         "//third-party/rust/crates/log/0.4.29:log",

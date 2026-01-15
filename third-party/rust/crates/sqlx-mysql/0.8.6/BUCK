@@ -46,7 +46,7 @@ rust_library(
         "//third-party/rust/crates/bitflags/2.10.0:bitflags",
         "//third-party/rust/crates/byteorder/1.5.0:byteorder",
         "//third-party/rust/crates/bytes/1.11.0:bytes",
-        "//third-party/rust/crates/chrono/0.4.42:chrono",
+        "//third-party/rust/crates/chrono/0.4.43:chrono",
         "//third-party/rust/crates/crc/3.4.0:crc",
         "//third-party/rust/crates/digest/0.10.7:digest",
         "//third-party/rust/crates/dotenvy/0.15.7:dotenvy",

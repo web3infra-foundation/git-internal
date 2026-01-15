@@ -47,7 +47,7 @@ rust_library(
     visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/bigdecimal/0.4.9:bigdecimal",
-        "//third-party/rust/crates/chrono/0.4.42:chrono",
+        "//third-party/rust/crates/chrono/0.4.43:chrono",
         "//third-party/rust/crates/inherent/1.0.13:inherent",
         "//third-party/rust/crates/ordered-float/4.6.0:ordered-float",
         "//third-party/rust/crates/rust_decimal/1.39.0:rust_decimal",
