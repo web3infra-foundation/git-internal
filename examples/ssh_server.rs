@@ -63,7 +63,7 @@ use std::{
     io::Write,
     path::{Component, Path as StdPath, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use async_trait::async_trait;
@@ -91,6 +91,8 @@ use tokio::{
     process::Command,
 };
 use tokio_util::io::ReaderStream;
+
+static GLOBAL_HASH_KIND: OnceLock<HashKind> = OnceLock::new();
 
 /// Repo implementation (same as HTTP example)
 #[derive(Clone)]
@@ -131,15 +133,20 @@ impl FsRepository {
         self.git_dir.join("objects")
     }
 
-    /// Detect the repository's hash algorithm and configure the thread-local hash kind.
+    /// Detect the repository's hash algorithm and configure the global hash kind once.
     /// Reads `extensions.objectformat` from the repository config.
     /// If not set, defaults to SHA-1 for backward compatibility.
     async fn detect_and_configure_hash_kind(&self) -> Result<(), ProtocolError> {
+        if let Some(kind) = GLOBAL_HASH_KIND.get() {
+            set_hash_kind(*kind);
+            return Ok(());
+        }
+
         let output = self
             .run_git(["config", "--get", "extensions.objectformat"])
             .await?;
 
-        let hash_kind = if output.status.success() {
+        let detected = if output.status.success() {
             let format = String::from_utf8_lossy(&output.stdout)
                 .trim()
                 .to_ascii_lowercase();
@@ -152,8 +159,27 @@ impl FsRepository {
             HashKind::Sha1
         };
 
-        set_hash_kind(hash_kind);
-        Ok(())
+        match GLOBAL_HASH_KIND.set(detected) {
+            Ok(()) => {
+                set_hash_kind(detected);
+                Ok(())
+            }
+            Err(_) => {
+                if let Some(existing) = GLOBAL_HASH_KIND.get() {
+                    if *existing != detected {
+                        return Err(ProtocolError::repository_error(format!(
+                            "Mixed repository object formats are not supported: server initialized with {existing}, but repository at {:?} uses {detected}",
+                            self.git_dir
+                        )));
+                    }
+                    set_hash_kind(*existing);
+                    Ok(())
+                } else {
+                    set_hash_kind(detected);
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Write a loose object to the objects directory.
