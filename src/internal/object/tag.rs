@@ -221,8 +221,10 @@ impl ObjectTrait for Tag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-    use crate::internal::object::signature::{Signature, SignatureType};
+    use crate::{
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
+        internal::object::signature::{Signature, SignatureType},
+    };
 
     /// Helper to build a deterministic signature for tests.
     fn make_sig() -> Signature {

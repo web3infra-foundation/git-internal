@@ -39,7 +39,7 @@ jobs:
           rustup component add rustfmt --toolchain nightly
 
       - name: Run rustfmt
-        run: cargo fmt --all --check
+        run: cargo +nightly fmt --all --check
 
   clippy:
     name: Clippy Check
