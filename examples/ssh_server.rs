@@ -46,6 +46,17 @@
 //! - Install the binary on the server and wire it in `~/.ssh/authorized_keys`:
 //!   `command="/path/to/ssh_server" ssh-ed25519 AAAA...`
 //! - Then clients can run: `git clone ssh://user@host/demo.git`.
+//!
+//! SHA-256 repository test:
+//! ```bash
+//! rm -rf /tmp/git-ssh-sha256
+//! mkdir -p /tmp/git-ssh-sha256
+//! git init --bare --object-format=sha256 /tmp/git-ssh-sha256/demo-sha256.git
+//! # Update GIT_REPO_ROOT in /tmp/git-ssh-wrapper to /tmp/git-ssh-sha256
+//! # Then push/clone from a SHA-256 client repository
+//! ```
+//! The server automatically detects each repository's object format by reading
+//! `extensions.objectformat` from the repository config before handling requests.
 
 use std::{
     collections::HashMap,
@@ -60,7 +71,7 @@ use bytes::{Bytes, BytesMut};
 use flate2::{Compression, write::ZlibEncoder};
 use futures::StreamExt;
 use git_internal::{
-    hash::{ObjectHash, get_hash_kind},
+    hash::{HashKind, ObjectHash, get_hash_kind, set_hash_kind},
     internal::object::{
         ObjectTrait,
         blob::Blob,
@@ -118,6 +129,31 @@ impl FsRepository {
     /// Get the path to the objects directory.
     fn objects_dir(&self) -> PathBuf {
         self.git_dir.join("objects")
+    }
+
+    /// Detect the repository's hash algorithm and configure the thread-local hash kind.
+    /// Reads `extensions.objectformat` from the repository config.
+    /// If not set, defaults to SHA-1 for backward compatibility.
+    async fn detect_and_configure_hash_kind(&self) -> Result<(), ProtocolError> {
+        let output = self
+            .run_git(["config", "--get", "extensions.objectformat"])
+            .await?;
+
+        let hash_kind = if output.status.success() {
+            let format = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_ascii_lowercase();
+            match format.as_str() {
+                "sha256" => HashKind::Sha256,
+                _ => HashKind::Sha1,
+            }
+        } else {
+            // No extensions.objectformat means SHA-1 (default)
+            HashKind::Sha1
+        };
+
+        set_hash_kind(hash_kind);
+        Ok(())
     }
 
     /// Write a loose object to the objects directory.
@@ -422,6 +458,13 @@ async fn main() {
     };
 
     let repo = FsRepository::new(git_dir);
+
+    // Configure hash kind before any object operations
+    if let Err(e) = repo.detect_and_configure_hash_kind().await {
+        eprintln!("Failed to detect hash kind: {e}");
+        std::process::exit(1);
+    }
+
     let auth = AllowAllAuth;
     let mut handler = SshGitHandler::new(repo, auth);
 

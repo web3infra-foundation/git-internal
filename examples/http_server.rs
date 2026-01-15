@@ -32,6 +32,15 @@
 //! - The curl call checks the Git smart HTTP advertisement.
 //! - The push exercises `receive-pack`; replace `main` with `master` if needed.
 //! - The clone exercises `upload-pack`.
+//!
+//! C) Test with SHA-256 repository:
+//! ```bash
+//! mkdir -p /tmp/git-http-sha256 && git init --bare --object-format=sha256 /tmp/git-http-sha256/demo-sha256.git
+//! GIT_REPO_ROOT=/tmp/git-http-sha256 cargo run --example http_server
+//! # Then push/clone from a SHA-256 client repository
+//! ```
+//! The server automatically detects each repository's object format by reading
+//! `extensions.objectformat` from the repository config before handling requests.
 
 use std::{
     collections::HashMap,
@@ -53,7 +62,7 @@ use axum::{
 use flate2::{Compression, write::ZlibEncoder};
 use futures::StreamExt;
 use git_internal::{
-    hash::{ObjectHash, get_hash_kind},
+    hash::{HashKind, ObjectHash, get_hash_kind, set_hash_kind},
     internal::object::{
         ObjectTrait,
         blob::Blob,
@@ -103,6 +112,30 @@ impl FsRepository {
     /// Get the path to the objects directory.
     fn objects_dir(&self) -> PathBuf {
         self.git_dir.join("objects")
+    }
+    /// Detect the repository's hash algorithm and configure the thread-local hash kind.
+    /// Reads `extensions.objectformat` from the repository config.
+    /// If not set, defaults to SHA-1 for backward compatibility.
+    async fn detect_and_configure_hash_kind(&self) -> Result<(), ProtocolError> {
+        let output = self
+            .run_git(["config", "--get", "extensions.objectformat"])
+            .await?;
+
+        let hash_kind = if output.status.success() {
+            let format = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_ascii_lowercase();
+            match format.as_str() {
+                "sha256" => HashKind::Sha256,
+                _ => HashKind::Sha1,
+            }
+        } else {
+            // No extensions.objectformat means SHA-1 (default)
+            HashKind::Sha1
+        };
+
+        set_hash_kind(hash_kind);
+        Ok(())
     }
     /// Write a loose object to the objects directory.
     fn write_loose_object(
@@ -424,6 +457,16 @@ async fn info_refs(
     };
 
     let repo = FsRepository::new(git_dir);
+
+    // Configure hash kind before any object operations
+    if let Err(e) = repo.detect_and_configure_hash_kind().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to detect hash kind: {}", e),
+        )
+            .into_response();
+    }
+
     let mut handler = HttpGitHandler::new(repo, state.auth.clone());
 
     let request_path = format!("/{}/info/refs", repo_name);
@@ -453,6 +496,16 @@ async fn upload_pack(
     };
 
     let repo = FsRepository::new(git_dir);
+
+    // Configure hash kind before any object operations
+    if let Err(e) = repo.detect_and_configure_hash_kind().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to detect hash kind: {}", e),
+        )
+            .into_response();
+    }
+
     let mut handler = HttpGitHandler::new(repo, state.auth.clone());
     let request_path = format!("/{}/git-upload-pack", repo_name);
 
@@ -482,6 +535,16 @@ async fn receive_pack(
     };
 
     let repo = FsRepository::new(git_dir);
+
+    // Configure hash kind before any object operations
+    if let Err(e) = repo.detect_and_configure_hash_kind().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to detect hash kind: {}", e),
+        )
+            .into_response();
+    }
+
     let mut handler = HttpGitHandler::new(repo, state.auth.clone());
     let request_path = format!("/{}/git-receive-pack", repo_name);
 

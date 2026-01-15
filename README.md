@@ -159,14 +159,14 @@ A simple approach:
 Before submitting a Pull Request, please ensure your code passes the following checks:
 
 ```bash
-# Run clippy with all warnings treated as errors
+# Run clippy with all warnings treated as errors (warnings will be treated as errors)
 cargo clippy --all-targets --all-features -- -D warnings
 
 # Check code formatting (requires nightly toolchain)
 cargo +nightly fmt --all --check
 ```
 
-**Both commands must complete without any errors or warnings.** Only PRs that pass these checks will be accepted for merge.
+**Both commands must complete without any warnings.** The clippy check treats all warnings as errors, and the formatter check ensures code follows the project style guide. Only PRs that pass these checks will be accepted for merge.
 
 If the formatting check fails, you can automatically fix formatting issues by running:
 

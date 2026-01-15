@@ -143,12 +143,17 @@ impl Caches {
             if self.tmp_path.exists() {
                 fs::remove_dir_all(&self.tmp_path).unwrap(); //very slow
                 // Try to remove parent .cache_temp directory if it's empty
-                if let Some(parent) = self.tmp_path.parent()
-                    && parent.file_name().and_then(|n| n.to_str()) == Some(".cache_temp")
-                {
-                    // Attempt to remove the parent directory if empty
-                    // This will fail silently if the directory is not empty or doesn't exist
-                    let _ = fs::remove_dir(parent);
+                if let Some(parent) = self.tmp_path.parent() {
+                    let is_cache_temp = parent
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n == ".cache_temp")
+                        .unwrap_or(false);
+                    if is_cache_temp {
+                        // Attempt to remove the parent directory if empty
+                        // This will fail silently if the directory is not empty or doesn't exist
+                        let _ = fs::remove_dir(parent);
+                    }
                 }
             }
         });
