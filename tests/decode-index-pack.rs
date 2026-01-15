@@ -102,9 +102,11 @@ fn parse_idx_offsets(idx_bytes: &[u8], kind: HashKind) -> HashMap<Vec<u8>, u64> 
     map
 }
 
+type DecodePackResult = Result<(Vec<MetaAttached<Entry, EntryMeta>>, ObjectHash, usize), GitError>;
+
 fn decode_pack(
     prefix: &str,
-) -> Result<(Vec<MetaAttached<Entry, EntryMeta>>, ObjectHash, usize), GitError> {
+) -> DecodePackResult {
     let pack_path = find_pack(prefix);
     let file = fs::File::open(pack_path)?;
     let mut reader = BufReader::new(file);

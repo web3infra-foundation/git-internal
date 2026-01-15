@@ -238,11 +238,11 @@ mod tests {
         fanout[0] = 1;
         fanout[1] = 2;
         fanout[2] = 3;
-        for i in 3..256 {
-            fanout[i] = 3;
+        for item in fanout.iter_mut().skip(3) {
+            *item = 3;
         }
 
-        for i in 0..256 {
+        for (i, val) in fanout.iter().enumerate() {
             let idx = i * 4;
             let v = u32::from_be_bytes([
                 fanout_bytes[idx],
@@ -250,7 +250,7 @@ mod tests {
                 fanout_bytes[idx + 2],
                 fanout_bytes[idx + 3],
             ]);
-            assert_eq!(v, fanout[i], "fanout mismatch at index {i}");
+            assert_eq!(v, *val, "fanout mismatch at index {i}");
         }
 
         // ------- names -------

@@ -13,7 +13,7 @@ fn main() {
     {
         // Set the hash kind for the current thread to SHA-1.
         // The guard ensures the hash kind is restored when it goes out of scope.
-        let _guard = set_hash_kind(HashKind::Sha1);
+        set_hash_kind(HashKind::Sha1);
         println!("Using HashKind: {:?}", HashKind::Sha1);
 
         // Create a hash for a blob object. The library automatically prepends
@@ -39,7 +39,7 @@ fn main() {
     // --- SHA-256 Hashing ---
     {
         // Set the hash kind for the current thread to SHA-256.
-        let _guard = set_hash_kind(HashKind::Sha256);
+        set_hash_kind(HashKind::Sha256);
         println!("Using HashKind: {:?}", HashKind::Sha256);
 
         let blob_hash = ObjectHash::from_type_and_data(ObjectType::Blob, data);

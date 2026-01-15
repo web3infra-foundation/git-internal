@@ -180,7 +180,7 @@ impl FsRepository {
             let mode = TreeItemMode::tree_item_type_from_bytes(mode_bytes)
                 .map_err(|e| ProtocolError::repository_error(e.to_string()))?;
             let id =
-                ObjectHash::from_str(hash_str).map_err(|e| ProtocolError::repository_error(e))?;
+                ObjectHash::from_str(hash_str).map_err(ProtocolError::repository_error)?;
 
             items.push(TreeItem::new(mode, id, name.to_string()));
         }
@@ -296,7 +296,7 @@ impl RepositoryAccess for FsRepository {
             return Err(ProtocolError::ObjectNotFound(commit_hash.to_string()));
         }
         let hash =
-            ObjectHash::from_str(commit_hash).map_err(|e| ProtocolError::repository_error(e))?;
+            ObjectHash::from_str(commit_hash).map_err(ProtocolError::repository_error)?;
         Commit::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -306,7 +306,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(tree_hash.to_string()));
         }
-        let id = ObjectHash::from_str(tree_hash).map_err(|e| ProtocolError::repository_error(e))?;
+        let id = ObjectHash::from_str(tree_hash).map_err(ProtocolError::repository_error)?;
         let items = self.parse_tree_listing(&output.stdout)?;
         if items.is_empty() {
             return Ok(Tree {
@@ -323,7 +323,7 @@ impl RepositoryAccess for FsRepository {
             return Err(ProtocolError::ObjectNotFound(blob_hash.to_string()));
         }
         let hash =
-            ObjectHash::from_str(blob_hash).map_err(|e| ProtocolError::repository_error(e))?;
+            ObjectHash::from_str(blob_hash).map_err(ProtocolError::repository_error)?;
         Blob::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }

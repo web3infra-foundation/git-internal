@@ -163,7 +163,7 @@ impl FsRepository {
             let mode = TreeItemMode::tree_item_type_from_bytes(mode_bytes)
                 .map_err(|e| ProtocolError::repository_error(e.to_string()))?;
             let id =
-                ObjectHash::from_str(hash_str).map_err(|e| ProtocolError::repository_error(e))?;
+                ObjectHash::from_str(hash_str).map_err(ProtocolError::repository_error)?;
 
             items.push(TreeItem::new(mode, id, name.to_string()));
         }
@@ -288,7 +288,7 @@ impl RepositoryAccess for FsRepository {
             return Err(ProtocolError::ObjectNotFound(commit_hash.to_string()));
         }
         let hash =
-            ObjectHash::from_str(commit_hash).map_err(|e| ProtocolError::repository_error(e))?;
+            ObjectHash::from_str(commit_hash).map_err(ProtocolError::repository_error)?;
         Commit::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -299,7 +299,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(tree_hash.to_string()));
         }
-        let id = ObjectHash::from_str(tree_hash).map_err(|e| ProtocolError::repository_error(e))?;
+        let id = ObjectHash::from_str(tree_hash).map_err(ProtocolError::repository_error)?;
         let items = self.parse_tree_listing(&output.stdout)?;
         if items.is_empty() {
             return Ok(Tree {
@@ -317,7 +317,7 @@ impl RepositoryAccess for FsRepository {
             return Err(ProtocolError::ObjectNotFound(blob_hash.to_string()));
         }
         let hash =
-            ObjectHash::from_str(blob_hash).map_err(|e| ProtocolError::repository_error(e))?;
+            ObjectHash::from_str(blob_hash).map_err(ProtocolError::repository_error)?;
         Blob::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -422,7 +422,7 @@ async fn info_refs(
 
     let git_dir = match resolve_repo_path(&state.repo_root, &repo_name) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let repo = FsRepository::new(git_dir);
@@ -451,7 +451,7 @@ async fn upload_pack(
 ) -> Response {
     let git_dir = match resolve_repo_path(&state.repo_root, &repo_name) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let repo = FsRepository::new(git_dir);
@@ -480,7 +480,7 @@ async fn receive_pack(
 ) -> Response {
     let git_dir = match resolve_repo_path(&state.repo_root, &repo_name) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let repo = FsRepository::new(git_dir);
@@ -493,7 +493,7 @@ async fn receive_pack(
 
     // Convert Axum body into ProtocolStream for git-internal.
     let stream: ProtocolStream = Box::pin(body.into_data_stream().map(|r| {
-        r.map_err(|e| ProtocolError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))
+        r.map_err(|e| ProtocolError::Io(std::io::Error::other(e)))
     }));
 
     match handler.handle_receive_pack(&request_path, stream).await {
@@ -505,10 +505,10 @@ async fn receive_pack(
     }
 }
 
-fn resolve_repo_path(repo_root: &StdPath, repo: &str) -> Result<PathBuf, Response> {
+fn resolve_repo_path(repo_root: &StdPath, repo: &str) -> Result<PathBuf, Box<Response>> {
     // Reject traversal and map repo name to bare or non-bare layout.
     if repo.is_empty() || repo.contains("..") || repo.contains('\\') || repo.contains('/') {
-        return Err((StatusCode::BAD_REQUEST, "invalid repo").into_response());
+        return Err(Box::new((StatusCode::BAD_REQUEST, "invalid repo").into_response()));
     }
 
     let direct = repo_root.join(repo);
@@ -525,7 +525,7 @@ fn resolve_repo_path(repo_root: &StdPath, repo: &str) -> Result<PathBuf, Respons
         return Ok(non_bare);
     }
 
-    Err((StatusCode::NOT_FOUND, "repo not found").into_response())
+    Err(Box::new((StatusCode::NOT_FOUND, "repo not found").into_response()))
 }
 
 fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
