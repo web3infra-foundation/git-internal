@@ -47,6 +47,14 @@
 //!   `command="/path/to/ssh_server" ssh-ed25519 AAAA...`
 //! - Then clients can run: `git clone ssh://user@host/demo.git`.
 
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::{Component, Path as StdPath, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
+
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use flate2::{Compression, write::ZlibEncoder};
@@ -66,13 +74,6 @@ use git_internal::{
         types::{ProtocolError, ProtocolStream},
         utils::{read_pkt_line, read_until_white_space},
     },
-};
-use std::{
-    collections::HashMap,
-    io::Write,
-    path::{Component, Path as StdPath, PathBuf},
-    str::FromStr,
-    sync::Arc,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -179,8 +180,7 @@ impl FsRepository {
             };
             let mode = TreeItemMode::tree_item_type_from_bytes(mode_bytes)
                 .map_err(|e| ProtocolError::repository_error(e.to_string()))?;
-            let id =
-                ObjectHash::from_str(hash_str).map_err(ProtocolError::repository_error)?;
+            let id = ObjectHash::from_str(hash_str).map_err(ProtocolError::repository_error)?;
 
             items.push(TreeItem::new(mode, id, name.to_string()));
         }
@@ -295,8 +295,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(commit_hash.to_string()));
         }
-        let hash =
-            ObjectHash::from_str(commit_hash).map_err(ProtocolError::repository_error)?;
+        let hash = ObjectHash::from_str(commit_hash).map_err(ProtocolError::repository_error)?;
         Commit::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -322,8 +321,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(blob_hash.to_string()));
         }
-        let hash =
-            ObjectHash::from_str(blob_hash).map_err(ProtocolError::repository_error)?;
+        let hash = ObjectHash::from_str(blob_hash).map_err(ProtocolError::repository_error)?;
         Blob::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }

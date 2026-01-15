@@ -33,6 +33,14 @@
 //! - The push exercises `receive-pack`; replace `main` with `master` if needed.
 //! - The clone exercises `upload-pack`.
 
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::{Path as StdPath, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
+
 use async_trait::async_trait;
 use axum::{
     Router,
@@ -58,13 +66,6 @@ use git_internal::{
         http::HttpGitHandler,
         types::{ProtocolError, ProtocolStream},
     },
-};
-use std::{
-    collections::HashMap,
-    io::Write,
-    path::{Path as StdPath, PathBuf},
-    str::FromStr,
-    sync::Arc,
 };
 use tokio::process::Command;
 
@@ -162,8 +163,7 @@ impl FsRepository {
             };
             let mode = TreeItemMode::tree_item_type_from_bytes(mode_bytes)
                 .map_err(|e| ProtocolError::repository_error(e.to_string()))?;
-            let id =
-                ObjectHash::from_str(hash_str).map_err(ProtocolError::repository_error)?;
+            let id = ObjectHash::from_str(hash_str).map_err(ProtocolError::repository_error)?;
 
             items.push(TreeItem::new(mode, id, name.to_string()));
         }
@@ -287,8 +287,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(commit_hash.to_string()));
         }
-        let hash =
-            ObjectHash::from_str(commit_hash).map_err(ProtocolError::repository_error)?;
+        let hash = ObjectHash::from_str(commit_hash).map_err(ProtocolError::repository_error)?;
         Commit::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -316,8 +315,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(blob_hash.to_string()));
         }
-        let hash =
-            ObjectHash::from_str(blob_hash).map_err(ProtocolError::repository_error)?;
+        let hash = ObjectHash::from_str(blob_hash).map_err(ProtocolError::repository_error)?;
         Blob::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -492,9 +490,10 @@ async fn receive_pack(
     }
 
     // Convert Axum body into ProtocolStream for git-internal.
-    let stream: ProtocolStream = Box::pin(body.into_data_stream().map(|r| {
-        r.map_err(|e| ProtocolError::Io(std::io::Error::other(e)))
-    }));
+    let stream: ProtocolStream = Box::pin(
+        body.into_data_stream()
+            .map(|r| r.map_err(|e| ProtocolError::Io(std::io::Error::other(e)))),
+    );
 
     match handler.handle_receive_pack(&request_path, stream).await {
         Ok((stream, content_type)) => {
@@ -508,7 +507,9 @@ async fn receive_pack(
 fn resolve_repo_path(repo_root: &StdPath, repo: &str) -> Result<PathBuf, Box<Response>> {
     // Reject traversal and map repo name to bare or non-bare layout.
     if repo.is_empty() || repo.contains("..") || repo.contains('\\') || repo.contains('/') {
-        return Err(Box::new((StatusCode::BAD_REQUEST, "invalid repo").into_response()));
+        return Err(Box::new(
+            (StatusCode::BAD_REQUEST, "invalid repo").into_response(),
+        ));
     }
 
     let direct = repo_root.join(repo);
@@ -525,7 +526,9 @@ fn resolve_repo_path(repo_root: &StdPath, repo: &str) -> Result<PathBuf, Box<Res
         return Ok(non_bare);
     }
 
-    Err(Box::new((StatusCode::NOT_FOUND, "repo not found").into_response()))
+    Err(Box::new(
+        (StatusCode::NOT_FOUND, "repo not found").into_response(),
+    ))
 }
 
 fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {

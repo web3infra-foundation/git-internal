@@ -1,8 +1,10 @@
 //! An example demonstrating how to use the hashing functionality in git-internal,
 //! including how to switch between SHA-1 and SHA-256.
 
-use git_internal::hash::{HashKind, ObjectHash, set_hash_kind};
-use git_internal::internal::object::types::ObjectType;
+use git_internal::{
+    hash::{HashKind, ObjectHash, set_hash_kind},
+    internal::object::types::ObjectType,
+};
 
 fn main() {
     let data = b"This is some data to be hashed.";
