@@ -138,7 +138,6 @@ jobs:
 
           # Enable progress tracking and show full Claude output in logs
           track_progress: true
-          show_full_output: true
 
           # Custom review instructions passed to Claude
           prompt: |
