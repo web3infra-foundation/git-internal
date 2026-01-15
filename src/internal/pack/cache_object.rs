@@ -586,7 +586,9 @@ mod test {
 
         assert!(path.exists());
         path.pop();
-        fs::remove_dir_all(path).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+        // Try to remove parent .cache_temp directory if it's empty
+        let _ = fs::remove_dir(".cache_temp");
     }
 
     #[test]
@@ -630,6 +632,8 @@ mod test {
         assert!(!b_path.exists());
         shared_flag.store(true, Ordering::Release);
         fs::remove_dir_all(path).unwrap();
+        // Try to remove parent .cache_temp directory if it's empty
+        let _ = fs::remove_dir(".cache_temp");
         // should pass even b's path not exists
     }
 }

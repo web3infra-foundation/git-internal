@@ -3,11 +3,9 @@
 //! decoded objects' information.
 //! Make sure to replace the `pack_path` variable with the path to your own pack file.
 //! The example assumes the pack file uses SHA-1 hashing.
-use git_internal::hash::ObjectHash;
-use git_internal::internal::pack::Pack;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::{fs::File, io::BufReader, path::Path};
+
+use git_internal::{hash::ObjectHash, internal::pack::Pack};
 
 fn main() {
     // replace with the path to your pack file

@@ -176,9 +176,10 @@ pub struct InfoRefsParams {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+
     use super::*;
     use crate::protocol::core::{AuthenticationService, RepositoryAccess};
-    use async_trait::async_trait;
 
     /// Mock repository access for testing
     #[derive(Clone)]

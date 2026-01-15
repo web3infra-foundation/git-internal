@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn index_entry_new_from_blob_populates_fields() {
         let hash = ObjectHash::from_bytes(&[0u8; 20]).unwrap();
-        let entry = IndexEntry::new_from_blob("file.txt".to_string(), hash.clone(), 42);
+        let entry = IndexEntry::new_from_blob("file.txt".to_string(), hash, 42);
         assert_eq!(entry.name, "file.txt");
         assert_eq!(entry.size, 42);
         assert_eq!(entry.hash, hash);
@@ -651,7 +651,7 @@ mod tests {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let mut index = Index::new();
         let hash = ObjectHash::from_bytes(&[1u8; 20]).unwrap();
-        let entry = IndexEntry::new_from_blob("a/b.txt".to_string(), hash.clone(), 10);
+        let entry = IndexEntry::new_from_blob("a/b.txt".to_string(), hash, 10);
         index.add(entry);
 
         // get finds stage-0 by name

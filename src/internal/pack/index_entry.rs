@@ -67,8 +67,11 @@ mod tests {
     use super::*;
     use crate::{
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
-        internal::metadata::{EntryMeta, MetaAttached},
-        internal::{object::types::ObjectType, pack::entry::Entry},
+        internal::{
+            metadata::{EntryMeta, MetaAttached},
+            object::types::ObjectType,
+            pack::entry::Entry,
+        },
     };
 
     /// Helper to create a test Entry with given content.

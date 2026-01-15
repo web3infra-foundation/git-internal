@@ -46,13 +46,32 @@
 //! - Install the binary on the server and wire it in `~/.ssh/authorized_keys`:
 //!   `command="/path/to/ssh_server" ssh-ed25519 AAAA...`
 //! - Then clients can run: `git clone ssh://user@host/demo.git`.
+//!
+//! SHA-256 repository test:
+//! ```bash
+//! rm -rf /tmp/git-ssh-sha256
+//! mkdir -p /tmp/git-ssh-sha256
+//! git init --bare --object-format=sha256 /tmp/git-ssh-sha256/demo-sha256.git
+//! # Update GIT_REPO_ROOT in /tmp/git-ssh-wrapper to /tmp/git-ssh-sha256
+//! # Then push/clone from a SHA-256 client repository
+//! ```
+//! The server automatically detects each repository's object format by reading
+//! `extensions.objectformat` from the repository config before handling requests.
+
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::{Component, Path as StdPath, PathBuf},
+    str::FromStr,
+    sync::{Arc, OnceLock},
+};
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use flate2::{Compression, write::ZlibEncoder};
 use futures::StreamExt;
 use git_internal::{
-    hash::{ObjectHash, get_hash_kind},
+    hash::{HashKind, ObjectHash, get_hash_kind, set_hash_kind},
     internal::object::{
         ObjectTrait,
         blob::Blob,
@@ -67,18 +86,13 @@ use git_internal::{
         utils::{read_pkt_line, read_until_white_space},
     },
 };
-use std::{
-    collections::HashMap,
-    io::Write,
-    path::{Component, Path as StdPath, PathBuf},
-    str::FromStr,
-    sync::Arc,
-};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
 };
 use tokio_util::io::ReaderStream;
+
+static GLOBAL_HASH_KIND: OnceLock<HashKind> = OnceLock::new();
 
 /// Repo implementation (same as HTTP example)
 #[derive(Clone)]
@@ -117,6 +131,55 @@ impl FsRepository {
     /// Get the path to the objects directory.
     fn objects_dir(&self) -> PathBuf {
         self.git_dir.join("objects")
+    }
+
+    /// Detect the repository's hash algorithm and configure the global hash kind once.
+    /// Reads `extensions.objectformat` from the repository config.
+    /// If not set, defaults to SHA-1 for backward compatibility.
+    async fn detect_and_configure_hash_kind(&self) -> Result<(), ProtocolError> {
+        if let Some(kind) = GLOBAL_HASH_KIND.get() {
+            set_hash_kind(*kind);
+            return Ok(());
+        }
+
+        let output = self
+            .run_git(["config", "--get", "extensions.objectformat"])
+            .await?;
+
+        let detected = if output.status.success() {
+            let format = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_ascii_lowercase();
+            match format.as_str() {
+                "sha256" => HashKind::Sha256,
+                _ => HashKind::Sha1,
+            }
+        } else {
+            // No extensions.objectformat means SHA-1 (default)
+            HashKind::Sha1
+        };
+
+        match GLOBAL_HASH_KIND.set(detected) {
+            Ok(()) => {
+                set_hash_kind(detected);
+                Ok(())
+            }
+            Err(_) => {
+                if let Some(existing) = GLOBAL_HASH_KIND.get() {
+                    if *existing != detected {
+                        return Err(ProtocolError::repository_error(format!(
+                            "Mixed repository object formats are not supported: server initialized with {existing}, but repository at {:?} uses {detected}",
+                            self.git_dir
+                        )));
+                    }
+                    set_hash_kind(*existing);
+                    Ok(())
+                } else {
+                    set_hash_kind(detected);
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Write a loose object to the objects directory.
@@ -179,8 +242,7 @@ impl FsRepository {
             };
             let mode = TreeItemMode::tree_item_type_from_bytes(mode_bytes)
                 .map_err(|e| ProtocolError::repository_error(e.to_string()))?;
-            let id =
-                ObjectHash::from_str(hash_str).map_err(|e| ProtocolError::repository_error(e))?;
+            let id = ObjectHash::from_str(hash_str).map_err(ProtocolError::repository_error)?;
 
             items.push(TreeItem::new(mode, id, name.to_string()));
         }
@@ -295,8 +357,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(commit_hash.to_string()));
         }
-        let hash =
-            ObjectHash::from_str(commit_hash).map_err(|e| ProtocolError::repository_error(e))?;
+        let hash = ObjectHash::from_str(commit_hash).map_err(ProtocolError::repository_error)?;
         Commit::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -306,7 +367,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(tree_hash.to_string()));
         }
-        let id = ObjectHash::from_str(tree_hash).map_err(|e| ProtocolError::repository_error(e))?;
+        let id = ObjectHash::from_str(tree_hash).map_err(ProtocolError::repository_error)?;
         let items = self.parse_tree_listing(&output.stdout)?;
         if items.is_empty() {
             return Ok(Tree {
@@ -322,8 +383,7 @@ impl RepositoryAccess for FsRepository {
         if !output.status.success() {
             return Err(ProtocolError::ObjectNotFound(blob_hash.to_string()));
         }
-        let hash =
-            ObjectHash::from_str(blob_hash).map_err(|e| ProtocolError::repository_error(e))?;
+        let hash = ObjectHash::from_str(blob_hash).map_err(ProtocolError::repository_error)?;
         Blob::from_bytes(&output.stdout, hash)
             .map_err(|e| ProtocolError::repository_error(e.to_string()))
     }
@@ -424,6 +484,13 @@ async fn main() {
     };
 
     let repo = FsRepository::new(git_dir);
+
+    // Configure hash kind before any object operations
+    if let Err(e) = repo.detect_and_configure_hash_kind().await {
+        eprintln!("Failed to detect hash kind: {e}");
+        std::process::exit(1);
+    }
+
     let auth = AllowAllAuth;
     let mut handler = SshGitHandler::new(repo, auth);
 

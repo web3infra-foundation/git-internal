@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "buildscript_run", "rust_binary", "rust_library")
 
 http_archive(
     name = "chrono-vendor",
-    urls = ["https://static.crates.io/crates/chrono/chrono-0.4.42.crate"],
-    sha256 = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2",
+    urls = ["https://static.crates.io/crates/chrono/chrono-0.4.43.crate"],
+    sha256 = "fac4744fb15ae8337dc853fee7fb3f4e48c0fbaa23d0afe49c447b4fab126118",
     type = "tar.gz",
-    strip_prefix = "chrono-0.4.42",
+    strip_prefix = "chrono-0.4.43",
     out = "vendor",
 )
 

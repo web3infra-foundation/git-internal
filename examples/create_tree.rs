@@ -2,9 +2,12 @@
 //! This example assumes you have Blob hashes available.
 //! In a real scenario, you would obtain these hashes by creating Blob objects first.
 
-use git_internal::hash::ObjectHash;
-use git_internal::internal::object::tree::{Tree, TreeItem, TreeItemMode};
 use std::str::FromStr;
+
+use git_internal::{
+    hash::ObjectHash,
+    internal::object::tree::{Tree, TreeItem, TreeItemMode},
+};
 
 fn main() {
     // mock Blob hashes (replace with actual Blob hashes as needed)

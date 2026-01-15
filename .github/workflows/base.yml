@@ -32,8 +32,13 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add rustfmt --toolchain nightly
+
       - name: Run rustfmt
-        run: cargo fmt --all --check
+        run: cargo +nightly fmt --all --check
 
   clippy:
     name: Clippy Check
@@ -43,6 +48,7 @@ jobs:
       pull-requests: write
     env:
       CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: stable
 
     steps:
       - name: Checkout repository
@@ -51,11 +57,15 @@ jobs:
           submodules: recursive
 
       - name: Run cargo clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   redundancy:
     name: Redundancy Check
     runs-on: [ self-hosted ]
+
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: stable
 
     steps:
       - name: Checkout repository
@@ -82,6 +92,10 @@ jobs:
 
     runs-on: [ self-hosted ]
 
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: stable
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -97,6 +111,7 @@ jobs:
     runs-on: [ self-hosted ]
     env:
       CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: stable
 
     steps:
       - name: Checkout repository

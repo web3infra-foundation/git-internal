@@ -368,19 +368,21 @@ fn build_side_band_packets(chunk: &[u8], max_payload: usize) -> Vec<Bytes> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::hash::{HashKind, set_hash_kind_for_test};
-    use crate::internal::object::{
-        blob::Blob,
-        commit::Commit,
-        signature::{Signature, SignatureType},
-        tree::{Tree, TreeItem, TreeItemMode},
-    };
-    use crate::protocol::types::TransportProtocol;
-    use crate::protocol::utils;
     use async_trait::async_trait;
     use bytes::{Bytes, BytesMut};
     use futures::StreamExt;
+
+    use super::*;
+    use crate::{
+        hash::{HashKind, set_hash_kind_for_test},
+        internal::object::{
+            blob::Blob,
+            commit::Commit,
+            signature::{Signature, SignatureType},
+            tree::{Tree, TreeItem, TreeItemMode},
+        },
+        protocol::{types::TransportProtocol, utils},
+    };
 
     /// Simple mock repository that serves fixed refs and echoes wants.
     #[derive(Clone)]

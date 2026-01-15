@@ -5,12 +5,13 @@
 //! Make sure to check the output directory for the generated pack file after running this example.
 //! The example assumes SHA-1 hashing for simplicity.
 
-use git_internal::internal::metadata::{EntryMeta, MetaAttached};
-use git_internal::internal::object::blob::Blob;
-use git_internal::internal::pack::encode::encode_and_output_to_files;
-use git_internal::internal::pack::entry::Entry;
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
+
+use git_internal::internal::{
+    metadata::{EntryMeta, MetaAttached},
+    object::blob::Blob,
+    pack::{encode::encode_and_output_to_files, entry::Entry},
+};
 use tokio::sync::mpsc;
 
 #[tokio::main]
