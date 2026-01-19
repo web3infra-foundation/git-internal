@@ -30,12 +30,16 @@ rust_library(
         "@$(location :parking_lot_core-build-script-run[rustc_flags])",
         "@$(location :parking_lot_core-manifest[env_flags])",
     ],
-    visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/cfg-if/1.0.4:cfg-if",
-        "//third-party/rust/crates/libc/0.2.180:libc",
         "//third-party/rust/crates/smallvec/1.15.1:smallvec",
-    ],
+    ] + select({
+        "DEFAULT": [],
+        "config//os:linux": ["//third-party/rust/crates/libc/0.2.180:libc"],
+        "config//os:macos": ["//third-party/rust/crates/libc/0.2.180:libc"],
+        "config//os:windows": ["//third-party/rust/crates/windows-link/0.2.1:windows-link"],
+    }),
+    visibility = ["PUBLIC"],
 )
 
 rust_binary(
