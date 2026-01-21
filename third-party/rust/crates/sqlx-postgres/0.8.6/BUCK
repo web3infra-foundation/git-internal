@@ -37,6 +37,10 @@ rust_library(
     named_deps = {
         "md5": "//third-party/rust/crates/md-5/0.10.6:md-5",
     },
+    os_deps = {
+        "windows": ["//third-party/rust/crates/etcetera/0.8.0:etcetera"],
+    },
+    visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/atoi/2.0.0:atoi",
         "//third-party/rust/crates/base64/0.22.1:base64",
@@ -71,9 +75,5 @@ rust_library(
         "//third-party/rust/crates/tracing/0.1.44:tracing",
         "//third-party/rust/crates/uuid/1.19.0:uuid",
         "//third-party/rust/crates/whoami/1.6.1:whoami",
-    ] + select({
-        "DEFAULT": [],
-        "config//os:windows": ["//third-party/rust/crates/etcetera/0.8.0:etcetera"],
-    }),
-    visibility = ["PUBLIC"],
+    ],
 )

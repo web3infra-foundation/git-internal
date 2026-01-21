@@ -29,11 +29,10 @@ rust_library(
         "os-poll",
     ],
     rustc_flags = ["@$(location :mio-manifest[env_flags])"],
-    deps = [] + select({
-        "DEFAULT": [],
-        "config//os:linux": ["//third-party/rust/crates/libc/0.2.180:libc"],
-        "config//os:macos": ["//third-party/rust/crates/libc/0.2.180:libc"],
-        "config//os:windows": ["//third-party/rust/crates/windows-sys/0.61.2:windows-sys"],
-    }),
+    os_deps = {
+        "linux": ["//third-party/rust/crates/libc/0.2.180:libc"],
+        "macos": ["//third-party/rust/crates/libc/0.2.180:libc"],
+        "windows": ["//third-party/rust/crates/windows-sys/0.61.2:windows-sys"],
+    },
     visibility = ["PUBLIC"],
 )

@@ -39,14 +39,14 @@ rust_library(
         "windows-link",
     ],
     rustc_flags = ["@$(location :chrono-manifest[env_flags])"],
+    os_deps = {
+        "linux": ["//third-party/rust/crates/iana-time-zone/0.1.64:iana-time-zone"],
+        "macos": ["//third-party/rust/crates/iana-time-zone/0.1.64:iana-time-zone"],
+        "windows": ["//third-party/rust/crates/windows-link/0.2.1:windows-link"],
+    },
+    visibility = ["PUBLIC"],
     deps = [
         "//third-party/rust/crates/num-traits/0.2.19:num-traits",
         "//third-party/rust/crates/serde/1.0.228:serde",
-    ] + select({
-        "DEFAULT": [],
-        "config//os:linux": ["//third-party/rust/crates/iana-time-zone/0.1.64:iana-time-zone"],
-        "config//os:macos": ["//third-party/rust/crates/iana-time-zone/0.1.64:iana-time-zone"],
-        "config//os:windows": ["//third-party/rust/crates/windows-link/0.2.1:windows-link"],
-    }),
-    visibility = ["PUBLIC"],
+    ],
 )

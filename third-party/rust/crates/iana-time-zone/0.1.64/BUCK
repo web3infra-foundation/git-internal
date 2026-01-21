@@ -25,10 +25,9 @@ rust_library(
     edition = "2021",
     features = ["fallback"],
     rustc_flags = ["@$(location :iana-time-zone-manifest[env_flags])"],
-    deps = [] + select({
-        "DEFAULT": [],
-        "config//os:macos": ["//third-party/rust/crates/core-foundation-sys/0.8.7:core-foundation-sys"],
-        "config//os:windows": ["//third-party/rust/crates/windows-core/0.62.2:windows-core"],
-    }),
+    os_deps = {
+        "macos": ["//third-party/rust/crates/core-foundation-sys/0.8.7:core-foundation-sys"],
+        "windows": ["//third-party/rust/crates/windows-core/0.62.2:windows-core"],
+    },
     visibility = ["PUBLIC"],
 )
