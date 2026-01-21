@@ -24,9 +24,8 @@ rust_library(
     crate_root = "vendor/src/lib.rs",
     edition = "2018",
     rustc_flags = ["@$(location :cpufeatures-manifest[env_flags])"],
-    deps = [] + select({
-        "DEFAULT": [],
-        "config//os:macos": ["//third-party/rust/crates/libc/0.2.180:libc"],
-    }),
+    os_deps = {
+        "macos": ["//third-party/rust/crates/libc/0.2.180:libc"],
+    },
     visibility = ["PUBLIC"],
 )
