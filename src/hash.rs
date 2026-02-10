@@ -239,6 +239,11 @@ impl ObjectHash {
         }
     }
 }
+
+/// Compute SHA256 hash and return hex string.
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
+    hex::encode(sha2::Sha256::digest(data))
+}
 thread_local! {
     /// Thread-local variable to store the current hash kind.
     /// This allows different threads to work with different hash algorithms concurrently

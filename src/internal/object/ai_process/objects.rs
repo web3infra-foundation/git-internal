@@ -1,11 +1,11 @@
-use std::{cmp::Ordering, collections::HashMap, fmt, str::FromStr};
+use std::{collections::HashMap, fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::base::{ActorRef, ArtifactRef, Header};
 
-/// Task Status Enum
+/// Task lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -17,7 +17,7 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             TaskStatus::Draft => "draft",
             TaskStatus::Running => "running",
@@ -34,7 +34,7 @@ impl fmt::Display for TaskStatus {
     }
 }
 
-/// Task Goal Type Enum
+/// Task goal category.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalType {
@@ -51,7 +51,7 @@ pub enum GoalType {
 }
 
 impl GoalType {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             GoalType::Feature => "feature",
             GoalType::Bugfix => "bugfix",
@@ -93,7 +93,7 @@ impl FromStr for GoalType {
     }
 }
 
-/// Task Object
+/// Task object describing intent and constraints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     #[serde(flatten)]
@@ -118,9 +118,9 @@ impl Task {
         created_by: ActorRef,
         title: impl Into<String>,
         goal_type: Option<GoalType>,
-    ) -> Self {
-        Self {
-            header: Header::new("task", repo_id, created_by),
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("task", repo_id, created_by)?,
             title: title.into(),
             description: None,
             goal_type,
@@ -129,11 +129,11 @@ impl Task {
             requested_by: None,
             dependencies: Vec::new(),
             status: TaskStatus::Draft,
-        }
+        })
     }
 }
 
-/// Run Status Enum
+/// Run lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
@@ -145,7 +145,7 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             RunStatus::Created => "created",
             RunStatus::Patching => "patching",
@@ -162,7 +162,7 @@ impl fmt::Display for RunStatus {
     }
 }
 
-/// Run Object
+/// Run object for a single orchestration execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(flatten)]
@@ -179,7 +179,7 @@ pub struct Run {
     pub environment: Option<Environment>,
 }
 
-/// Environment Object
+/// Environment snapshot of the run host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
     pub os: String,   // e.g. "macos", "linux"
@@ -197,13 +197,16 @@ impl Environment {
             arch: std::env::consts::ARCH.to_string(),
             cwd: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "unknown".to_string()),
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to get current directory: {}", e);
+                    "unknown".to_string()
+                }),
             extra: HashMap::new(),
         }
     }
 }
 
-/// Agent Instance Object
+/// Agent instance participating in a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInstance {
     pub role: String,
@@ -217,9 +220,9 @@ impl Run {
         created_by: ActorRef,
         task_id: Uuid,
         base_commit_sha: impl Into<String>,
-    ) -> Self {
-        Self {
-            header: Header::new("run", repo_id, created_by),
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("run", repo_id, created_by)?,
             task_id,
             orchestrator_version: "libra-builtin".to_string(),
             base_commit_sha: base_commit_sha.into(),
@@ -229,11 +232,11 @@ impl Run {
             metrics: None,
             error: None,
             environment: Some(Environment::capture()),
-        }
+        })
     }
 }
 
-/// Apply Status Enum
+/// Patch application status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyStatus {
@@ -244,7 +247,7 @@ pub enum ApplyStatus {
 }
 
 impl ApplyStatus {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             ApplyStatus::Proposed => "proposed",
             ApplyStatus::Applied => "applied",
@@ -260,7 +263,15 @@ impl fmt::Display for ApplyStatus {
     }
 }
 
-/// PatchSet Object
+/// Diff format for patch content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffFormat {
+    UnifiedDiff,
+    GitDiff,
+}
+
+/// PatchSet object containing a candidate diff.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchSet {
     #[serde(flatten)]
@@ -268,7 +279,7 @@ pub struct PatchSet {
     pub run_id: Uuid,
     pub generation: u32,
     pub base_commit_sha: String,
-    pub diff_format: String, // unified_diff
+    pub diff_format: DiffFormat,
     pub diff_artifact: Option<ArtifactRef>,
     #[serde(default)]
     pub touched_files: Vec<TouchedFile>,
@@ -276,13 +287,33 @@ pub struct PatchSet {
     pub apply_status: ApplyStatus,
 }
 
-/// TouchedFile Object
+/// Touched file summary in a patchset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TouchedFile {
     pub path: String,
     pub change_type: String, // modify/add/delete
     pub lines_added: u32,
     pub lines_deleted: u32,
+}
+
+impl TouchedFile {
+    pub fn new(
+        path: impl Into<String>,
+        change_type: impl Into<String>,
+        lines_added: u32,
+        lines_deleted: u32,
+    ) -> Result<Self, String> {
+        let path = path.into();
+        if path.trim().is_empty() {
+            return Err("path cannot be empty".to_string());
+        }
+        Ok(Self {
+            path,
+            change_type: change_type.into(),
+            lines_added,
+            lines_deleted,
+        })
+    }
 }
 
 impl PatchSet {
@@ -293,42 +324,92 @@ impl PatchSet {
         run_id: Uuid,
         base_commit_sha: impl Into<String>,
         generation: u32,
-    ) -> Self {
-        Self {
-            header: Header::new("patchset", repo_id, created_by),
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("patchset", repo_id, created_by)?,
             run_id,
             generation,
             base_commit_sha: base_commit_sha.into(),
-            diff_format: "unified_diff".to_string(),
+            diff_format: DiffFormat::UnifiedDiff,
             diff_artifact: None,
             touched_files: Vec::new(),
             rationale: None,
             apply_status: ApplyStatus::Proposed,
-        }
+        })
     }
 }
 
-/// ContextSnapshot Object
+/// Selection strategy for context snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionStrategy {
+    Explicit,
+    Heuristic,
+}
+
+/// Context snapshot describing selected inputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextSnapshot {
     #[serde(flatten)]
     pub header: Header,
     pub base_commit_sha: String,
-    pub selection_strategy: String, // explicit/heuristic
+    pub selection_strategy: SelectionStrategy,
     #[serde(default)]
     pub items: Vec<ContextItem>,
     pub summary: Option<String>,
 }
 
-/// ContextItem Object
+impl ContextSnapshot {
+    pub fn new(
+        repo_id: Uuid,
+        created_by: ActorRef,
+        base_commit_sha: impl Into<String>,
+        selection_strategy: SelectionStrategy,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("context_snapshot", repo_id, created_by)?,
+            base_commit_sha: base_commit_sha.into(),
+            selection_strategy,
+            items: Vec::new(),
+            summary: None,
+        })
+    }
+}
+
+/// Context item kind.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextItemKind {
+    File,
+}
+
+/// Context item describing a single input.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextItem {
-    pub kind: String, // file
+    pub kind: ContextItemKind,
     pub path: String,
     pub content_hash: String,
 }
 
-/// Tool Status Enum
+impl ContextItem {
+    pub fn new(
+        kind: ContextItemKind,
+        path: impl Into<String>,
+        content_hash: impl Into<String>,
+    ) -> Result<Self, String> {
+        let path = path.into();
+        if path.trim().is_empty() {
+            return Err("path cannot be empty".to_string());
+        }
+        Ok(Self {
+            kind,
+            path,
+            content_hash: content_hash.into(),
+        })
+    }
+}
+
+/// Tool invocation status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
@@ -337,7 +418,7 @@ pub enum ToolStatus {
 }
 
 impl ToolStatus {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             ToolStatus::Ok => "ok",
             ToolStatus::Error => "error",
@@ -351,7 +432,7 @@ impl fmt::Display for ToolStatus {
     }
 }
 
-/// ToolInvocation Object
+/// Tool invocation record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvocation {
     #[serde(flatten)]
@@ -367,7 +448,7 @@ pub struct ToolInvocation {
     pub artifacts: Vec<ArtifactRef>,
 }
 
-/// IO Footprint Object
+/// IO footprint of a tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IoFootprint {
     #[serde(default)]
@@ -382,9 +463,9 @@ impl ToolInvocation {
         created_by: ActorRef,
         run_id: Uuid,
         tool_name: impl Into<String>,
-    ) -> Self {
-        Self {
-            header: Header::new("tool_invocation", repo_id, created_by),
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("tool_invocation", repo_id, created_by)?,
             run_id,
             tool_name: tool_name.into(),
             io_footprint: None,
@@ -392,11 +473,11 @@ impl ToolInvocation {
             status: ToolStatus::Ok,
             result_summary: None,
             artifacts: Vec::new(),
-        }
+        })
     }
 }
 
-/// Plan Status Enum
+/// Plan step status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanStatus {
@@ -408,7 +489,7 @@ pub enum PlanStatus {
 }
 
 impl PlanStatus {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             PlanStatus::Pending => "pending",
             PlanStatus::InProgress => "in_progress",
@@ -425,30 +506,19 @@ impl fmt::Display for PlanStatus {
     }
 }
 
-/// Plan Object
+/// Plan object for step decomposition.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {
     #[serde(flatten)]
     pub header: Header,
     pub run_id: Uuid,
+    /// Plan version starts at 1 and must increase by 1 for each update.
     pub plan_version: u32,
     #[serde(default)]
     pub steps: Vec<PlanStep>,
 }
 
-impl PartialOrd for Plan {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Plan {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.plan_version.cmp(&other.plan_version)
-    }
-}
-
-/// Plan Step Object
+/// Plan step with inputs, outputs, and checks.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlanStep {
     pub intent: String,
@@ -461,17 +531,34 @@ pub struct PlanStep {
 
 impl Plan {
     /// Create a new plan object
-    pub fn new(repo_id: Uuid, created_by: ActorRef, run_id: Uuid, plan_version: u32) -> Self {
-        Self {
-            header: Header::new("plan", repo_id, created_by),
+    pub fn new(repo_id: Uuid, created_by: ActorRef, run_id: Uuid) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("plan", repo_id, created_by)?,
             run_id,
-            plan_version,
+            plan_version: 1,
             steps: Vec::new(),
-        }
+        })
+    }
+
+    pub fn new_next(
+        repo_id: Uuid,
+        created_by: ActorRef,
+        run_id: Uuid,
+        previous_version: u32,
+    ) -> Result<Self, String> {
+        let next_version = previous_version
+            .checked_add(1)
+            .ok_or_else(|| "plan_version overflow".to_string())?;
+        Ok(Self {
+            header: Header::new("plan", repo_id, created_by)?,
+            run_id,
+            plan_version: next_version,
+            steps: Vec::new(),
+        })
     }
 }
 
-/// Evidence Object
+/// Evidence object for test/lint/build results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     #[serde(flatten)]
@@ -494,9 +581,9 @@ impl Evidence {
         run_id: Uuid,
         kind: impl Into<String>,
         tool: impl Into<String>,
-    ) -> Self {
-        Self {
-            header: Header::new("evidence", repo_id, created_by),
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("evidence", repo_id, created_by)?,
             run_id,
             patchset_id: None,
             kind: kind.into(),
@@ -505,11 +592,11 @@ impl Evidence {
             exit_code: None,
             summary: None,
             report_artifacts: Vec::new(),
-        }
+        })
     }
 }
 
-/// Provenance Object
+/// Provenance object for model/provider metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provenance {
     #[serde(flatten)]
@@ -528,19 +615,19 @@ impl Provenance {
         run_id: Uuid,
         provider: impl Into<String>,
         model: impl Into<String>,
-    ) -> Self {
-        Self {
-            header: Header::new("provenance", repo_id, created_by),
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("provenance", repo_id, created_by)?,
             run_id,
             provider: provider.into(),
             model: model.into(),
             parameters: None,
             token_usage: None,
-        }
+        })
     }
 }
 
-/// Decision Object
+/// Decision object linking process to outcomes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
     #[serde(flatten)]
@@ -560,16 +647,16 @@ impl Decision {
         created_by: ActorRef,
         run_id: Uuid,
         decision_type: impl Into<String>,
-    ) -> Self {
-        Self {
-            header: Header::new("decision", repo_id, created_by),
+    ) -> Result<Self, String> {
+        Ok(Self {
+            header: Header::new("decision", repo_id, created_by)?,
             run_id,
             decision_type: decision_type.into(),
             chosen_patchset_id: None,
             result_commit_sha: None,
             checkpoint_id: None,
             rationale: None,
-        }
+        })
     }
 }
 
@@ -580,14 +667,14 @@ mod tests {
     #[test]
     fn test_task_creation() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::human("jackie");
-        let mut task = Task::new(repo_id, actor, "Fix bug", Some(GoalType::Bugfix));
+        let actor = ActorRef::human("jackie").expect("actor");
+        let mut task = Task::new(repo_id, actor, "Fix bug", Some(GoalType::Bugfix)).expect("task");
 
         // Test dependencies
         let dep_id = Uuid::now_v7();
         task.dependencies.push(dep_id);
 
-        assert_eq!(task.header.object_type, "task");
+        assert_eq!(task.header.object_type(), "task");
         assert_eq!(task.status, TaskStatus::Draft);
         assert_eq!(task.goal_type, Some(GoalType::Bugfix));
         assert_eq!(task.dependencies.len(), 1);
@@ -597,8 +684,8 @@ mod tests {
     #[test]
     fn test_task_goal_type_optional() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::human("jackie");
-        let task = Task::new(repo_id, actor, "Write docs", None);
+        let actor = ActorRef::human("jackie").expect("actor");
+        let task = Task::new(repo_id, actor, "Write docs", None).expect("task");
 
         assert!(task.goal_type.is_none());
     }
@@ -606,11 +693,11 @@ mod tests {
     #[test]
     fn test_new_objects_creation() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::agent("test-agent");
+        let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
 
         // Run with environment (auto captured)
-        let run = Run::new(repo_id, actor.clone(), Uuid::now_v7(), "sha123");
+        let run = Run::new(repo_id, actor.clone(), Uuid::now_v7(), "sha123").expect("run");
 
         let env = run.environment.as_ref().unwrap();
         // Check if it captured real values (assuming we are running on some OS)
@@ -619,7 +706,7 @@ mod tests {
         assert!(!env.cwd.is_empty());
 
         // Plan with steps and status
-        let mut plan = Plan::new(repo_id, actor.clone(), run_id, 1);
+        let mut plan = Plan::new(repo_id, actor.clone(), run_id).expect("plan");
         plan.steps.push(PlanStep {
             intent: "step1".to_string(),
             inputs: None,
@@ -629,48 +716,52 @@ mod tests {
             status: PlanStatus::Pending,
         });
 
-        assert_eq!(plan.header.object_type, "plan");
+        assert_eq!(plan.header.object_type(), "plan");
         assert_eq!(plan.plan_version, 1);
         assert_eq!(plan.steps[0].status, PlanStatus::Pending);
 
         // Evidence
-        let evidence = Evidence::new(repo_id, actor.clone(), run_id, "test", "cargo");
-        assert_eq!(evidence.header.object_type, "evidence");
+        let evidence =
+            Evidence::new(repo_id, actor.clone(), run_id, "test", "cargo").expect("evidence");
+        assert_eq!(evidence.header.object_type(), "evidence");
         assert_eq!(evidence.kind, "test");
 
         // Provenance
-        let provenance = Provenance::new(repo_id, actor.clone(), run_id, "openai", "gpt-4");
-        assert_eq!(provenance.header.object_type, "provenance");
+        let provenance =
+            Provenance::new(repo_id, actor.clone(), run_id, "openai", "gpt-4").expect("provenance");
+        assert_eq!(provenance.header.object_type(), "provenance");
         assert_eq!(provenance.provider, "openai");
 
         // Decision
-        let decision = Decision::new(repo_id, actor.clone(), run_id, "commit");
-        assert_eq!(decision.header.object_type, "decision");
+        let decision = Decision::new(repo_id, actor.clone(), run_id, "commit").expect("decision");
+        assert_eq!(decision.header.object_type(), "decision");
         assert_eq!(decision.decision_type, "commit");
     }
 
     #[test]
     fn test_task_requested_by() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::human("jackie");
-        let mut task = Task::new(repo_id, actor.clone(), "Fix bug", Some(GoalType::Bugfix));
+        let actor = ActorRef::human("jackie").expect("actor");
+        let mut task =
+            Task::new(repo_id, actor.clone(), "Fix bug", Some(GoalType::Bugfix)).expect("task");
 
-        task.requested_by = Some(ActorRef::mcp_client("vscode-client"));
+        task.requested_by = Some(ActorRef::mcp_client("vscode-client").expect("actor"));
 
         assert!(task.requested_by.is_some());
         assert_eq!(
-            task.requested_by.unwrap().kind,
-            super::super::base::ActorKind::McpClient
+            task.requested_by.unwrap().kind(),
+            &super::super::base::ActorKind::McpClient
         );
     }
 
     #[test]
     fn test_tool_invocation_io_footprint() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::human("jackie");
+        let actor = ActorRef::human("jackie").expect("actor");
         let run_id = Uuid::now_v7();
 
-        let mut tool_inv = ToolInvocation::new(repo_id, actor, run_id, "read_file");
+        let mut tool_inv =
+            ToolInvocation::new(repo_id, actor, run_id, "read_file").expect("tool_invocation");
 
         let footprint = IoFootprint {
             paths_read: vec!["src/main.rs".to_string()],
@@ -687,14 +778,14 @@ mod tests {
     #[test]
     fn test_patchset_creation() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::agent("test-agent");
+        let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
 
-        let patchset = PatchSet::new(repo_id, actor, run_id, "sha123", 1);
+        let patchset = PatchSet::new(repo_id, actor, run_id, "sha123", 1).expect("patchset");
 
-        assert_eq!(patchset.header.object_type, "patchset");
+        assert_eq!(patchset.header.object_type(), "patchset");
         assert_eq!(patchset.generation, 1);
-        assert_eq!(patchset.diff_format, "unified_diff");
+        assert_eq!(patchset.diff_format, DiffFormat::UnifiedDiff);
         assert_eq!(patchset.apply_status, ApplyStatus::Proposed);
         assert!(patchset.touched_files.is_empty());
     }
@@ -702,21 +793,16 @@ mod tests {
     #[test]
     fn test_context_snapshot_fields() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::agent("test-agent");
+        let actor = ActorRef::agent("test-agent").expect("actor");
 
-        let mut snapshot = ContextSnapshot {
-            header: Header::new("context_snapshot", repo_id, actor),
-            base_commit_sha: "sha123".to_string(),
-            selection_strategy: "explicit".to_string(),
-            items: Vec::new(),
-            summary: Some("core files".to_string()),
-        };
+        let mut snapshot =
+            ContextSnapshot::new(repo_id, actor, "sha123", SelectionStrategy::Explicit)
+                .expect("snapshot");
+        snapshot.summary = Some("core files".to_string());
 
-        snapshot.items.push(ContextItem {
-            kind: "file".to_string(),
-            path: "src/lib.rs".to_string(),
-            content_hash: "abc".to_string(),
-        });
+        snapshot.items.push(
+            ContextItem::new(ContextItemKind::File, "src/lib.rs", "abc").expect("context item"),
+        );
 
         assert_eq!(snapshot.items.len(), 1);
         assert_eq!(snapshot.items[0].path, "src/lib.rs");
@@ -726,16 +812,17 @@ mod tests {
     #[test]
     fn test_tool_invocation_fields() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::human("jackie");
+        let actor = ActorRef::human("jackie").expect("actor");
         let run_id = Uuid::now_v7();
 
-        let mut tool_inv = ToolInvocation::new(repo_id, actor, run_id, "apply_patch");
+        let mut tool_inv =
+            ToolInvocation::new(repo_id, actor, run_id, "apply_patch").expect("tool_invocation");
         tool_inv.status = ToolStatus::Error;
         tool_inv.args = serde_json::json!({"path": "src/lib.rs"});
         tool_inv.result_summary = Some("failed".to_string());
         tool_inv
             .artifacts
-            .push(ArtifactRef::new("local", "artifact-key"));
+            .push(ArtifactRef::new("local", "artifact-key").expect("artifact"));
 
         assert_eq!(tool_inv.status, ToolStatus::Error);
         assert_eq!(tool_inv.artifacts.len(), 1);
@@ -745,16 +832,17 @@ mod tests {
     #[test]
     fn test_evidence_fields() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::agent("test-agent");
+        let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
         let patchset_id = Uuid::now_v7();
 
-        let mut evidence = Evidence::new(repo_id, actor, run_id, "test", "cargo");
+        let mut evidence =
+            Evidence::new(repo_id, actor, run_id, "test", "cargo").expect("evidence");
         evidence.patchset_id = Some(patchset_id);
         evidence.exit_code = Some(1);
         evidence
             .report_artifacts
-            .push(ArtifactRef::new("local", "log.txt"));
+            .push(ArtifactRef::new("local", "log.txt").expect("artifact"));
 
         assert_eq!(evidence.patchset_id, Some(patchset_id));
         assert_eq!(evidence.exit_code, Some(1));
@@ -764,10 +852,11 @@ mod tests {
     #[test]
     fn test_provenance_fields() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::agent("test-agent");
+        let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
 
-        let mut provenance = Provenance::new(repo_id, actor, run_id, "openai", "gpt-4");
+        let mut provenance =
+            Provenance::new(repo_id, actor, run_id, "openai", "gpt-4").expect("provenance");
         provenance.parameters = Some(serde_json::json!({"temperature": 0.2}));
         provenance.token_usage = Some(serde_json::json!({"input": 10, "output": 5}));
 
@@ -778,11 +867,11 @@ mod tests {
     #[test]
     fn test_decision_fields() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::agent("test-agent");
+        let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
         let patchset_id = Uuid::now_v7();
 
-        let mut decision = Decision::new(repo_id, actor, run_id, "commit");
+        let mut decision = Decision::new(repo_id, actor, run_id, "commit").expect("decision");
         decision.chosen_patchset_id = Some(patchset_id);
         decision.result_commit_sha = Some("abc123".to_string());
         decision.rationale = Some("tests passed".to_string());
@@ -795,31 +884,34 @@ mod tests {
     #[test]
     fn test_plan_version_ordering() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::human("jackie");
+        let actor = ActorRef::human("jackie").expect("actor");
         let run_id = Uuid::now_v7();
 
-        let plan_v1 = Plan::new(repo_id, actor.clone(), run_id, 1);
-        let plan_v2 = Plan::new(repo_id, actor.clone(), run_id, 2);
-        let plan_v3 = Plan::new(repo_id, actor.clone(), run_id, 3);
+        let plan_v1 = Plan::new(repo_id, actor.clone(), run_id).expect("plan");
+        let plan_v2 =
+            Plan::new_next(repo_id, actor.clone(), run_id, plan_v1.plan_version).expect("plan");
+        let plan_v3 =
+            Plan::new_next(repo_id, actor.clone(), run_id, plan_v2.plan_version).expect("plan");
 
         let mut plans = [plan_v2.clone(), plan_v1.clone(), plan_v3.clone()];
-        plans.sort();
+        plans.sort_by_key(|plan| plan.plan_version);
 
         assert_eq!(plans[0].plan_version, 1);
         assert_eq!(plans[1].plan_version, 2);
         assert_eq!(plans[2].plan_version, 3);
 
-        assert!(plan_v3 > plan_v2);
-        assert!(plan_v2 > plan_v1);
+        assert!(plan_v3.plan_version > plan_v2.plan_version);
+        assert!(plan_v2.plan_version > plan_v1.plan_version);
     }
 
     #[test]
     fn ai_process_tool_invocation_artifacts_default() {
         let repo_id = Uuid::now_v7();
-        let actor = ActorRef::human("jackie");
+        let actor = ActorRef::human("jackie").expect("actor");
         let run_id = Uuid::now_v7();
 
-        let tool_inv = ToolInvocation::new(repo_id, actor, run_id, "read_file");
+        let tool_inv =
+            ToolInvocation::new(repo_id, actor, run_id, "read_file").expect("tool_invocation");
         let mut value = serde_json::to_value(&tool_inv).unwrap();
 
         if let serde_json::Value::Object(ref mut map) = value {
