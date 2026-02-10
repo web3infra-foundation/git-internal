@@ -1,29 +1,35 @@
+use std::str::FromStr;
+
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::hash::sha256_hex;
+use crate::hash::{ObjectHash, get_hash_kind};
 
-/// Calculate SHA256 hex string from bytes.
-pub fn compute_sha256_hex(content: &[u8]) -> String {
-    sha256_hex(content)
+/// Calculate hash from bytes using the repository hash kind.
+pub fn compute_hash(content: &[u8]) -> ObjectHash {
+    ObjectHash::new(content)
 }
 
-/// Calculate SHA256 hex string from a serializable object (deterministic JSON).
-pub fn compute_json_sha256_hex<T: Serialize>(object: &T) -> Result<String, serde_json::Error> {
+/// Calculate hash from a serializable object (deterministic JSON).
+pub fn compute_json_hash<T: Serialize>(object: &T) -> Result<ObjectHash, serde_json::Error> {
     let mut value = serde_json::to_value(object)?;
     canonicalize_json(&mut value);
     let content = serde_json::to_vec(&value)?;
-    Ok(sha256_hex(&content))
+    Ok(ObjectHash::new(&content))
 }
 
-/// Check valid format (64 hex chars).
-pub fn is_valid_sha256_hex(hash: &str) -> bool {
-    hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-/// Verify content against the expected SHA256 hex string.
-pub fn verify_sha256_hex(expected: &str, content: &[u8]) -> bool {
-    compute_sha256_hex(content) == expected
+/// Parse a hex string into `ObjectHash` for the current repository hash kind.
+pub fn parse_object_hash(value: &str) -> Result<ObjectHash, String> {
+    if value.len() != get_hash_kind().hex_len() {
+        return Err(format!(
+            "Invalid hash hex string length (expected {})",
+            get_hash_kind().hex_len()
+        ));
+    }
+    if !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid hash hex string".to_string());
+    }
+    ObjectHash::from_str(value)
 }
 
 fn canonicalize_json(value: &mut Value) {
@@ -68,8 +74,8 @@ mod tests {
         map_b.insert("a".to_string(), "1".to_string());
         map_b.insert("b".to_string(), "2".to_string());
 
-        let hash_a = compute_json_sha256_hex(&MapWrapper { map: map_a }).expect("checksum");
-        let hash_b = compute_json_sha256_hex(&MapWrapper { map: map_b }).expect("checksum");
+        let hash_a = compute_json_hash(&MapWrapper { map: map_a }).expect("checksum");
+        let hash_b = compute_json_hash(&MapWrapper { map: map_b }).expect("checksum");
 
         assert_eq!(hash_a, hash_b);
     }
