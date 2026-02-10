@@ -3,7 +3,11 @@ use std::{collections::HashMap, fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::base::{ActorRef, ArtifactRef, Header};
+use super::{
+    base::{ActorRef, AiObjectType, ArtifactRef, Header},
+    checksum::parse_object_hash,
+};
+use crate::hash::ObjectHash;
 
 /// Task lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,7 +124,7 @@ impl Task {
         goal_type: Option<GoalType>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new("task", repo_id, created_by)?,
+            header: Header::new(AiObjectType::Task, repo_id, created_by)?,
             title: title.into(),
             description: None,
             goal_type,
@@ -169,7 +173,7 @@ pub struct Run {
     pub header: Header,
     pub task_id: Uuid,
     pub orchestrator_version: String,
-    pub base_commit_sha: String,
+    pub base_commit_sha: ObjectHash,
     pub status: RunStatus,
     pub context_snapshot_id: Option<Uuid>,
     #[serde(default)]
@@ -219,13 +223,14 @@ impl Run {
         repo_id: Uuid,
         created_by: ActorRef,
         task_id: Uuid,
-        base_commit_sha: impl Into<String>,
+        base_commit_sha: impl AsRef<str>,
     ) -> Result<Self, String> {
+        let base_commit_sha = parse_object_hash(base_commit_sha.as_ref())?;
         Ok(Self {
-            header: Header::new("run", repo_id, created_by)?,
+            header: Header::new(AiObjectType::Run, repo_id, created_by)?,
             task_id,
             orchestrator_version: "libra-builtin".to_string(),
-            base_commit_sha: base_commit_sha.into(),
+            base_commit_sha,
             status: RunStatus::Created,
             context_snapshot_id: None,
             agent_instances: Vec::new(),
@@ -278,7 +283,7 @@ pub struct PatchSet {
     pub header: Header,
     pub run_id: Uuid,
     pub generation: u32,
-    pub base_commit_sha: String,
+    pub base_commit_sha: ObjectHash,
     pub diff_format: DiffFormat,
     pub diff_artifact: Option<ArtifactRef>,
     #[serde(default)]
@@ -322,14 +327,15 @@ impl PatchSet {
         repo_id: Uuid,
         created_by: ActorRef,
         run_id: Uuid,
-        base_commit_sha: impl Into<String>,
+        base_commit_sha: impl AsRef<str>,
         generation: u32,
     ) -> Result<Self, String> {
+        let base_commit_sha = parse_object_hash(base_commit_sha.as_ref())?;
         Ok(Self {
-            header: Header::new("patchset", repo_id, created_by)?,
+            header: Header::new(AiObjectType::PatchSet, repo_id, created_by)?,
             run_id,
             generation,
-            base_commit_sha: base_commit_sha.into(),
+            base_commit_sha,
             diff_format: DiffFormat::UnifiedDiff,
             diff_artifact: None,
             touched_files: Vec::new(),
@@ -352,7 +358,7 @@ pub enum SelectionStrategy {
 pub struct ContextSnapshot {
     #[serde(flatten)]
     pub header: Header,
-    pub base_commit_sha: String,
+    pub base_commit_sha: ObjectHash,
     pub selection_strategy: SelectionStrategy,
     #[serde(default)]
     pub items: Vec<ContextItem>,
@@ -363,12 +369,13 @@ impl ContextSnapshot {
     pub fn new(
         repo_id: Uuid,
         created_by: ActorRef,
-        base_commit_sha: impl Into<String>,
+        base_commit_sha: impl AsRef<str>,
         selection_strategy: SelectionStrategy,
     ) -> Result<Self, String> {
+        let base_commit_sha = parse_object_hash(base_commit_sha.as_ref())?;
         Ok(Self {
-            header: Header::new("context_snapshot", repo_id, created_by)?,
-            base_commit_sha: base_commit_sha.into(),
+            header: Header::new(AiObjectType::ContextSnapshot, repo_id, created_by)?,
+            base_commit_sha,
             selection_strategy,
             items: Vec::new(),
             summary: None,
@@ -388,14 +395,14 @@ pub enum ContextItemKind {
 pub struct ContextItem {
     pub kind: ContextItemKind,
     pub path: String,
-    pub content_hash: String,
+    pub content_id: ObjectHash,
 }
 
 impl ContextItem {
     pub fn new(
         kind: ContextItemKind,
         path: impl Into<String>,
-        content_hash: impl Into<String>,
+        content_id: ObjectHash,
     ) -> Result<Self, String> {
         let path = path.into();
         if path.trim().is_empty() {
@@ -404,7 +411,7 @@ impl ContextItem {
         Ok(Self {
             kind,
             path,
-            content_hash: content_hash.into(),
+            content_id,
         })
     }
 }
@@ -465,7 +472,7 @@ impl ToolInvocation {
         tool_name: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new("tool_invocation", repo_id, created_by)?,
+            header: Header::new(AiObjectType::ToolInvocation, repo_id, created_by)?,
             run_id,
             tool_name: tool_name.into(),
             io_footprint: None,
@@ -533,7 +540,7 @@ impl Plan {
     /// Create a new plan object
     pub fn new(repo_id: Uuid, created_by: ActorRef, run_id: Uuid) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new("plan", repo_id, created_by)?,
+            header: Header::new(AiObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: 1,
             steps: Vec::new(),
@@ -550,7 +557,7 @@ impl Plan {
             .checked_add(1)
             .ok_or_else(|| "plan_version overflow".to_string())?;
         Ok(Self {
-            header: Header::new("plan", repo_id, created_by)?,
+            header: Header::new(AiObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: next_version,
             steps: Vec::new(),
@@ -583,7 +590,7 @@ impl Evidence {
         tool: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new("evidence", repo_id, created_by)?,
+            header: Header::new(AiObjectType::Evidence, repo_id, created_by)?,
             run_id,
             patchset_id: None,
             kind: kind.into(),
@@ -617,7 +624,7 @@ impl Provenance {
         model: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new("provenance", repo_id, created_by)?,
+            header: Header::new(AiObjectType::Provenance, repo_id, created_by)?,
             run_id,
             provider: provider.into(),
             model: model.into(),
@@ -635,7 +642,7 @@ pub struct Decision {
     pub run_id: Uuid,
     pub decision_type: String, // commit/checkpoint/abandon/retry/rollback
     pub chosen_patchset_id: Option<Uuid>,
-    pub result_commit_sha: Option<String>,
+    pub result_commit_sha: Option<ObjectHash>,
     pub checkpoint_id: Option<String>,
     pub rationale: Option<String>,
 }
@@ -649,7 +656,7 @@ impl Decision {
         decision_type: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new("decision", repo_id, created_by)?,
+            header: Header::new(AiObjectType::Decision, repo_id, created_by)?,
             run_id,
             decision_type: decision_type.into(),
             chosen_patchset_id: None,
@@ -663,6 +670,11 @@ impl Decision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::{HashKind, set_hash_kind_for_test};
+
+    fn test_hash_hex() -> String {
+        ObjectHash::new(b"ai-process-test").to_string()
+    }
 
     #[test]
     fn test_task_creation() {
@@ -674,7 +686,7 @@ mod tests {
         let dep_id = Uuid::now_v7();
         task.dependencies.push(dep_id);
 
-        assert_eq!(task.header.object_type(), "task");
+        assert_eq!(task.header.object_type(), &AiObjectType::Task);
         assert_eq!(task.status, TaskStatus::Draft);
         assert_eq!(task.goal_type, Some(GoalType::Bugfix));
         assert_eq!(task.dependencies.len(), 1);
@@ -692,12 +704,14 @@ mod tests {
 
     #[test]
     fn test_new_objects_creation() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let repo_id = Uuid::now_v7();
         let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
+        let base_hash = test_hash_hex();
 
         // Run with environment (auto captured)
-        let run = Run::new(repo_id, actor.clone(), Uuid::now_v7(), "sha123").expect("run");
+        let run = Run::new(repo_id, actor.clone(), Uuid::now_v7(), &base_hash).expect("run");
 
         let env = run.environment.as_ref().unwrap();
         // Check if it captured real values (assuming we are running on some OS)
@@ -716,25 +730,25 @@ mod tests {
             status: PlanStatus::Pending,
         });
 
-        assert_eq!(plan.header.object_type(), "plan");
+        assert_eq!(plan.header.object_type(), &AiObjectType::Plan);
         assert_eq!(plan.plan_version, 1);
         assert_eq!(plan.steps[0].status, PlanStatus::Pending);
 
         // Evidence
         let evidence =
             Evidence::new(repo_id, actor.clone(), run_id, "test", "cargo").expect("evidence");
-        assert_eq!(evidence.header.object_type(), "evidence");
+        assert_eq!(evidence.header.object_type(), &AiObjectType::Evidence);
         assert_eq!(evidence.kind, "test");
 
         // Provenance
         let provenance =
             Provenance::new(repo_id, actor.clone(), run_id, "openai", "gpt-4").expect("provenance");
-        assert_eq!(provenance.header.object_type(), "provenance");
+        assert_eq!(provenance.header.object_type(), &AiObjectType::Provenance);
         assert_eq!(provenance.provider, "openai");
 
         // Decision
         let decision = Decision::new(repo_id, actor.clone(), run_id, "commit").expect("decision");
-        assert_eq!(decision.header.object_type(), "decision");
+        assert_eq!(decision.header.object_type(), &AiObjectType::Decision);
         assert_eq!(decision.decision_type, "commit");
     }
 
@@ -777,13 +791,15 @@ mod tests {
 
     #[test]
     fn test_patchset_creation() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let repo_id = Uuid::now_v7();
         let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
+        let base_hash = test_hash_hex();
 
-        let patchset = PatchSet::new(repo_id, actor, run_id, "sha123", 1).expect("patchset");
+        let patchset = PatchSet::new(repo_id, actor, run_id, &base_hash, 1).expect("patchset");
 
-        assert_eq!(patchset.header.object_type(), "patchset");
+        assert_eq!(patchset.header.object_type(), &AiObjectType::PatchSet);
         assert_eq!(patchset.generation, 1);
         assert_eq!(patchset.diff_format, DiffFormat::UnifiedDiff);
         assert_eq!(patchset.apply_status, ApplyStatus::Proposed);
@@ -792,16 +808,23 @@ mod tests {
 
     #[test]
     fn test_context_snapshot_fields() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let repo_id = Uuid::now_v7();
         let actor = ActorRef::agent("test-agent").expect("actor");
+        let base_hash = test_hash_hex();
 
         let mut snapshot =
-            ContextSnapshot::new(repo_id, actor, "sha123", SelectionStrategy::Explicit)
+            ContextSnapshot::new(repo_id, actor, &base_hash, SelectionStrategy::Explicit)
                 .expect("snapshot");
         snapshot.summary = Some("core files".to_string());
 
         snapshot.items.push(
-            ContextItem::new(ContextItemKind::File, "src/lib.rs", "abc").expect("context item"),
+            ContextItem::new(
+                ContextItemKind::File,
+                "src/lib.rs",
+                ObjectHash::new(b"context-item"),
+            )
+            .expect("context item"),
         );
 
         assert_eq!(snapshot.items.len(), 1);
@@ -866,18 +889,20 @@ mod tests {
 
     #[test]
     fn test_decision_fields() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let repo_id = Uuid::now_v7();
         let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::now_v7();
         let patchset_id = Uuid::now_v7();
+        let expected_hash = ObjectHash::new(b"decision-hash");
 
         let mut decision = Decision::new(repo_id, actor, run_id, "commit").expect("decision");
         decision.chosen_patchset_id = Some(patchset_id);
-        decision.result_commit_sha = Some("abc123".to_string());
+        decision.result_commit_sha = Some(expected_hash);
         decision.rationale = Some("tests passed".to_string());
 
         assert_eq!(decision.chosen_patchset_id, Some(patchset_id));
-        assert_eq!(decision.result_commit_sha.as_deref(), Some("abc123"));
+        assert_eq!(decision.result_commit_sha, Some(expected_hash));
         assert_eq!(decision.rationale.as_deref(), Some("tests passed"));
     }
 
