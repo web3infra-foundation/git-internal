@@ -17,6 +17,7 @@
 //! - `internal::pack`: decode/encode, caches, waitlists, parallel pipelines, helpers.
 //! - `internal::object`: Blob/Tree/Commit/Tag/Note objects, type enum, object trait.
 //! - `internal::zlib`: compression/decompression stream utilities.
+//! - `ai_process`: AI process objects for agent runs and provenance.
 //! - `delta` and `zstdelta`: delta algorithms and rebuild helpers.
 //! - `errors`: unified error types.
 //! - `hash`: Hash helpers.
@@ -30,14 +31,14 @@
 //! Test Data
 //! - Located under `tests/data/`, includes real pack files and object sets.
 
+pub mod ai_process;
+mod delta;
 pub mod diff;
 pub mod errors;
 pub mod hash;
 pub mod internal;
 pub mod protocol;
 pub mod utils;
-
-mod delta;
 mod zstdelta;
 
 // Core traits and types that external users need to implement/use
