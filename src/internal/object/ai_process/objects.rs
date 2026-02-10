@@ -98,6 +98,7 @@ impl FromStr for GoalType {
 }
 
 /// Task object describing intent and constraints.
+/// Typically created first, then referenced by Run objects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     #[serde(flatten)]
@@ -167,6 +168,7 @@ impl fmt::Display for RunStatus {
 }
 
 /// Run object for a single orchestration execution.
+/// Links a task to execution state and environment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(flatten)]
@@ -184,6 +186,7 @@ pub struct Run {
 }
 
 /// Environment snapshot of the run host.
+/// Captured at run creation time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
     pub os: String,   // e.g. "macos", "linux"
@@ -277,6 +280,7 @@ pub enum DiffFormat {
 }
 
 /// PatchSet object containing a candidate diff.
+/// Each generation represents a new candidate diff for the same run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchSet {
     #[serde(flatten)]
@@ -354,6 +358,7 @@ pub enum SelectionStrategy {
 }
 
 /// Context snapshot describing selected inputs.
+/// Captures the selection strategy and content identifiers used by a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextSnapshot {
     #[serde(flatten)]
@@ -440,6 +445,7 @@ impl fmt::Display for ToolStatus {
 }
 
 /// Tool invocation record.
+/// Records a single tool call within a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvocation {
     #[serde(flatten)]
@@ -456,6 +462,7 @@ pub struct ToolInvocation {
 }
 
 /// IO footprint of a tool invocation.
+/// Tracks reads and writes for auditability.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IoFootprint {
     #[serde(default)]
@@ -514,6 +521,7 @@ impl fmt::Display for PlanStatus {
 }
 
 /// Plan object for step decomposition.
+/// New versions are created via `new_next` with monotonic versioning.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {
     #[serde(flatten)]
@@ -566,6 +574,7 @@ impl Plan {
 }
 
 /// Evidence object for test/lint/build results.
+/// Links tooling output back to a run or patchset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     #[serde(flatten)]
@@ -604,6 +613,7 @@ impl Evidence {
 }
 
 /// Provenance object for model/provider metadata.
+/// Captures model/provider settings and usage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provenance {
     #[serde(flatten)]
@@ -635,6 +645,7 @@ impl Provenance {
 }
 
 /// Decision object linking process to outcomes.
+/// Records the final outcome of a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
     #[serde(flatten)]
@@ -670,7 +681,7 @@ impl Decision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::{HashKind, set_hash_kind_for_test};
+    use crate::hash::{set_hash_kind_for_test, HashKind};
 
     fn test_hash_hex() -> String {
         ObjectHash::new(b"ai-process-test").to_string()
