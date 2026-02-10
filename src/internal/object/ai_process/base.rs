@@ -175,10 +175,19 @@ impl Header {
     }
 
     /// Seal the header by calculating and setting the checksum of the provided object.
-    /// This is typically called before persisting the object.
+    /// The checksum field is temporarily cleared to keep sealing idempotent.
     pub fn seal<T: Serialize>(&mut self, object: &T) -> Result<(), serde_json::Error> {
-        self.checksum = Some(compute_json_hash(object)?);
-        Ok(())
+        let previous = self.checksum.take();
+        match compute_json_hash(object) {
+            Ok(checksum) => {
+                self.checksum = Some(checksum);
+                Ok(())
+            }
+            Err(err) => {
+                self.checksum = previous;
+                Err(err)
+            }
+        }
     }
 }
 
@@ -560,6 +569,11 @@ mod tests {
         assert!(header.checksum().is_some());
         let expected = compute_json_hash(&content).expect("checksum");
         assert_eq!(header.checksum().expect("checksum"), &expected);
+
+        let first = header.checksum().cloned().expect("checksum");
+        header.seal(&content).expect("seal");
+        let second = header.checksum().cloned().expect("checksum");
+        assert_eq!(first, second);
     }
 
     #[test]

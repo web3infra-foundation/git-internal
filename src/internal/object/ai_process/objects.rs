@@ -681,7 +681,7 @@ impl Decision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::{set_hash_kind_for_test, HashKind};
+    use crate::hash::{HashKind, set_hash_kind_for_test};
 
     fn test_hash_hex() -> String {
         ObjectHash::new(b"ai-process-test").to_string()
