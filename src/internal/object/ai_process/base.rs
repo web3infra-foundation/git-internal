@@ -4,9 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::checksum::{
-    compute_json_sha256_hex, compute_sha256_hex, is_valid_sha256_hex, verify_sha256_hex,
-};
+use super::checksum::{compute_hash as compute_object_hash, compute_json_hash, parse_object_hash};
+use crate::hash::ObjectHash;
 
 /// Visibility of an AI process object.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,13 +15,50 @@ pub enum Visibility {
     Public,
 }
 
+/// AI process object type.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiObjectType {
+    Task,
+    Run,
+    PatchSet,
+    ContextSnapshot,
+    ToolInvocation,
+    Plan,
+    Evidence,
+    Provenance,
+    Decision,
+}
+
+impl AiObjectType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AiObjectType::Task => "task",
+            AiObjectType::Run => "run",
+            AiObjectType::PatchSet => "patchset",
+            AiObjectType::ContextSnapshot => "context_snapshot",
+            AiObjectType::ToolInvocation => "tool_invocation",
+            AiObjectType::Plan => "plan",
+            AiObjectType::Evidence => "evidence",
+            AiObjectType::Provenance => "provenance",
+            AiObjectType::Decision => "decision",
+        }
+    }
+}
+
+impl fmt::Display for AiObjectType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Header shared by all AI Process Objects.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Header {
     /// Global unique ID (UUID v7)
     object_id: Uuid,
     /// Object type (task/run/patchset/...)
-    object_type: String,
+    object_type: AiObjectType,
     /// Model version
     schema_version: u32,
     /// Repository identifier
@@ -41,19 +77,15 @@ pub struct Header {
     external_ids: HashMap<String, String>,
     /// Content checksum (optional)
     #[serde(default)]
-    checksum: Option<String>,
+    checksum: Option<ObjectHash>,
 }
 
 impl Header {
     pub fn new(
-        object_type: impl Into<String>,
+        object_type: AiObjectType,
         repo_id: Uuid,
         created_by: ActorRef,
     ) -> Result<Self, String> {
-        let object_type = object_type.into();
-        if object_type.trim().is_empty() {
-            return Err("object_type cannot be empty".to_string());
-        }
         Ok(Self {
             object_id: Uuid::now_v7(),
             object_type,
@@ -72,7 +104,7 @@ impl Header {
         self.object_id
     }
 
-    pub fn object_type(&self) -> &str {
+    pub fn object_type(&self) -> &AiObjectType {
         &self.object_type
     }
 
@@ -116,11 +148,7 @@ impl Header {
         self.object_id = object_id;
     }
 
-    pub fn set_object_type(&mut self, object_type: impl Into<String>) -> Result<(), String> {
-        let object_type = object_type.into();
-        if object_type.trim().is_empty() {
-            return Err("object_type cannot be empty".to_string());
-        }
+    pub fn set_object_type(&mut self, object_type: AiObjectType) -> Result<(), String> {
         self.object_type = object_type;
         Ok(())
     }
@@ -142,14 +170,14 @@ impl Header {
     }
 
     /// Accessor for checksum
-    pub fn checksum(&self) -> Option<&str> {
-        self.checksum.as_deref()
+    pub fn checksum(&self) -> Option<&ObjectHash> {
+        self.checksum.as_ref()
     }
 
     /// Seal the header by calculating and setting the checksum of the provided object.
     /// This is typically called before persisting the object.
     pub fn seal<T: Serialize>(&mut self, object: &T) -> Result<(), serde_json::Error> {
-        self.checksum = Some(compute_json_sha256_hex(object)?);
+        self.checksum = Some(compute_json_hash(object)?);
         Ok(())
     }
 }
@@ -230,6 +258,19 @@ impl ActorRef {
         })
     }
 
+    /// Create an MCP client actor reference (MCP writes must use this).
+    pub fn new_for_mcp(id: impl Into<String>) -> Result<Self, String> {
+        Self::new(ActorKind::McpClient, id)
+    }
+
+    /// Validate that this actor is an MCP client.
+    pub fn ensure_mcp_client(&self) -> Result<(), String> {
+        if self.kind != ActorKind::McpClient {
+            return Err("MCP writes must use mcp_client actor kind".to_string());
+        }
+        Ok(())
+    }
+
     pub fn kind(&self) -> &ActorKind {
         &self.kind
     }
@@ -286,8 +327,8 @@ pub struct ArtifactRef {
     content_type: Option<String>,
     /// Size in bytes (optional)
     size_bytes: Option<u64>,
-    /// SHA256 checksum (strongly recommended)
-    sha256: Option<String>,
+    /// Content hash (strongly recommended)
+    hash: Option<ObjectHash>,
     /// Expiration time (optional)
     expires_at: Option<DateTime<Utc>>,
 }
@@ -307,7 +348,7 @@ impl ArtifactRef {
             key,
             content_type: None,
             size_bytes: None,
-            sha256: None,
+            hash: None,
             expires_at: None,
         })
     }
@@ -328,26 +369,29 @@ impl ArtifactRef {
         self.size_bytes
     }
 
-    pub fn sha256(&self) -> Option<&str> {
-        self.sha256.as_deref()
+    pub fn hash(&self) -> Option<&ObjectHash> {
+        self.hash.as_ref()
     }
 
     pub fn expires_at(&self) -> Option<DateTime<Utc>> {
         self.expires_at
     }
 
-    /// Calculate SHA256 checksum for the given content bytes
-    pub fn compute_sha256(content: &[u8]) -> String {
-        compute_sha256_hex(content)
+    /// Calculate hash for the given content bytes.
+    pub fn compute_hash(content: &[u8]) -> ObjectHash {
+        compute_object_hash(content)
     }
 
-    /// Set the checksum directly with validation
-    pub fn with_checksum(mut self, sha256: impl Into<String>) -> Result<Self, String> {
-        let sha256 = sha256.into();
-        if !is_valid_sha256_hex(&sha256) {
-            return Err(format!("Invalid SHA256 hash format: {}", sha256));
-        }
-        self.sha256 = Some(sha256);
+    /// Set the hash directly.
+    pub fn with_hash(mut self, hash: ObjectHash) -> Self {
+        self.hash = Some(hash);
+        self
+    }
+
+    /// Set the hash from a hex string.
+    pub fn with_hash_hex(mut self, hash: impl AsRef<str>) -> Result<Self, String> {
+        let hash = parse_object_hash(hash.as_ref())?;
+        self.hash = Some(hash);
         Ok(self)
     }
 
@@ -367,17 +411,17 @@ impl ArtifactRef {
     #[must_use = "handle integrity verification result"]
     pub fn verify_integrity(&self, content: &[u8]) -> Result<bool, String> {
         let stored_hash = self
-            .sha256
+            .hash
             .as_ref()
-            .ok_or_else(|| "No checksum stored in ArtifactRef".to_string())?;
+            .ok_or_else(|| "No hash stored in ArtifactRef".to_string())?;
 
-        Ok(verify_sha256_hex(stored_hash, content))
+        Ok(compute_object_hash(content) == *stored_hash)
     }
 
     /// Check if two artifacts have the same content based on checksum
     #[must_use]
     pub fn content_eq(&self, other: &Self) -> Option<bool> {
-        match (&self.sha256, &other.sha256) {
+        match (&self.hash, &other.hash) {
             (Some(a), Some(b)) => Some(a == b),
             _ => None,
         }
@@ -397,12 +441,13 @@ impl ArtifactRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 
     #[test]
     fn test_header_serialization() {
         let repo_id = Uuid::now_v7();
         let actor = ActorRef::human("jackie").expect("actor");
-        let header = Header::new("task", repo_id, actor).expect("header");
+        let header = Header::new(AiObjectType::Task, repo_id, actor).expect("header");
 
         let json = serde_json::to_string(&header).unwrap();
         let deserialized: Header = serde_json::from_str(&json).unwrap();
@@ -423,6 +468,10 @@ mod tests {
 
         let client = ActorRef::mcp_client("vscode").expect("client");
         assert_eq!(client.kind(), &ActorKind::McpClient);
+        assert!(client.ensure_mcp_client().is_ok());
+
+        let non_mcp = ActorRef::human("jackie").expect("actor");
+        assert!(non_mcp.ensure_mcp_client().is_err());
     }
 
     #[test]
@@ -437,9 +486,10 @@ mod tests {
 
     #[test]
     fn test_header_checksum() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let repo_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new("task", repo_id, actor).expect("header");
+        let mut header = Header::new(AiObjectType::Task, repo_id, actor).expect("header");
         // Fix time for deterministic checksum
         header.set_created_at(
             DateTime::parse_from_rfc3339("2026-02-10T00:00:00Z")
@@ -448,28 +498,30 @@ mod tests {
         );
         header.set_object_id(Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
 
-        let checksum = compute_json_sha256_hex(&header).expect("checksum");
-        assert_eq!(checksum.len(), 64); // SHA256 length
+        let checksum = compute_json_hash(&header).expect("checksum");
+        assert_eq!(checksum.to_string().len(), 64); // SHA256 length
 
         // Ensure changes change checksum
-        header.set_object_type("run").expect("object_type");
-        let checksum2 = compute_json_sha256_hex(&header).expect("checksum");
+        header
+            .set_object_type(AiObjectType::Run)
+            .expect("object_type");
+        let checksum2 = compute_json_hash(&header).expect("checksum");
         assert_ne!(checksum, checksum2);
     }
 
     #[test]
     fn test_artifact_checksum() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let content = b"hello world";
-        let hash = ArtifactRef::compute_sha256(content);
+        let hash = ArtifactRef::compute_hash(content);
         // echo -n "hello world" | shasum -a 256
         let expected_str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        assert_eq!(hash.as_str(), expected_str);
+        assert_eq!(hash.to_string(), expected_str);
 
         let artifact = ArtifactRef::new("s3", "key")
             .expect("artifact")
-            .with_checksum(hash.as_str())
-            .expect("checksum");
-        assert_eq!(artifact.sha256(), Some(hash.as_str()));
+            .with_hash(hash);
+        assert_eq!(artifact.hash(), Some(&hash));
 
         // Integrity check
         assert!(artifact.verify_integrity(content).unwrap());
@@ -478,14 +530,12 @@ mod tests {
         // Deduplication
         let artifact2 = ArtifactRef::new("local", "other/path")
             .expect("artifact")
-            .with_checksum(hash.as_str())
-            .expect("checksum");
+            .with_hash(ObjectHash::new(content));
         assert_eq!(artifact.content_eq(&artifact2), Some(true));
 
         let artifact3 = ArtifactRef::new("s3", "diff")
             .expect("artifact")
-            .with_checksum(ArtifactRef::compute_sha256(b"diff").as_str())
-            .expect("checksum");
+            .with_hash(ArtifactRef::compute_hash(b"diff"));
         assert_eq!(artifact.content_eq(&artifact3), Some(false));
     }
 
@@ -493,22 +543,23 @@ mod tests {
     fn test_invalid_checksum() {
         let result = ArtifactRef::new("s3", "key")
             .expect("artifact")
-            .with_checksum("bad_hash");
+            .with_hash_hex("bad_hash");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_header_seal() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let repo_id = Uuid::now_v7();
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new("task", repo_id, actor).expect("header");
+        let mut header = Header::new(AiObjectType::Task, repo_id, actor).expect("header");
 
         let content = serde_json::json!({"key": "value"});
         header.seal(&content).expect("seal");
 
         assert!(header.checksum().is_some());
-        let expected = compute_json_sha256_hex(&content).expect("checksum");
-        assert_eq!(header.checksum().expect("checksum"), expected);
+        let expected = compute_json_hash(&content).expect("checksum");
+        assert_eq!(header.checksum().expect("checksum"), &expected);
     }
 
     #[test]
