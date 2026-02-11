@@ -1,6 +1,16 @@
 //! Object model definitions for Git blobs, trees, commits, tags, and supporting traits that let the
 //! pack/zlib layers create strongly typed values from raw bytes.
-pub mod ai_process;
+pub mod ai_context;
+pub mod ai_decision;
+pub mod ai_evidence;
+pub mod ai_hash;
+pub mod ai_header;
+pub mod ai_patchset;
+pub mod ai_plan;
+pub mod ai_provenance;
+pub mod ai_run;
+pub mod ai_task;
+pub mod ai_tool;
 pub mod blob;
 pub mod commit;
 pub mod note;
