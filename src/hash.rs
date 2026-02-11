@@ -239,6 +239,7 @@ impl ObjectHash {
         }
     }
 }
+
 thread_local! {
     /// Thread-local variable to store the current hash kind.
     /// This allows different threads to work with different hash algorithms concurrently
