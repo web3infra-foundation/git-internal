@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    ai_hash::IntegrityHash,
-    ai_header::{ActorRef, AiObjectType, Header},
+    header::{ActorRef, AiObjectType, Header},
+    integrity::IntegrityHash,
 };
 
 /// Run lifecycle status.

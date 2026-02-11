@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::ai_header::{ActorRef, AiObjectType, Header};
+use super::header::{ActorRef, AiObjectType, Header};
 
 /// Provenance object for model/provider metadata.
 /// Captures model/provider settings and usage.

@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::ai_hash::{IntegrityHash, compute_integrity_hash};
+use super::integrity::{IntegrityHash, compute_integrity_hash};
 
 /// Visibility of an AI process object.
 ///

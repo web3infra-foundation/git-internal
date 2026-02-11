@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    ai_hash::IntegrityHash,
-    ai_header::{ActorRef, AiObjectType, ArtifactRef, Header},
+    header::{ActorRef, AiObjectType, ArtifactRef, Header},
+    integrity::IntegrityHash,
 };
 
 /// Patch application status.

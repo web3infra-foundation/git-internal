@@ -17,7 +17,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::ai_header::{ActorRef, AiObjectType, Header};
+use super::header::{ActorRef, AiObjectType, Header};
 
 /// Plan step status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

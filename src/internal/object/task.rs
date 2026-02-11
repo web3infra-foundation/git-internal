@@ -20,8 +20,8 @@
 //! # Example
 //!
 //! ```rust
-//! use git_internal::internal::object::ai_task::{Task, GoalType};
-//! use git_internal::internal::object::ai_header::ActorRef;
+//! use git_internal::internal::object::task::{Task, GoalType};
+//! use git_internal::internal::object::header::ActorRef;
 //! use uuid::Uuid;
 //!
 //! let repo_id = Uuid::new_v4();
@@ -37,7 +37,7 @@ use std::{fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::ai_header::{ActorRef, AiObjectType, Header};
+use super::header::{ActorRef, AiObjectType, Header};
 
 /// Task lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -246,7 +246,7 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::object::ai_header::ActorKind;
+    use crate::internal::object::header::ActorKind;
 
     #[test]
     fn test_task_creation() {

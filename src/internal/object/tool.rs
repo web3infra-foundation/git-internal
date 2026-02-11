@@ -21,7 +21,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::ai_header::{ActorRef, AiObjectType, ArtifactRef, Header};
+use super::header::{ActorRef, AiObjectType, ArtifactRef, Header};
 
 /// Tool invocation status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
