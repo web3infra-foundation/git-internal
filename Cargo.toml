@@ -40,7 +40,7 @@ sha2 = "0.10.9"
 crc32fast = "1.4"
 zstd-sys = { version = "2.0.16+zstd.1.5.7", features = ["experimental"] }
 sea-orm = { version = "1.1.17", features = ["sqlx-sqlite"] }
-flate2 = { version = "1.1.8", features = ["zlib"] }
+flate2 = { version = "1.1.9", features = ["zlib"] }
 serde = { version = "1.0.228", features = ["derive"] }
 chrono = { version = "0.4.43", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde", "v4", "v7"] }
