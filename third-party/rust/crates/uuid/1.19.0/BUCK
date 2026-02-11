@@ -29,6 +29,7 @@ rust_library(
         "serde",
         "std",
         "v4",
+        "v7",
     ],
     rustc_flags = ["@$(location :uuid-manifest[env_flags])"],
     os_deps = {

@@ -30,14 +30,13 @@
 //! Test Data
 //! - Located under `tests/data/`, includes real pack files and object sets.
 
+mod delta;
 pub mod diff;
 pub mod errors;
 pub mod hash;
 pub mod internal;
 pub mod protocol;
 pub mod utils;
-
-mod delta;
 mod zstdelta;
 
 // Core traits and types that external users need to implement/use
