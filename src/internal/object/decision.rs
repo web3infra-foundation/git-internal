@@ -16,9 +16,14 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{
-    header::{ActorRef, AiObjectType, Header},
-    integrity::IntegrityHash,
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        integrity::IntegrityHash,
+        types::{ActorRef, Header, ObjectType},
+    },
 };
 
 /// Type of decision.
@@ -101,7 +106,7 @@ impl Decision {
         decision_type: impl Into<DecisionType>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new(AiObjectType::Decision, repo_id, created_by)?,
+            header: Header::new(ObjectType::Decision, repo_id, created_by)?,
             run_id,
             decision_type: decision_type.into(),
             chosen_patchset_id: None,
@@ -153,6 +158,33 @@ impl Decision {
 
     pub fn set_rationale(&mut self, rationale: Option<String>) {
         self.rationale = rationale;
+    }
+}
+
+impl fmt::Display for Decision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Decision: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for Decision {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::Decision
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 }
 

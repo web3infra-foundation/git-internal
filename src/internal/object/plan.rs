@@ -17,7 +17,14 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::header::{ActorRef, AiObjectType, Header};
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        types::{ActorRef, Header, ObjectType},
+    },
+};
 
 /// Plan step status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,7 +88,7 @@ impl Plan {
     /// Create a new plan object (version 1)
     pub fn new(repo_id: Uuid, created_by: ActorRef, run_id: Uuid) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new(AiObjectType::Plan, repo_id, created_by)?,
+            header: Header::new(ObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: 1,
             steps: Vec::new(),
@@ -102,7 +109,7 @@ impl Plan {
             .checked_add(1)
             .ok_or_else(|| "plan_version overflow".to_string())?;
         Ok(Self {
-            header: Header::new(AiObjectType::Plan, repo_id, created_by)?,
+            header: Header::new(ObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: next_version,
             steps: Vec::new(),
@@ -127,6 +134,33 @@ impl Plan {
 
     pub fn add_step(&mut self, step: PlanStep) {
         self.steps.push(step);
+    }
+}
+
+impl fmt::Display for Plan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Plan: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for Plan {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::Plan
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 }
 

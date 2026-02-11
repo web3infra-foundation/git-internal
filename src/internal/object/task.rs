@@ -21,7 +21,7 @@
 //!
 //! ```rust
 //! use git_internal::internal::object::task::{Task, GoalType};
-//! use git_internal::internal::object::header::ActorRef;
+//! use git_internal::internal::object::types::ActorRef;
 //! use uuid::Uuid;
 //!
 //! let repo_id = Uuid::new_v4();
@@ -37,7 +37,14 @@ use std::{fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::header::{ActorRef, AiObjectType, Header};
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        types::{ActorRef, Header, ObjectType},
+    },
+};
 
 /// Task lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,7 +177,7 @@ impl Task {
         goal_type: Option<GoalType>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new(AiObjectType::Task, repo_id, created_by)?,
+            header: Header::new(ObjectType::Task, repo_id, created_by)?,
             title: title.into(),
             description: None,
             goal_type,
@@ -243,10 +250,37 @@ impl Task {
     }
 }
 
+impl fmt::Display for Task {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Task: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for Task {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::Task
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::object::header::ActorKind;
+    use crate::internal::object::types::ActorKind;
 
     #[test]
     fn test_task_creation() {
@@ -258,7 +292,7 @@ mod tests {
         let dep_id = Uuid::from_u128(0x00000000000000000000000000000001);
         task.add_dependency(dep_id);
 
-        assert_eq!(task.header().object_type(), &AiObjectType::Task);
+        assert_eq!(task.header().object_type(), &ObjectType::Task);
         assert_eq!(task.status(), &TaskStatus::Draft);
         assert_eq!(task.goal_type(), Some(&GoalType::Bugfix));
         assert_eq!(task.dependencies().len(), 1);

@@ -58,6 +58,42 @@ pub enum GitError {
     #[error("Not a valid git note object: {0}")]
     InvalidNoteObject(String),
 
+    /// Malformed context snapshot object.
+    #[error("Not a valid agent context snapshot object: {0}")]
+    InvalidContextSnapshotObject(String),
+
+    /// Malformed decision object.
+    #[error("Not a valid agent decision object: {0}")]
+    InvalidDecisionObject(String),
+
+    /// Malformed evidence object.
+    #[error("Not a valid agent evidence object: {0}")]
+    InvalidEvidenceObject(String),
+
+    /// Malformed patch set object.
+    #[error("Not a valid agent patch set object: {0}")]
+    InvalidPatchSetObject(String),
+
+    /// Malformed plan object.
+    #[error("Not a valid agent plan object: {0}")]
+    InvalidPlanObject(String),
+
+    /// Malformed provenance object.
+    #[error("Not a valid agent provenance object: {0}")]
+    InvalidProvenanceObject(String),
+
+    /// Malformed run object.
+    #[error("Not a valid agent run object: {0}")]
+    InvalidRunObject(String),
+
+    /// Malformed task object.
+    #[error("Not a valid agent task object: {0}")]
+    InvalidTaskObject(String),
+
+    /// Malformed tool invocation object.
+    #[error("Not a valid agent tool invocation object: {0}")]
+    InvalidToolInvocationObject(String),
+
     /// Malformed or unsupported index (.idx) file.
     #[error("The `{0}` is not a valid idx file.")]
     InvalidIdxFile(String),

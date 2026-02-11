@@ -13,12 +13,19 @@
 //! Each item in the snapshot has a content hash (`IntegrityHash`).
 //! This ensures that if the file changes on disk, we know the snapshot is stale or refers to an older version.
 
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{
-    header::{ActorRef, AiObjectType, Header},
-    integrity::IntegrityHash,
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        integrity::IntegrityHash,
+        types::{ActorRef, Header, ObjectType},
+    },
 };
 
 /// Selection strategy for context snapshots.
@@ -87,7 +94,7 @@ impl ContextSnapshot {
     ) -> Result<Self, String> {
         let base_commit_sha = base_commit_sha.as_ref().parse()?;
         Ok(Self {
-            header: Header::new(AiObjectType::ContextSnapshot, repo_id, created_by)?,
+            header: Header::new(ObjectType::ContextSnapshot, repo_id, created_by)?,
             base_commit_sha,
             selection_strategy,
             items: Vec::new(),
@@ -98,62 +105,31 @@ impl ContextSnapshot {
     pub fn header(&self) -> &Header {
         &self.header
     }
+}
 
-    pub fn base_commit_sha(&self) -> &IntegrityHash {
-        &self.base_commit_sha
-    }
-
-    pub fn selection_strategy(&self) -> &SelectionStrategy {
-        &self.selection_strategy
-    }
-
-    pub fn items(&self) -> &[ContextItem] {
-        &self.items
-    }
-
-    pub fn summary(&self) -> Option<&str> {
-        self.summary.as_deref()
-    }
-
-    pub fn add_item(&mut self, item: ContextItem) {
-        self.items.push(item);
-    }
-
-    pub fn set_summary(&mut self, summary: Option<String>) {
-        self.summary = summary;
+impl Display for ContextSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "ContextSnapshot: {}", self.header.object_id())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_hash_hex() -> String {
-        IntegrityHash::compute(b"ai-process-test").to_hex()
+impl ObjectTrait for ContextSnapshot {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 
-    #[test]
-    fn test_context_snapshot_fields() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
-        let actor = ActorRef::agent("test-agent").expect("actor");
-        let base_hash = test_hash_hex();
+    fn get_type(&self) -> ObjectType {
+        ObjectType::ContextSnapshot
+    }
 
-        let mut snapshot =
-            ContextSnapshot::new(repo_id, actor, &base_hash, SelectionStrategy::Explicit)
-                .expect("snapshot");
-        snapshot.set_summary(Some("core files".to_string()));
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
 
-        snapshot.add_item(
-            ContextItem::new(
-                ContextItemKind::File,
-                "src/lib.rs",
-                IntegrityHash::compute(b"context-item"),
-            )
-            .expect("context item"),
-        );
-
-        assert_eq!(snapshot.items().len(), 1);
-        assert_eq!(snapshot.items()[0].path, "src/lib.rs");
-        assert_eq!(snapshot.summary(), Some("core files"));
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 }

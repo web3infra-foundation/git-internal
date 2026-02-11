@@ -328,7 +328,7 @@ impl ObjectTrait for Tree {
     }
 
     fn get_size(&self) -> usize {
-        todo!()
+        self.to_data().map(|data| data.len()).unwrap_or(0)
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
