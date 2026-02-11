@@ -1,3 +1,16 @@
+//! AI Decision Definition
+//!
+//! `Decision` represents the final outcome of an agent's run. It signals whether the proposed
+//! changes should be applied, rejected, or if the agent needs human intervention.
+//!
+//! # Decision Types
+//!
+//! - **Commit**: Changes are good, apply them.
+//! - **Abandon**: Task is impossible or not worth doing.
+//! - **Retry**: Something went wrong, try again (with different params/prompt).
+//! - **Checkpoint**: Save progress but don't finish yet.
+//! - **Rollback**: Revert changes.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -12,10 +25,15 @@ use super::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionType {
+    /// Approve and commit changes.
     Commit,
+    /// Save intermediate progress.
     Checkpoint,
+    /// Give up on the task.
     Abandon,
+    /// Try again (re-run).
     Retry,
+    /// Revert applied changes.
     Rollback,
     #[serde(untagged)]
     Other(String),

@@ -1,3 +1,37 @@
+//! AI Task Definition
+//!
+//! A `Task` represents a unit of work to be performed by an AI agent.
+//! It serves as the root of the AI workflow, defining intent, constraints, and success criteria.
+//!
+//! # Lifecycle
+//!
+//! 1. **Draft**: Initial state. Task is being defined.
+//! 2. **Running**: An agent (via a `Run` object) has started working on it.
+//! 3. **Done**: Work is completed and verified.
+//! 4. **Failed**: Work could not be completed.
+//! 5. **Cancelled**: User aborted the task.
+//!
+//! # Relationships
+//!
+//! - **Parent**: None (Root object).
+//! - **Children**: `Run` (1-to-many). A task can have multiple runs (retries).
+//! - **Dependencies**: Can depend on other Tasks via `dependencies`.
+//!
+//! # Example
+//!
+//! ```rust
+//! use git_internal::internal::object::ai_task::{Task, GoalType};
+//! use git_internal::internal::object::ai_header::ActorRef;
+//! use uuid::Uuid;
+//!
+//! let repo_id = Uuid::new_v4();
+//! let actor = ActorRef::human("user").unwrap();
+//! let mut task = Task::new(repo_id, actor, "Refactor Login", Some(GoalType::Refactor)).unwrap();
+//!
+//! task.add_constraint("Must use JWT");
+//! task.add_acceptance_criterion("All tests pass");
+//! ```
+
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
@@ -9,10 +43,15 @@ use super::ai_header::{ActorRef, AiObjectType, Header};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    /// Initial state, definition in progress.
     Draft,
+    /// Agent is actively working on this task.
     Running,
+    /// Task completed successfully.
     Done,
+    /// Task failed to complete.
     Failed,
+    /// Task was cancelled by user.
     Cancelled,
 }
 
@@ -35,6 +74,8 @@ impl fmt::Display for TaskStatus {
 }
 
 /// Task goal category.
+///
+/// Helps agents understand the nature of the work.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalType {
@@ -96,10 +137,7 @@ impl FromStr for GoalType {
 /// Task object describing intent and constraints.
 /// Typically created first, then referenced by Run objects.
 ///
-/// # Lifecycle
-/// 1. Created with `TaskStatus::Draft`
-/// 2. Moves to `Running` when an agent starts working
-/// 3. Ends in `Done`, `Failed`, or `Cancelled`
+/// See module documentation for lifecycle details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     #[serde(flatten)]
@@ -118,6 +156,13 @@ pub struct Task {
 }
 
 impl Task {
+    /// Create a new Task.
+    ///
+    /// # Arguments
+    /// * `repo_id` - Repository UUID
+    /// * `created_by` - Actor creating the task
+    /// * `title` - Short summary of the task
+    /// * `goal_type` - Optional classification (Feature, Bugfix, etc.)
     pub fn new(
         repo_id: Uuid,
         created_by: ActorRef,

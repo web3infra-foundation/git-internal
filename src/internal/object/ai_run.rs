@@ -1,3 +1,21 @@
+//! AI Run Definition
+//!
+//! A `Run` represents a single execution instance of an AI agent attempting to perform a `Task`.
+//! It captures the execution context (environment, agent role) and tracks the progress.
+//!
+//! # Relationship to Task
+//!
+//! A `Task` can have multiple `Run`s. This happens when:
+//! - An agent fails and retries.
+//! - A user requests a different approach.
+//! - Multiple agents work on the same task in parallel (future).
+//!
+//! # Key Fields
+//!
+//! - `task_id`: Links back to the parent Task.
+//! - `base_commit_sha`: The Git commit hash where this run started.
+//! - `context_snapshot_id`: Links to the captured context (files, docs) used.
+
 use std::{collections::HashMap, fmt};
 
 use serde::{Deserialize, Serialize};
@@ -12,10 +30,15 @@ use super::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
+    /// Run created, agent not yet started.
     Created,
+    /// Agent is generating patches.
     Patching,
+    /// Agent is running verification tools.
     Validating,
+    /// Agent has finished successfully.
     Completed,
+    /// Agent encountered an unrecoverable error.
     Failed,
 }
 
@@ -91,6 +114,13 @@ pub struct Run {
 }
 
 impl Run {
+    /// Create a new Run.
+    ///
+    /// # Arguments
+    /// * `repo_id` - Repository UUID
+    /// * `created_by` - Actor (usually the Orchestrator)
+    /// * `task_id` - The Task this run belongs to
+    /// * `base_commit_sha` - The Git commit hash of the checkout
     pub fn new(
         repo_id: Uuid,
         created_by: ActorRef,

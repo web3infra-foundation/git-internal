@@ -1,3 +1,15 @@
+//! AI Provenance Definition
+//!
+//! `Provenance` captures metadata about *how* a run was executed, specifically focusing on
+//! the model (LLM) and provider configuration.
+//!
+//! # Usage
+//!
+//! This is critical for:
+//! - **Reproducibility**: Knowing which model version produced a result.
+//! - **Cost Accounting**: Tracking token usage per run.
+//! - **Optimization**: Comparing performance across different models or parameters.
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

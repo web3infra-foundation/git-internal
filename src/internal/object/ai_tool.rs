@@ -1,3 +1,21 @@
+//! AI Tool Invocation Definition
+//!
+//! A `ToolInvocation` records a specific action taken by an agent, such as reading a file,
+//! running a command, or querying a search engine.
+//!
+//! # Purpose
+//!
+//! - **Audit Trail**: Allows reconstructing exactly what the agent did.
+//! - **Cost Tracking**: Can be used to calculate token/resource usage.
+//! - **Debugging**: Helps understand why an agent made a particular decision.
+//!
+//! # Fields
+//!
+//! - `tool_name`: The identifier of the tool (e.g., "read_file").
+//! - `args`: JSON arguments passed to the tool.
+//! - `io_footprint`: Files read/written during the operation (for dependency tracking).
+//! - `status`: Whether the tool call succeeded or failed.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +27,9 @@ use super::ai_header::{ActorRef, AiObjectType, ArtifactRef, Header};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
+    /// Tool executed successfully.
     Ok,
+    /// Tool execution failed (returned error).
     Error,
 }
 

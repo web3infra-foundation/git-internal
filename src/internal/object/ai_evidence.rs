@@ -1,3 +1,14 @@
+//! AI Evidence Definition
+//!
+//! `Evidence` represents the result of a validation or quality assurance step, such as
+//! running tests, linting code, or building artifacts.
+//!
+//! # Purpose
+//!
+//! - **Validation**: Proves that a patchset works as expected.
+//! - **Feedback**: Provides error messages and logs to the agent so it can fix issues.
+//! - **Decision Support**: Used by the `Decision` object to justify committing or rejecting changes.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -9,8 +20,11 @@ use super::ai_header::{ActorRef, AiObjectType, ArtifactRef, Header};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceKind {
+    /// Unit, integration, or e2e tests.
     Test,
+    /// Static analysis results.
     Lint,
+    /// Compilation or build results.
     Build,
     #[serde(untagged)]
     Other(String),

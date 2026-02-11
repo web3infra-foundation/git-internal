@@ -1,3 +1,18 @@
+//! AI Context Snapshot Definition
+//!
+//! A `ContextSnapshot` represents the state of the codebase and external resources
+//! that an agent uses to perform its task.
+//!
+//! # Selection Strategy
+//!
+//! - **Explicit**: User manually selected files.
+//! - **Heuristic**: Agent automatically selected files based on relevance.
+//!
+//! # Integrity
+//!
+//! Each item in the snapshot has a content hash (`IntegrityHash`).
+//! This ensures that if the file changes on disk, we know the snapshot is stale or refers to an older version.
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -10,7 +25,9 @@ use super::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionStrategy {
+    /// Files explicitly chosen by the user.
     Explicit,
+    /// Files automatically selected by the agent/system.
     Heuristic,
 }
 
@@ -18,6 +35,7 @@ pub enum SelectionStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextItemKind {
+    /// A regular file in the repository.
     File,
 }
 

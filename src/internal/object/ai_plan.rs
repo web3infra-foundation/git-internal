@@ -1,3 +1,17 @@
+//! AI Plan Definition
+//!
+//! A `Plan` represents a sequence of steps that an agent intends to execute to complete a task.
+//!
+//! # Versioning
+//!
+//! Plans are versioned monotonically. As the agent learns more or encounters obstacles,
+//! it may update the plan. Each update creates a new `Plan` object with `plan_version = previous + 1`.
+//!
+//! # Steps
+//!
+//! Each step has an `intent` (what to do) and a `status` (pending/in_progress/done).
+//! Steps can also define expected inputs/outputs for better chain-of-thought tracking.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -9,10 +23,15 @@ use super::ai_header::{ActorRef, AiObjectType, Header};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanStatus {
+    /// Step is waiting to be executed.
     Pending,
+    /// Step is currently being executed.
     InProgress,
+    /// Step finished successfully.
     Completed,
+    /// Step failed.
     Failed,
+    /// Step was skipped (e.g. no longer necessary).
     Skipped,
 }
 
@@ -59,7 +78,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Create a new plan object
+    /// Create a new plan object (version 1)
     pub fn new(repo_id: Uuid, created_by: ActorRef, run_id: Uuid) -> Result<Self, String> {
         Ok(Self {
             header: Header::new(AiObjectType::Plan, repo_id, created_by)?,
@@ -69,6 +88,10 @@ impl Plan {
         })
     }
 
+    /// Create the next version of a plan.
+    ///
+    /// # Arguments
+    /// * `previous_version` - The version number of the plan being updated.
     pub fn new_next(
         repo_id: Uuid,
         created_by: ActorRef,
