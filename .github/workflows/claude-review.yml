@@ -70,7 +70,7 @@ jobs:
           # Use PR head SHA for pull_request_target to review the actual PR code
           # For comment events, this will default to the base branch (PR context is inferred by Claude action)
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       # Invoke Claude to perform an automated PR review with progress tracking
       - name: PR Review with Progress Tracking
