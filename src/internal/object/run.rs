@@ -21,9 +21,14 @@ use std::{collections::HashMap, fmt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{
-    header::{ActorRef, AiObjectType, Header},
-    integrity::IntegrityHash,
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        integrity::IntegrityHash,
+        types::{ActorRef, Header, ObjectType},
+    },
 };
 
 /// Run lifecycle status.
@@ -129,7 +134,7 @@ impl Run {
     ) -> Result<Self, String> {
         let base_commit_sha = base_commit_sha.as_ref().parse()?;
         Ok(Self {
-            header: Header::new(AiObjectType::Run, repo_id, created_by)?,
+            header: Header::new(ObjectType::Run, repo_id, created_by)?,
             task_id,
             orchestrator_version: "libra-builtin".to_string(),
             base_commit_sha,
@@ -200,6 +205,33 @@ impl Run {
 
     pub fn set_error(&mut self, error: Option<String>) {
         self.error = error;
+    }
+}
+
+impl fmt::Display for Run {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Run: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for Run {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::Run
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 }
 

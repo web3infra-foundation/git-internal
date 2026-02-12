@@ -5,7 +5,6 @@ pub mod commit;
 pub mod context;
 pub mod decision;
 pub mod evidence;
-pub mod header;
 pub mod integrity;
 pub mod note;
 pub mod patchset;
