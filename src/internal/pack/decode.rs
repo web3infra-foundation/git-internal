@@ -311,7 +311,7 @@ impl Pack {
         };
 
         // Check if the object type is valid
-        let t = ObjectType::from_u8(type_bits)?;
+        let t = ObjectType::from_pack_type_u8(type_bits)?;
 
         match t {
             ObjectType::Commit | ObjectType::Tree | ObjectType::Blob | ObjectType::Tag => {

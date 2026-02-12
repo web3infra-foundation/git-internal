@@ -105,6 +105,30 @@ impl ContextSnapshot {
     pub fn header(&self) -> &Header {
         &self.header
     }
+
+    pub fn base_commit_sha(&self) -> &IntegrityHash {
+        &self.base_commit_sha
+    }
+
+    pub fn selection_strategy(&self) -> &SelectionStrategy {
+        &self.selection_strategy
+    }
+
+    pub fn items(&self) -> &[ContextItem] {
+        &self.items
+    }
+
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
+
+    pub fn add_item(&mut self, item: ContextItem) {
+        self.items.push(item);
+    }
+
+    pub fn set_summary(&mut self, summary: Option<String>) {
+        self.summary = summary;
+    }
 }
 
 impl Display for ContextSnapshot {
@@ -131,5 +155,42 @@ impl ObjectTrait for ContextSnapshot {
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
         serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_context_snapshot_accessors_and_mutators() {
+        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
+        let actor = ActorRef::agent("coder").expect("actor");
+        let mut snapshot = ContextSnapshot::new(
+            repo_id,
+            actor,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            SelectionStrategy::Heuristic,
+        )
+        .expect("snapshot");
+
+        assert_eq!(snapshot.selection_strategy(), &SelectionStrategy::Heuristic);
+        assert!(snapshot.items().is_empty());
+        assert!(snapshot.summary().is_none());
+
+        let item = ContextItem::new(
+            ContextItemKind::File,
+            "src/main.rs",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .parse()
+                .expect("hash"),
+        )
+        .expect("item");
+        snapshot.add_item(item);
+        snapshot.set_summary(Some("selected by relevance".to_string()));
+
+        assert_eq!(snapshot.items().len(), 1);
+        assert_eq!(snapshot.summary(), Some("selected by relevance"));
+        assert_eq!(snapshot.base_commit_sha().to_hex().len(), 64);
     }
 }

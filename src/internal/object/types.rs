@@ -105,6 +105,43 @@ impl Display for ObjectType {
 
 /// Display trait for Git objects type
 impl ObjectType {
+    /// Convert object type to 3-bit pack header type id.
+    ///
+    /// Git pack headers only carry 3 type bits (values 0..=7). AI object
+    /// types are not representable in this field and must not be written
+    /// as regular base objects in a pack entry.
+    pub fn to_pack_type_u8(&self) -> Result<u8, GitError> {
+        match self {
+            ObjectType::Commit => Ok(1),
+            ObjectType::Tree => Ok(2),
+            ObjectType::Blob => Ok(3),
+            ObjectType::Tag => Ok(4),
+            ObjectType::OffsetZstdelta => Ok(5),
+            ObjectType::OffsetDelta => Ok(6),
+            ObjectType::HashDelta => Ok(7),
+            _ => Err(GitError::PackEncodeError(format!(
+                "object type `{}` cannot be encoded in pack header type bits",
+                self
+            ))),
+        }
+    }
+
+    /// Decode 3-bit pack header type id to object type.
+    pub fn from_pack_type_u8(number: u8) -> Result<ObjectType, GitError> {
+        match number {
+            1 => Ok(ObjectType::Commit),
+            2 => Ok(ObjectType::Tree),
+            3 => Ok(ObjectType::Blob),
+            4 => Ok(ObjectType::Tag),
+            5 => Ok(ObjectType::OffsetZstdelta),
+            6 => Ok(ObjectType::OffsetDelta),
+            7 => Ok(ObjectType::HashDelta),
+            _ => Err(GitError::InvalidObjectType(format!(
+                "Invalid pack object type number: {number}"
+            ))),
+        }
+    }
+
     pub fn to_bytes(&self) -> &[u8] {
         match self {
             ObjectType::Commit => COMMIT_OBJECT_TYPE,
