@@ -22,13 +22,13 @@ dashmap = "6.1.0"
 lru-mem = "0.3.0"
 byteorder = "1.5.0"
 futures-util = "0.3.31"
-bytes = "1.11.0"
+bytes = "1.11.1"
 memchr = "2.7.6"
 encoding_rs = "0.8.35"
 rayon = "1.11.0"
 ahash = "0.8.12"
 diffs = "0.5.1"
-libc = "0.2.180"
+libc = "0.2.181"
 async-trait = "0.1.89"
 futures = "0.3.31"
 tokio-stream = "0.1.18"
@@ -40,10 +40,10 @@ sha2 = "0.10.9"
 crc32fast = "1.4"
 zstd-sys = { version = "2.0.16+zstd.1.5.7", features = ["experimental"] }
 sea-orm = { version = "1.1.17", features = ["sqlx-sqlite"] }
-flate2 = { version = "1.1.8", features = ["zlib"] }
+flate2 = { version = "1.1.9", features = ["zlib"] }
 serde = { version = "1.0.228", features = ["derive"] }
 chrono = { version = "0.4.43", features = ["serde"] }
-uuid = { version = "1.19.0", features = ["serde", "v4", "v7"] }
+uuid = { version = "1.20.0", features = ["serde", "v4", "v7"] }
 tokio = { version = "1.49.0", features = ["fs", "io-util"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 axum = { version = "0.8.8", features = ["macros", "json"] }

@@ -10,10 +10,19 @@
 //! - **Cost Accounting**: Tracking token usage per run.
 //! - **Optimization**: Comparing performance across different models or parameters.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::header::{ActorRef, AiObjectType, Header};
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        types::{ActorRef, Header, ObjectType},
+    },
+};
 
 /// Provenance object for model/provider metadata.
 /// Captures model/provider settings and usage.
@@ -37,7 +46,7 @@ impl Provenance {
         model: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new(AiObjectType::Provenance, repo_id, created_by)?,
+            header: Header::new(ObjectType::Provenance, repo_id, created_by)?,
             run_id,
             provider: provider.into(),
             model: model.into(),
@@ -76,6 +85,33 @@ impl Provenance {
 
     pub fn set_token_usage(&mut self, token_usage: Option<serde_json::Value>) {
         self.token_usage = token_usage;
+    }
+}
+
+impl fmt::Display for Provenance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Provenance: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for Provenance {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::Provenance
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 }
 

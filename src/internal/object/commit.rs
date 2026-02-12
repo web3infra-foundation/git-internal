@@ -219,7 +219,7 @@ impl ObjectTrait for Commit {
     }
 
     fn get_size(&self) -> usize {
-        0
+        self.to_data().map(|data| data.len()).unwrap_or(0)
     }
 
     /// [Git-Internals-Git-Objects](https://git-scm.com/book/en/v2/Git-Internals-Git-Objects)

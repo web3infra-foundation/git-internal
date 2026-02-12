@@ -162,7 +162,7 @@ fn encode_one_object(entry: &Entry, offset: Option<usize>) -> Result<Vec<u8>, Gi
     // try encode as delta
     let obj_data = &entry.data;
     let obj_data_len = obj_data.len();
-    let obj_type_number = entry.obj_type.to_u8();
+    let obj_type_number = entry.obj_type.to_pack_type_u8()?;
 
     let mut encoded_data = Vec::new();
 
@@ -376,7 +376,12 @@ impl PackEncoder {
                 ObjectType::Tag => {
                     tags.push(entry);
                 }
-                _ => {}
+                _ => {
+                    return Err(GitError::PackEncodeError(format!(
+                        "object type `{}` is not supported by delta-window pack encoding",
+                        entry.inner.obj_type
+                    )));
+                }
             }
         }
 
@@ -629,21 +634,20 @@ impl PackEncoder {
             }
 
             // use `collect` will return result in order, refs: https://github.com/rayon-rs/rayon/issues/551#issuecomment-371657900
-            let batch_result: Vec<(Vec<u8>, IndexEntry)> =
+            let batch_result: Vec<Result<(Vec<u8>, IndexEntry), GitError>> =
                 time_it!("parallel encode: encode batch", {
                     batch_entries
                         .par_iter()
                         .map(|entry| {
-                            (
-                                encode_one_object(entry, None).unwrap(),
-                                IndexEntry::new(entry, 0),
-                            )
+                            encode_one_object(entry, None)
+                                .map(|encoded| (encoded, IndexEntry::new(entry, 0)))
                         })
                         .collect()
                 });
 
             time_it!("parallel encode: write batch", {
-                for mut obj_data in batch_result {
+                for obj_data in batch_result {
+                    let mut obj_data = obj_data?;
                     obj_data.1.offset = self.inner_offset as u64;
                     self.write_all_and_update(&obj_data.0).await;
                     idx_entries.push(obj_data.1);
@@ -745,7 +749,7 @@ mod tests {
     use crate::{
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::{
-            object::blob::Blob,
+            object::{blob::Blob, types::ObjectType},
             pack::{Pack, tests::init_logger, utils::read_offset_encoding},
         },
         time_it,
@@ -861,6 +865,54 @@ mod tests {
         let pack_with_delta = encode_once(4).await;
         assert!(pack_with_delta.len() <= pack_without_delta_size);
         check_format(&pack_with_delta);
+    }
+
+    #[tokio::test]
+    async fn test_pack_encoder_rejects_unencodable_ai_type_parallel() {
+        let (tx, _rx) = mpsc::channel(8);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(1);
+        let mut encoder = PackEncoder::new(1, 0, tx);
+
+        let mut entry: Entry = Blob::from_content("ai").into();
+        entry.obj_type = ObjectType::Task;
+        entry_tx
+            .send(MetaAttached {
+                inner: entry,
+                meta: EntryMeta::new(),
+            })
+            .await
+            .expect("send entry");
+        drop(entry_tx);
+
+        let err = encoder
+            .encode(entry_rx)
+            .await
+            .expect_err("must reject AI pack type");
+        assert!(matches!(err, GitError::PackEncodeError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_pack_encoder_rejects_unencodable_ai_type_delta_window() {
+        let (tx, _rx) = mpsc::channel(8);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(1);
+        let mut encoder = PackEncoder::new(1, 10, tx);
+
+        let mut entry: Entry = Blob::from_content("ai").into();
+        entry.obj_type = ObjectType::Task;
+        entry_tx
+            .send(MetaAttached {
+                inner: entry,
+                meta: EntryMeta::new(),
+            })
+            .await
+            .expect("send entry");
+        drop(entry_tx);
+
+        let err = encoder
+            .encode(entry_rx)
+            .await
+            .expect_err("must reject AI pack type");
+        assert!(matches!(err, GitError::PackEncodeError(_)));
     }
 
     async fn get_entries_for_test() -> Arc<Mutex<Vec<Entry>>> {

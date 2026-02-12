@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "uuid-vendor",
-    urls = ["https://static.crates.io/crates/uuid/uuid-1.19.0.crate"],
-    sha256 = "e2e054861b4bd027cd373e18e8d8d8e6548085000e41290d95ce0c373a654b4a",
+    urls = ["https://static.crates.io/crates/uuid/uuid-1.20.0.crate"],
+    sha256 = "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f",
     type = "tar.gz",
-    strip_prefix = "uuid-1.19.0",
+    strip_prefix = "uuid-1.20.0",
     out = "vendor",
 )
 

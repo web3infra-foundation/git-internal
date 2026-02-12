@@ -20,7 +20,6 @@ use threadpool::ThreadPool;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-use super::cache_object::CacheObjectInfo;
 use crate::{
     errors::GitError,
     hash::{ObjectHash, get_hash_kind, set_hash_kind},
@@ -30,7 +29,7 @@ use crate::{
         pack::{
             DEFAULT_TMP_DIR, Pack,
             cache::{_Cache, Caches},
-            cache_object::{CacheObject, MemSizeRecorder},
+            cache_object::{CacheObject, CacheObjectInfo, MemSizeRecorder},
             channel_reader::StreamBufReader,
             entry::Entry,
             utils,
@@ -291,7 +290,7 @@ impl Pack {
     pub fn decode_pack_object(
         pack: &mut (impl BufRead + Send),
         offset: &mut usize,
-    ) -> Result<CacheObject, GitError> {
+    ) -> Result<Option<CacheObject>, GitError> {
         let init_offset = *offset;
         let mut hasher = crc32fast::Hasher::new();
         let mut reader = CrcCountingReader {
@@ -312,19 +311,31 @@ impl Pack {
         };
 
         // Check if the object type is valid
-        let t = ObjectType::from_u8(type_bits)?;
+        let t = ObjectType::from_pack_type_u8(type_bits)?;
 
         match t {
             ObjectType::Commit | ObjectType::Tree | ObjectType::Blob | ObjectType::Tag => {
                 let (data, raw_size) = Pack::decompress_data(&mut reader, size)?;
                 *offset += raw_size;
                 let crc32 = hasher.finalize();
-                Ok(CacheObject::new_for_undeltified(
+                Ok(Some(CacheObject::new_for_undeltified(
                     t,
                     data,
                     init_offset,
                     crc32,
-                ))
+                )))
+            }
+            ObjectType::ContextSnapshot
+            | ObjectType::Decision
+            | ObjectType::Evidence
+            | ObjectType::PatchSet
+            | ObjectType::Plan
+            | ObjectType::Provenance
+            | ObjectType::Run
+            | ObjectType::Task
+            | ObjectType::ToolInvocation => {
+                // Wait for encode to implement corresponding compression
+                Ok(None)
             }
             ObjectType::OffsetDelta | ObjectType::OffsetZstdelta => {
                 let (delta_offset, bytes) = utils::read_offset_encoding(&mut reader).unwrap();
@@ -354,14 +365,14 @@ impl Pack {
                     _ => unreachable!(),
                 };
                 let crc32 = hasher.finalize();
-                Ok(CacheObject {
+                Ok(Some(CacheObject {
                     info: obj_info,
                     offset: init_offset,
                     crc32,
                     data_decompressed: data,
                     mem_recorder: None,
                     is_delta_in_pack: true,
-                })
+                }))
             }
             ObjectType::HashDelta => {
                 // Read hash bytes to get the reference object hash(size depends on hash kind,e.g.,20 for SHA1,32 for SHA256)
@@ -377,14 +388,14 @@ impl Pack {
 
                 let crc32 = hasher.finalize();
 
-                Ok(CacheObject {
+                Ok(Some(CacheObject {
                     info: CacheObjectInfo::HashDelta(ref_sha, final_size),
                     offset: init_offset,
                     crc32,
                     data_decompressed: data,
                     mem_recorder: None,
                     is_delta_in_pack: true,
-                })
+                }))
             }
         }
     }
@@ -454,10 +465,10 @@ impl Pack {
             {
                 thread::yield_now();
             }
-            let r: Result<CacheObject, GitError> =
+            let r: Result<Option<CacheObject>, GitError> =
                 Pack::decode_pack_object(&mut reader, &mut offset);
             match r {
-                Ok(mut obj) => {
+                Ok(Some(mut obj)) => {
                     obj.set_mem_recorder(self.cache_objs_mem.clone());
                     obj.record_mem_size();
 
@@ -506,6 +517,7 @@ impl Pack {
                         }
                     });
                 }
+                Ok(None) => {}
                 Err(e) => {
                     return Err(e);
                 }
@@ -540,7 +552,8 @@ impl Pack {
         // So that files != self.number
         assert_eq!(self.waitlist.map_offset.len(), 0);
         assert_eq!(self.waitlist.map_ref.len(), 0);
-        assert_eq!(self.number, caches.total_inserted());
+        // Because we may skip some objects (e.g. AI objects), we use >= instead of ==
+        assert!(self.number >= caches.total_inserted());
         tracing::info!(
             "The pack file has been decoded successfully, takes: [ {:?} ]",
             time.elapsed()

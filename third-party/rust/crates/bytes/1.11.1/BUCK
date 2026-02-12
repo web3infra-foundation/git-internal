@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "bytes-vendor",
-    urls = ["https://static.crates.io/crates/bytes/bytes-1.11.0.crate"],
-    sha256 = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3",
+    urls = ["https://static.crates.io/crates/bytes/bytes-1.11.1.crate"],
+    sha256 = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33",
     type = "tar.gz",
-    strip_prefix = "bytes-1.11.0",
+    strip_prefix = "bytes-1.11.1",
     out = "vendor",
 )
 

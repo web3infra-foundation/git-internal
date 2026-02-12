@@ -18,9 +18,14 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{
-    header::{ActorRef, AiObjectType, ArtifactRef, Header},
-    integrity::IntegrityHash,
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        integrity::IntegrityHash,
+        types::{ActorRef, ArtifactRef, Header, ObjectType},
+    },
 };
 
 /// Patch application status.
@@ -134,7 +139,7 @@ impl PatchSet {
     ) -> Result<Self, String> {
         let base_commit_sha = base_commit_sha.as_ref().parse()?;
         Ok(Self {
-            header: Header::new(AiObjectType::PatchSet, repo_id, created_by)?,
+            header: Header::new(ObjectType::PatchSet, repo_id, created_by)?,
             run_id,
             generation,
             base_commit_sha,
@@ -199,6 +204,33 @@ impl PatchSet {
     }
 }
 
+impl fmt::Display for PatchSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PatchSet: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for PatchSet {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::PatchSet
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,7 +248,7 @@ mod tests {
 
         let patchset = PatchSet::new(repo_id, actor, run_id, &base_hash, 1).expect("patchset");
 
-        assert_eq!(patchset.header().object_type(), &AiObjectType::PatchSet);
+        assert_eq!(patchset.header().object_type(), &ObjectType::PatchSet);
         assert_eq!(patchset.generation(), 1);
         assert_eq!(patchset.diff_format(), &DiffFormat::UnifiedDiff);
         assert_eq!(patchset.apply_status(), &ApplyStatus::Proposed);

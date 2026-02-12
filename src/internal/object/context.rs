@@ -13,12 +13,19 @@
 //! Each item in the snapshot has a content hash (`IntegrityHash`).
 //! This ensures that if the file changes on disk, we know the snapshot is stale or refers to an older version.
 
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{
-    header::{ActorRef, AiObjectType, Header},
-    integrity::IntegrityHash,
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        integrity::IntegrityHash,
+        types::{ActorRef, Header, ObjectType},
+    },
 };
 
 /// Selection strategy for context snapshots.
@@ -87,7 +94,7 @@ impl ContextSnapshot {
     ) -> Result<Self, String> {
         let base_commit_sha = base_commit_sha.as_ref().parse()?;
         Ok(Self {
-            header: Header::new(AiObjectType::ContextSnapshot, repo_id, created_by)?,
+            header: Header::new(ObjectType::ContextSnapshot, repo_id, created_by)?,
             base_commit_sha,
             selection_strategy,
             items: Vec::new(),
@@ -124,36 +131,66 @@ impl ContextSnapshot {
     }
 }
 
+impl Display for ContextSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "ContextSnapshot: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for ContextSnapshot {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::ContextSnapshot
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_hash_hex() -> String {
-        IntegrityHash::compute(b"ai-process-test").to_hex()
-    }
-
     #[test]
-    fn test_context_snapshot_fields() {
+    fn test_context_snapshot_accessors_and_mutators() {
         let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
-        let actor = ActorRef::agent("test-agent").expect("actor");
-        let base_hash = test_hash_hex();
+        let actor = ActorRef::agent("coder").expect("actor");
+        let mut snapshot = ContextSnapshot::new(
+            repo_id,
+            actor,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            SelectionStrategy::Heuristic,
+        )
+        .expect("snapshot");
 
-        let mut snapshot =
-            ContextSnapshot::new(repo_id, actor, &base_hash, SelectionStrategy::Explicit)
-                .expect("snapshot");
-        snapshot.set_summary(Some("core files".to_string()));
+        assert_eq!(snapshot.selection_strategy(), &SelectionStrategy::Heuristic);
+        assert!(snapshot.items().is_empty());
+        assert!(snapshot.summary().is_none());
 
-        snapshot.add_item(
-            ContextItem::new(
-                ContextItemKind::File,
-                "src/lib.rs",
-                IntegrityHash::compute(b"context-item"),
-            )
-            .expect("context item"),
-        );
+        let item = ContextItem::new(
+            ContextItemKind::File,
+            "src/main.rs",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .parse()
+                .expect("hash"),
+        )
+        .expect("item");
+        snapshot.add_item(item);
+        snapshot.set_summary(Some("selected by relevance".to_string()));
 
         assert_eq!(snapshot.items().len(), 1);
-        assert_eq!(snapshot.items()[0].path, "src/lib.rs");
-        assert_eq!(snapshot.summary(), Some("core files"));
+        assert_eq!(snapshot.summary(), Some("selected by relevance"));
+        assert_eq!(snapshot.base_commit_sha().to_hex().len(), 64);
     }
 }

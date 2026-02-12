@@ -21,7 +21,14 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::header::{ActorRef, AiObjectType, ArtifactRef, Header};
+use crate::{
+    errors::GitError,
+    hash::ObjectHash,
+    internal::object::{
+        ObjectTrait,
+        types::{ActorRef, ArtifactRef, Header, ObjectType},
+    },
+};
 
 /// Tool invocation status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -83,7 +90,7 @@ impl ToolInvocation {
         tool_name: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new(AiObjectType::ToolInvocation, repo_id, created_by)?,
+            header: Header::new(ObjectType::ToolInvocation, repo_id, created_by)?,
             run_id,
             tool_name: tool_name.into(),
             io_footprint: None,
@@ -144,6 +151,33 @@ impl ToolInvocation {
 
     pub fn add_artifact(&mut self, artifact: ArtifactRef) {
         self.artifacts.push(artifact);
+    }
+}
+
+impl fmt::Display for ToolInvocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ToolInvocation: {}", self.header.object_id())
+    }
+}
+
+impl ObjectTrait for ToolInvocation {
+    fn from_bytes(data: &[u8], _hash: ObjectHash) -> Result<Self, GitError>
+    where
+        Self: Sized,
+    {
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
+    }
+
+    fn get_type(&self) -> ObjectType {
+        ObjectType::ToolInvocation
+    }
+
+    fn get_size(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    fn to_data(&self) -> Result<Vec<u8>, GitError> {
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 }
 
