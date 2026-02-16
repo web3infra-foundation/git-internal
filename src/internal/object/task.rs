@@ -279,7 +279,13 @@ impl ObjectTrait for Task {
     }
 
     fn get_size(&self) -> usize {
-        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+        match serde_json::to_vec(self) {
+            Ok(v) => v.len(),
+            Err(e) => {
+                tracing::warn!("failed to compute Task size: {}", e);
+                0
+            }
+        }
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {

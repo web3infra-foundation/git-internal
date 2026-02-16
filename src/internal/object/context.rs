@@ -61,6 +61,9 @@ pub struct ContextItem {
     pub kind: ContextItemKind,
     pub path: String,
     pub content_id: IntegrityHash,
+    /// Optional preview/summary of the content (for example, first 200 characters).
+    /// Used for display without loading the full content via `content_id`.
+    /// Should be kept under 500 characters for performance.
     #[serde(default)]
     pub content_preview: Option<String>,
 }
@@ -162,7 +165,13 @@ impl ObjectTrait for ContextSnapshot {
     }
 
     fn get_size(&self) -> usize {
-        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+        match serde_json::to_vec(self) {
+            Ok(v) => v.len(),
+            Err(e) => {
+                tracing::warn!("failed to compute ContextSnapshot size: {}", e);
+                0
+            }
+        }
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {

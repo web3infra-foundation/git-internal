@@ -33,6 +33,20 @@ pub struct TokenUsage {
     pub cost_usd: Option<f64>,
 }
 
+impl TokenUsage {
+    pub fn is_consistent(&self) -> bool {
+        self.total_tokens == self.input_tokens + self.output_tokens
+    }
+
+    pub fn cost_per_token(&self) -> Option<f64> {
+        if self.total_tokens == 0 {
+            return None;
+        }
+        self.cost_usd
+            .map(|cost| cost / self.total_tokens as f64)
+    }
+}
+
 /// Provenance object for model/provider metadata.
 /// Captures model/provider settings and usage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,7 +167,13 @@ impl ObjectTrait for Provenance {
     }
 
     fn get_size(&self) -> usize {
-        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+        match serde_json::to_vec(self) {
+            Ok(v) => v.len(),
+            Err(e) => {
+                tracing::warn!("failed to compute Provenance size: {}", e);
+                0
+            }
+        }
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
