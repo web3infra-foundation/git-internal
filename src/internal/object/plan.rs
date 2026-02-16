@@ -120,7 +120,7 @@ impl Plan {
             header: Header::new(ObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: next_version,
-            previous_plan_id: None,
+            previous_plan_id: Some(self.header.object_id()),
             steps: Vec::new(),
         })
     }
@@ -216,7 +216,7 @@ mod tests {
         assert!(plan_v2.plan_version() > plan_v1.plan_version());
 
         assert!(plan_v1.previous_plan_id().is_none());
-        assert!(plan_v2.previous_plan_id().is_none());
-        assert!(plan_v3.previous_plan_id().is_none());
+        assert_eq!(plan_v2.previous_plan_id(), Some(plan_v1.header().object_id()));
+        assert_eq!(plan_v3.previous_plan_id(), Some(plan_v2.header().object_id()));
     }
 }

@@ -61,6 +61,9 @@ pub struct ContextItem {
     pub kind: ContextItemKind,
     pub path: String,
     pub content_id: IntegrityHash,
+    /// Optional preview/summary of the content (for example, first 200 characters).
+    /// Used for display without loading the full content via `content_id`.
+    /// Should be kept under 500 characters for performance.
     #[serde(default)]
     pub content_preview: Option<String>,
 }
