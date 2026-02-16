@@ -124,6 +124,8 @@ pub struct PatchSet {
     diff_artifact: Option<ArtifactRef>,
     #[serde(default)]
     touched_files: Vec<TouchedFile>,
+    #[serde(default)]
+    supersedes_patchset_ids: Vec<Uuid>,
     rationale: Option<String>,
     apply_status: ApplyStatus,
 }
@@ -146,6 +148,7 @@ impl PatchSet {
             diff_format: DiffFormat::UnifiedDiff,
             diff_artifact: None,
             touched_files: Vec::new(),
+            supersedes_patchset_ids: Vec::new(),
             rationale: None,
             apply_status: ApplyStatus::Proposed,
         })
@@ -179,6 +182,10 @@ impl PatchSet {
         &self.touched_files
     }
 
+    pub fn supersedes_patchset_ids(&self) -> &[Uuid] {
+        &self.supersedes_patchset_ids
+    }
+
     pub fn rationale(&self) -> Option<&str> {
         self.rationale.as_deref()
     }
@@ -201,6 +208,14 @@ impl PatchSet {
 
     pub fn set_apply_status(&mut self, apply_status: ApplyStatus) {
         self.apply_status = apply_status;
+    }
+
+    pub fn add_supersedes_patchset_id(&mut self, patchset_id: Uuid) {
+        self.supersedes_patchset_ids.push(patchset_id);
+    }
+
+    pub fn set_supersedes_patchset_ids(&mut self, patchset_ids: Vec<Uuid>) {
+        self.supersedes_patchset_ids = patchset_ids;
     }
 }
 
@@ -253,5 +268,6 @@ mod tests {
         assert_eq!(patchset.diff_format(), &DiffFormat::UnifiedDiff);
         assert_eq!(patchset.apply_status(), &ApplyStatus::Proposed);
         assert!(patchset.touched_files().is_empty());
+        assert!(patchset.supersedes_patchset_ids().is_empty());
     }
 }

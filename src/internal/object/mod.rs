@@ -6,6 +6,7 @@ pub mod context;
 pub mod decision;
 pub mod evidence;
 pub mod integrity;
+pub mod intent;
 pub mod note;
 pub mod patchset;
 pub mod plan;
@@ -58,4 +59,9 @@ pub trait ObjectTrait: Send + Sync + Display {
     fn get_size(&self) -> usize;
 
     fn to_data(&self) -> Result<Vec<u8>, GitError>;
+
+    fn object_hash(&self) -> Result<ObjectHash, GitError> {
+        let data = self.to_data()?;
+        Ok(ObjectHash::from_type_and_data(self.get_type(), &data))
+    }
 }

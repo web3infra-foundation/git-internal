@@ -157,6 +157,7 @@ pub struct Task {
     #[serde(default)]
     acceptance_criteria: Vec<String>,
     requested_by: Option<ActorRef>,
+    intent_id: Option<Uuid>,
     #[serde(default)]
     dependencies: Vec<Uuid>,
     status: TaskStatus,
@@ -184,6 +185,7 @@ impl Task {
             constraints: Vec::new(),
             acceptance_criteria: Vec::new(),
             requested_by: None,
+            intent_id: None,
             dependencies: Vec::new(),
             status: TaskStatus::Draft,
         })
@@ -217,6 +219,10 @@ impl Task {
         self.requested_by.as_ref()
     }
 
+    pub fn intent_id(&self) -> Option<Uuid> {
+        self.intent_id
+    }
+
     pub fn dependencies(&self) -> &[Uuid] {
         &self.dependencies
     }
@@ -239,6 +245,10 @@ impl Task {
 
     pub fn set_requested_by(&mut self, requested_by: Option<ActorRef>) {
         self.requested_by = requested_by;
+    }
+
+    pub fn set_intent_id(&mut self, intent_id: Option<Uuid>) {
+        self.intent_id = intent_id;
     }
 
     pub fn add_dependency(&mut self, task_id: Uuid) {
@@ -297,6 +307,7 @@ mod tests {
         assert_eq!(task.goal_type(), Some(&GoalType::Bugfix));
         assert_eq!(task.dependencies().len(), 1);
         assert_eq!(task.dependencies()[0], dep_id);
+        assert!(task.intent_id().is_none());
     }
 
     #[test]

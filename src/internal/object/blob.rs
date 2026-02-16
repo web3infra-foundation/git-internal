@@ -105,7 +105,10 @@ impl Blob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::{HashKind, set_hash_kind_for_test};
+    use crate::{
+        hash::{HashKind, set_hash_kind_for_test},
+        internal::object::ObjectTrait,
+    };
 
     /// Test creating a Blob from content string
     #[test]
@@ -117,6 +120,8 @@ mod tests {
             blob.id.to_string(),
             "5dd01c177f5d7d1be5346a5bc18a569a7410c2ef"
         );
+        let hash_from_trait = blob.object_hash().unwrap();
+        assert_eq!(hash_from_trait.to_string(), blob.id.to_string());
     }
 
     /// Test creating a Blob from content string using SHA-256 hash algorithm.

@@ -81,6 +81,8 @@ pub struct Plan {
     /// Plan version starts at 1 and must increase by 1 for each update.
     plan_version: u32,
     #[serde(default)]
+    previous_plan_id: Option<Uuid>,
+    #[serde(default)]
     steps: Vec<PlanStep>,
 }
 
@@ -91,6 +93,7 @@ impl Plan {
             header: Header::new(ObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: 1,
+            previous_plan_id: None,
             steps: Vec::new(),
         })
     }
@@ -112,6 +115,7 @@ impl Plan {
             header: Header::new(ObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: next_version,
+            previous_plan_id: None,
             steps: Vec::new(),
         })
     }
@@ -128,12 +132,20 @@ impl Plan {
         self.plan_version
     }
 
+    pub fn previous_plan_id(&self) -> Option<Uuid> {
+        self.previous_plan_id
+    }
+
     pub fn steps(&self) -> &[PlanStep] {
         &self.steps
     }
 
     pub fn add_step(&mut self, step: PlanStep) {
         self.steps.push(step);
+    }
+
+    pub fn set_previous_plan_id(&mut self, previous_plan_id: Option<Uuid>) {
+        self.previous_plan_id = previous_plan_id;
     }
 }
 
@@ -189,5 +201,9 @@ mod tests {
 
         assert!(plan_v3.plan_version() > plan_v2.plan_version());
         assert!(plan_v2.plan_version() > plan_v1.plan_version());
+
+        assert!(plan_v1.previous_plan_id().is_none());
+        assert!(plan_v2.previous_plan_id().is_none());
+        assert!(plan_v3.previous_plan_id().is_none());
     }
 }

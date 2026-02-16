@@ -333,6 +333,7 @@ impl Pack {
             | ObjectType::Provenance
             | ObjectType::Run
             | ObjectType::Task
+            | ObjectType::Intent
             | ObjectType::ToolInvocation => {
                 // Wait for encode to implement corresponding compression
                 Ok(None)

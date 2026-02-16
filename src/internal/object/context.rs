@@ -44,6 +44,15 @@ pub enum SelectionStrategy {
 pub enum ContextItemKind {
     /// A regular file in the repository.
     File,
+    /// A URL (web page, API endpoint, etc.).
+    Url,
+    /// A free-form text snippet (e.g. doc fragment, note).
+    Snippet,
+    /// Command or terminal output.
+    Command,
+    /// Image or other binary visual content.
+    Image,
+    Other(String),
 }
 
 /// Context item describing a single input.
@@ -52,6 +61,8 @@ pub struct ContextItem {
     pub kind: ContextItemKind,
     pub path: String,
     pub content_id: IntegrityHash,
+    #[serde(default)]
+    pub content_preview: Option<String>,
 }
 
 impl ContextItem {
@@ -68,6 +79,7 @@ impl ContextItem {
             kind,
             path,
             content_id,
+            content_preview: None,
         })
     }
 }
