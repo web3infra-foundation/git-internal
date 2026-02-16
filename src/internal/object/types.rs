@@ -577,6 +577,9 @@ fn default_updated_at() -> DateTime<Utc> {
 ///     // specific fields...
 /// }
 /// ```
+fn default_updated_at() -> DateTime<Utc> {
+    Utc::now()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Header {
@@ -724,13 +727,16 @@ impl Header {
     /// This is typically called just before storing the object to ensure `checksum` matches content.
     pub fn seal<T: Serialize>(&mut self, object: &T) -> Result<(), serde_json::Error> {
         let previous_checksum = self.checksum.take();
+        let previous_updated_at = self.updated_at;
         match compute_integrity_hash(object) {
             Ok(checksum) => {
                 self.checksum = Some(checksum);
+                self.updated_at = Utc::now();
                 Ok(())
             }
             Err(err) => {
                 self.checksum = previous_checksum;
+                self.updated_at = previous_updated_at;
                 Err(err)
             }
         }

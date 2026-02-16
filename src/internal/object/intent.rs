@@ -128,7 +128,7 @@ impl ObjectTrait for Intent {
     where
         Self: Sized,
     {
-        serde_json::from_slice(data).map_err(|e| GitError::InvalidIntentObject(e.to_string()))
+        serde_json::from_slice(data).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 
     fn get_type(&self) -> ObjectType {
@@ -136,17 +136,11 @@ impl ObjectTrait for Intent {
     }
 
     fn get_size(&self) -> usize {
-        match serde_json::to_vec(self) {
-            Ok(v) => v.len(),
-            Err(e) => {
-                tracing::warn!("failed to compute Intent size: {}", e);
-                0
-            }
-        }
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
-        serde_json::to_vec(self).map_err(|e| GitError::InvalidIntentObject(e.to_string()))
+        serde_json::to_vec(self).map_err(|e| GitError::InvalidObjectInfo(e.to_string()))
     }
 }
 

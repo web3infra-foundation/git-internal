@@ -60,10 +60,6 @@ pub trait ObjectTrait: Send + Sync + Display {
 
     fn to_data(&self) -> Result<Vec<u8>, GitError>;
 
-    /// Computes the object hash from serialized data.
-    ///
-    /// Default implementation serializes the object and computes the hash from that data.
-    /// Override only if you need custom hash computation or caching.
     fn object_hash(&self) -> Result<ObjectHash, GitError> {
         let data = self.to_data()?;
         Ok(ObjectHash::from_type_and_data(self.get_type(), &data))
