@@ -62,6 +62,7 @@ pub enum ObjectType {
     Provenance,
     Run,
     Task,
+    Intent,
     ToolInvocation,
 }
 
@@ -77,6 +78,7 @@ const PLAN_OBJECT_TYPE: &[u8] = b"plan";
 const PROVENANCE_OBJECT_TYPE: &[u8] = b"provenance";
 const RUN_OBJECT_TYPE: &[u8] = b"run";
 const TASK_OBJECT_TYPE: &[u8] = b"task";
+const INTENT_OBJECT_TYPE: &[u8] = b"intent";
 const TOOL_INVOCATION_OBJECT_TYPE: &[u8] = b"invocation";
 
 /// Display trait for Git objects type
@@ -98,6 +100,7 @@ impl Display for ObjectType {
             ObjectType::Provenance => write!(f, "provenance"),
             ObjectType::Run => write!(f, "run"),
             ObjectType::Task => write!(f, "task"),
+            ObjectType::Intent => write!(f, "intent"),
             ObjectType::ToolInvocation => write!(f, "invocation"),
         }
     }
@@ -156,6 +159,7 @@ impl ObjectType {
             ObjectType::Provenance => PROVENANCE_OBJECT_TYPE,
             ObjectType::Run => RUN_OBJECT_TYPE,
             ObjectType::Task => TASK_OBJECT_TYPE,
+            ObjectType::Intent => INTENT_OBJECT_TYPE,
             ObjectType::ToolInvocation => TOOL_INVOCATION_OBJECT_TYPE,
             _ => panic!("can put compute the delta hash value"),
         }
@@ -176,6 +180,7 @@ impl ObjectType {
             "provenance" => Ok(ObjectType::Provenance),
             "run" => Ok(ObjectType::Run),
             "task" => Ok(ObjectType::Task),
+            "intent" => Ok(ObjectType::Intent),
             "invocation" => Ok(ObjectType::ToolInvocation),
             _ => Err(GitError::InvalidObjectType(s.to_string())),
         }
@@ -198,6 +203,7 @@ impl ObjectType {
             ]), // provenance
             ObjectType::Run => Ok(vec![0x72, 0x75, 0x6e]),        // run
             ObjectType::Task => Ok(vec![0x74, 0x61, 0x73, 0x6b]), // task
+            ObjectType::Intent => Ok(vec![0x69, 0x6e, 0x74, 0x65, 0x6e, 0x74]), // intent
             ObjectType::ToolInvocation => Ok(vec![
                 0x69, 0x6e, 0x76, 0x6f, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e,
             ]), // invocation
@@ -223,7 +229,8 @@ impl ObjectType {
             ObjectType::Provenance => 13,
             ObjectType::Run => 14,
             ObjectType::Task => 15,
-            ObjectType::ToolInvocation => 16,
+            ObjectType::Intent => 16,
+            ObjectType::ToolInvocation => 17,
         }
     }
 
@@ -245,7 +252,8 @@ impl ObjectType {
             13 => Ok(ObjectType::Provenance),
             14 => Ok(ObjectType::Run),
             15 => Ok(ObjectType::Task),
-            16 => Ok(ObjectType::ToolInvocation),
+            16 => Ok(ObjectType::Intent),
+            17 => Ok(ObjectType::ToolInvocation),
             _ => Err(GitError::InvalidObjectType(format!(
                 "Invalid object type number: {number}"
             ))),
@@ -269,8 +277,27 @@ impl ObjectType {
             ObjectType::Provenance => true,
             ObjectType::Run => true,
             ObjectType::Task => true,
+            ObjectType::Intent => true,
             ObjectType::ToolInvocation => true,
         }
+    }
+
+    /// Returns `true` if this type is an AI extension object (not representable
+    /// in the 3-bit Git pack header).
+    pub fn is_ai_object(&self) -> bool {
+        matches!(
+            self,
+            ObjectType::ContextSnapshot
+                | ObjectType::Decision
+                | ObjectType::Evidence
+                | ObjectType::PatchSet
+                | ObjectType::Plan
+                | ObjectType::Provenance
+                | ObjectType::Run
+                | ObjectType::Task
+                | ObjectType::Intent
+                | ObjectType::ToolInvocation
+        )
     }
 }
 
@@ -530,6 +557,10 @@ impl ArtifactRef {
     }
 }
 
+fn default_updated_at() -> DateTime<Utc> {
+    Utc::now()
+}
+
 /// Header shared by all AI Process Objects.
 ///
 /// Contains standard metadata like ID, type, creator, and timestamps.
@@ -546,6 +577,7 @@ impl ArtifactRef {
 ///     // specific fields...
 /// }
 /// ```
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Header {
     /// Global unique ID (UUID v7)
@@ -558,6 +590,8 @@ pub struct Header {
     repo_id: Uuid,
     /// Creation time
     created_at: DateTime<Utc>,
+    #[serde(default = "default_updated_at")]
+    updated_at: DateTime<Utc>,
     /// Creator
     created_by: ActorRef,
     /// Visibility (fixed to private for Libra)
@@ -586,12 +620,14 @@ impl Header {
         repo_id: Uuid,
         created_by: ActorRef,
     ) -> Result<Self, String> {
+        let now = Utc::now();
         Ok(Self {
             object_id: Uuid::now_v7(),
             object_type,
             schema_version: 1,
             repo_id,
-            created_at: Utc::now(),
+            created_at: now,
+            updated_at: now,
             created_by,
             visibility: Visibility::Private,
             tags: HashMap::new(),
@@ -618,6 +654,10 @@ impl Header {
 
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
+    }
+
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
     }
 
     pub fn created_by(&self) -> &ActorRef {
@@ -665,6 +705,10 @@ impl Header {
         self.created_at = created_at;
     }
 
+    pub fn set_updated_at(&mut self, updated_at: DateTime<Utc>) {
+        self.updated_at = updated_at;
+    }
+
     pub fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
     }
@@ -679,14 +723,14 @@ impl Header {
     ///
     /// This is typically called just before storing the object to ensure `checksum` matches content.
     pub fn seal<T: Serialize>(&mut self, object: &T) -> Result<(), serde_json::Error> {
-        let previous = self.checksum.take();
+        let previous_checksum = self.checksum.take();
         match compute_integrity_hash(object) {
             Ok(checksum) => {
                 self.checksum = Some(checksum);
                 Ok(())
             }
             Err(err) => {
-                self.checksum = previous;
+                self.checksum = previous_checksum;
                 Err(err)
             }
         }
@@ -884,6 +928,21 @@ mod tests {
         let expected =
             crate::internal::object::integrity::compute_integrity_hash(&content).expect("checksum");
         assert_eq!(header.checksum().expect("checksum"), &expected);
+    }
+
+    #[test]
+    fn test_header_updated_at_on_seal() {
+        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
+        let actor = ActorRef::human("jackie").expect("actor");
+        let mut header = Header::new(ObjectType::Task, repo_id, actor).expect("header");
+
+        let before = header.updated_at();
+        let content = serde_json::json!({"key": "value"});
+
+        header.seal(&content).expect("seal");
+
+        let after = header.updated_at();
+        assert!(after >= before);
     }
 
     #[test]
