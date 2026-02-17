@@ -1,6 +1,6 @@
 [package]
 name = "git-internal"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 license = "MIT"
 description = "Git-Internal is a high-performance Rust library for encoding and decoding Git internal objects and Pack files."

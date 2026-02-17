@@ -709,7 +709,6 @@ impl Header {
         match compute_integrity_hash(object) {
             Ok(checksum) => {
                 self.checksum = Some(checksum);
-                self.updated_at = Utc::now();
                 Ok(())
             }
             Err(err) => {
