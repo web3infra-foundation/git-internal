@@ -281,6 +281,24 @@ impl ObjectType {
             ObjectType::ToolInvocation => true,
         }
     }
+
+    /// Returns `true` if this type is an AI extension object (not representable
+    /// in the 3-bit Git pack header).
+    pub fn is_ai_object(&self) -> bool {
+        matches!(
+            self,
+            ObjectType::ContextSnapshot
+                | ObjectType::Decision
+                | ObjectType::Evidence
+                | ObjectType::PatchSet
+                | ObjectType::Plan
+                | ObjectType::Provenance
+                | ObjectType::Run
+                | ObjectType::Task
+                | ObjectType::Intent
+                | ObjectType::ToolInvocation
+        )
+    }
 }
 
 /// Actor kind enum

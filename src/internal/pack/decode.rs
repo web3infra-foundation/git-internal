@@ -325,19 +325,6 @@ impl Pack {
                     crc32,
                 )))
             }
-            ObjectType::ContextSnapshot
-            | ObjectType::Decision
-            | ObjectType::Evidence
-            | ObjectType::PatchSet
-            | ObjectType::Plan
-            | ObjectType::Provenance
-            | ObjectType::Run
-            | ObjectType::Task
-            | ObjectType::Intent
-            | ObjectType::ToolInvocation => {
-                // Wait for encode to implement corresponding compression
-                Ok(None)
-            }
             ObjectType::OffsetDelta | ObjectType::OffsetZstdelta => {
                 let (delta_offset, bytes) = utils::read_offset_encoding(&mut reader).unwrap();
                 *offset += bytes;
@@ -398,6 +385,12 @@ impl Pack {
                     is_delta_in_pack: true,
                 }))
             }
+            // AI object types (ContextSnapshot, Decision, etc.) use u8 IDs >= 8
+            // and cannot appear in a pack file (3-bit type field only holds 1-7).
+            // `from_pack_type_u8` already rejects them, but guard explicitly here.
+            other => Err(GitError::InvalidPackFile(format!(
+                "AI object type `{other}` cannot appear in a pack file"
+            ))),
         }
     }
 
