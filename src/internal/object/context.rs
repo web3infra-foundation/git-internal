@@ -44,6 +44,15 @@ pub enum SelectionStrategy {
 pub enum ContextItemKind {
     /// A regular file in the repository.
     File,
+    /// A URL (web page, API endpoint, etc.).
+    Url,
+    /// A free-form text snippet (e.g. doc fragment, note).
+    Snippet,
+    /// Command or terminal output.
+    Command,
+    /// Image or other binary visual content.
+    Image,
+    Other(String),
 }
 
 /// Context item describing a single input.
@@ -52,6 +61,11 @@ pub struct ContextItem {
     pub kind: ContextItemKind,
     pub path: String,
     pub content_id: IntegrityHash,
+    /// Optional preview/summary of the content (for example, first 200 characters).
+    /// Used for display without loading the full content via `content_id`.
+    /// Should be kept under 500 characters for performance.
+    #[serde(default)]
+    pub content_preview: Option<String>,
 }
 
 impl ContextItem {
@@ -68,6 +82,7 @@ impl ContextItem {
             kind,
             path,
             content_id,
+            content_preview: None,
         })
     }
 }
@@ -150,7 +165,13 @@ impl ObjectTrait for ContextSnapshot {
     }
 
     fn get_size(&self) -> usize {
-        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+        match serde_json::to_vec(self) {
+            Ok(v) => v.len(),
+            Err(e) => {
+                tracing::warn!("failed to compute ContextSnapshot size: {}", e);
+                0
+            }
+        }
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {

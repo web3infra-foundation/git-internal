@@ -81,6 +81,8 @@ pub struct Plan {
     /// Plan version starts at 1 and must increase by 1 for each update.
     plan_version: u32,
     #[serde(default)]
+    previous_plan_id: Option<Uuid>,
+    #[serde(default)]
     steps: Vec<PlanStep>,
 }
 
@@ -91,27 +93,34 @@ impl Plan {
             header: Header::new(ObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: 1,
+            previous_plan_id: None,
             steps: Vec::new(),
         })
     }
 
     /// Create the next version of a plan.
     ///
+    /// Links the new plan back to the previous one via `previous_plan_id`.
+    ///
     /// # Arguments
-    /// * `previous_version` - The version number of the plan being updated.
+    /// * `repo_id` - Repository the plan belongs to.
+    /// * `created_by` - Actor creating the new version.
+    /// * `run_id` - Run this plan is associated with.
     pub fn new_next(
+        &self,
         repo_id: Uuid,
         created_by: ActorRef,
         run_id: Uuid,
-        previous_version: u32,
     ) -> Result<Self, String> {
-        let next_version = previous_version
+        let next_version = self
+            .plan_version
             .checked_add(1)
             .ok_or_else(|| "plan_version overflow".to_string())?;
         Ok(Self {
             header: Header::new(ObjectType::Plan, repo_id, created_by)?,
             run_id,
             plan_version: next_version,
+            previous_plan_id: Some(self.header.object_id()),
             steps: Vec::new(),
         })
     }
@@ -128,12 +137,20 @@ impl Plan {
         self.plan_version
     }
 
+    pub fn previous_plan_id(&self) -> Option<Uuid> {
+        self.previous_plan_id
+    }
+
     pub fn steps(&self) -> &[PlanStep] {
         &self.steps
     }
 
     pub fn add_step(&mut self, step: PlanStep) {
         self.steps.push(step);
+    }
+
+    pub fn set_previous_plan_id(&mut self, previous_plan_id: Option<Uuid>) {
+        self.previous_plan_id = previous_plan_id;
     }
 }
 
@@ -156,7 +173,13 @@ impl ObjectTrait for Plan {
     }
 
     fn get_size(&self) -> usize {
-        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+        match serde_json::to_vec(self) {
+            Ok(v) => v.len(),
+            Err(e) => {
+                tracing::warn!("failed to compute Plan size: {}", e);
+                0
+            }
+        }
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
@@ -175,10 +198,12 @@ mod tests {
         let run_id = Uuid::from_u128(0x1);
 
         let plan_v1 = Plan::new(repo_id, actor.clone(), run_id).expect("plan");
-        let plan_v2 =
-            Plan::new_next(repo_id, actor.clone(), run_id, plan_v1.plan_version()).expect("plan");
-        let plan_v3 =
-            Plan::new_next(repo_id, actor.clone(), run_id, plan_v2.plan_version()).expect("plan");
+        let plan_v2 = plan_v1
+            .new_next(repo_id, actor.clone(), run_id)
+            .expect("plan");
+        let plan_v3 = plan_v2
+            .new_next(repo_id, actor.clone(), run_id)
+            .expect("plan");
 
         let mut plans = [plan_v2.clone(), plan_v1.clone(), plan_v3.clone()];
         plans.sort_by_key(|plan| plan.plan_version());
@@ -189,5 +214,15 @@ mod tests {
 
         assert!(plan_v3.plan_version() > plan_v2.plan_version());
         assert!(plan_v2.plan_version() > plan_v1.plan_version());
+
+        assert!(plan_v1.previous_plan_id().is_none());
+        assert_eq!(
+            plan_v2.previous_plan_id(),
+            Some(plan_v1.header().object_id())
+        );
+        assert_eq!(
+            plan_v3.previous_plan_id(),
+            Some(plan_v2.header().object_id())
+        );
     }
 }

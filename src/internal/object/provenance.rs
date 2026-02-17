@@ -24,6 +24,28 @@ use crate::{
     },
 };
 
+/// Normalized token usage across providers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub cost_usd: Option<f64>,
+}
+
+impl TokenUsage {
+    pub fn is_consistent(&self) -> bool {
+        self.total_tokens == self.input_tokens + self.output_tokens
+    }
+
+    pub fn cost_per_token(&self) -> Option<f64> {
+        if self.total_tokens == 0 {
+            return None;
+        }
+        self.cost_usd.map(|cost| cost / self.total_tokens as f64)
+    }
+}
+
 /// Provenance object for model/provider metadata.
 /// Captures model/provider settings and usage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,8 +55,14 @@ pub struct Provenance {
     run_id: Uuid,
     provider: String,
     model: String,
+    #[serde(default)]
     parameters: Option<serde_json::Value>,
-    token_usage: Option<serde_json::Value>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    max_tokens: Option<u64>,
+    #[serde(default)]
+    token_usage: Option<TokenUsage>,
 }
 
 impl Provenance {
@@ -51,6 +79,8 @@ impl Provenance {
             provider: provider.into(),
             model: model.into(),
             parameters: None,
+            temperature: None,
+            max_tokens: None,
             token_usage: None,
         })
     }
@@ -71,11 +101,32 @@ impl Provenance {
         &self.model
     }
 
+    /// Provider-specific raw parameters payload.
     pub fn parameters(&self) -> Option<&serde_json::Value> {
         self.parameters.as_ref()
     }
 
-    pub fn token_usage(&self) -> Option<&serde_json::Value> {
+    /// Normalized temperature if available.
+    pub fn temperature(&self) -> Option<f64> {
+        self.temperature.or_else(|| {
+            self.parameters
+                .as_ref()
+                .and_then(|p| p.get("temperature"))
+                .and_then(|v| v.as_f64())
+        })
+    }
+
+    /// Normalized max_tokens if available.
+    pub fn max_tokens(&self) -> Option<u64> {
+        self.max_tokens.or_else(|| {
+            self.parameters
+                .as_ref()
+                .and_then(|p| p.get("max_tokens"))
+                .and_then(|v| v.as_u64())
+        })
+    }
+
+    pub fn token_usage(&self) -> Option<&TokenUsage> {
         self.token_usage.as_ref()
     }
 
@@ -83,7 +134,15 @@ impl Provenance {
         self.parameters = parameters;
     }
 
-    pub fn set_token_usage(&mut self, token_usage: Option<serde_json::Value>) {
+    pub fn set_temperature(&mut self, temperature: Option<f64>) {
+        self.temperature = temperature;
+    }
+
+    pub fn set_max_tokens(&mut self, max_tokens: Option<u64>) {
+        self.max_tokens = max_tokens;
+    }
+
+    pub fn set_token_usage(&mut self, token_usage: Option<TokenUsage>) {
         self.token_usage = token_usage;
     }
 }
@@ -107,7 +166,13 @@ impl ObjectTrait for Provenance {
     }
 
     fn get_size(&self) -> usize {
-        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+        match serde_json::to_vec(self) {
+            Ok(v) => v.len(),
+            Err(e) => {
+                tracing::warn!("failed to compute Provenance size: {}", e);
+                0
+            }
+        }
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
@@ -127,10 +192,25 @@ mod tests {
 
         let mut provenance =
             Provenance::new(repo_id, actor, run_id, "openai", "gpt-4").expect("provenance");
-        provenance.set_parameters(Some(serde_json::json!({"temperature": 0.2})));
-        provenance.set_token_usage(Some(serde_json::json!({"input": 10, "output": 5})));
+        provenance.set_parameters(Some(
+            serde_json::json!({"temperature": 0.2, "max_tokens": 128}),
+        ));
+        provenance.set_temperature(Some(0.2));
+        provenance.set_max_tokens(Some(128));
+        provenance.set_token_usage(Some(TokenUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            cost_usd: Some(0.001),
+        }));
 
         assert!(provenance.parameters().is_some());
-        assert!(provenance.token_usage().is_some());
+        assert_eq!(provenance.temperature(), Some(0.2));
+        assert_eq!(provenance.max_tokens(), Some(128));
+        let usage = provenance.token_usage().expect("token usage");
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.total_tokens, 15);
+        assert_eq!(usage.cost_usd, Some(0.001));
     }
 }

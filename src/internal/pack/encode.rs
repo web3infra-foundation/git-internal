@@ -621,6 +621,12 @@ impl PackEncoder {
                 for _ in 0..batch_size {
                     match entry_rx.recv().await {
                         Some(entry) => {
+                            if entry.inner.obj_type.is_ai_object() {
+                                return Err(GitError::PackEncodeError(format!(
+                                    "AI object type `{}` cannot be encoded in a pack file",
+                                    entry.inner.obj_type
+                                )));
+                            }
                             batch_entries.push(entry.inner);
                             self.process_index += 1;
                         }

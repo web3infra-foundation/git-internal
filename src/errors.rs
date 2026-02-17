@@ -90,6 +90,10 @@ pub enum GitError {
     #[error("Not a valid agent task object: {0}")]
     InvalidTaskObject(String),
 
+    /// Malformed intent object.
+    #[error("Not a valid agent intent object: {0}")]
+    InvalidIntentObject(String),
+
     /// Malformed tool invocation object.
     #[error("Not a valid agent tool invocation object: {0}")]
     InvalidToolInvocationObject(String),

@@ -124,6 +124,8 @@ pub struct PatchSet {
     diff_artifact: Option<ArtifactRef>,
     #[serde(default)]
     touched_files: Vec<TouchedFile>,
+    #[serde(default)]
+    supersedes_patchset_ids: Vec<Uuid>,
     rationale: Option<String>,
     apply_status: ApplyStatus,
 }
@@ -146,6 +148,7 @@ impl PatchSet {
             diff_format: DiffFormat::UnifiedDiff,
             diff_artifact: None,
             touched_files: Vec::new(),
+            supersedes_patchset_ids: Vec::new(),
             rationale: None,
             apply_status: ApplyStatus::Proposed,
         })
@@ -179,6 +182,10 @@ impl PatchSet {
         &self.touched_files
     }
 
+    pub fn supersedes_patchset_ids(&self) -> &[Uuid] {
+        &self.supersedes_patchset_ids
+    }
+
     pub fn rationale(&self) -> Option<&str> {
         self.rationale.as_deref()
     }
@@ -202,6 +209,26 @@ impl PatchSet {
     pub fn set_apply_status(&mut self, apply_status: ApplyStatus) {
         self.apply_status = apply_status;
     }
+
+    pub fn add_supersedes_patchset_id(&mut self, patchset_id: Uuid) {
+        self.supersedes_patchset_ids.push(patchset_id);
+    }
+
+    pub fn set_supersedes_patchset_ids(&mut self, patchset_ids: Vec<Uuid>) {
+        self.supersedes_patchset_ids = patchset_ids;
+    }
+
+    pub fn validate_supersedes(&self) -> Result<(), GitError> {
+        if self
+            .supersedes_patchset_ids
+            .contains(&self.header.object_id())
+        {
+            return Err(GitError::InvalidPatchSetObject(
+                "PatchSet cannot supersede itself".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Display for PatchSet {
@@ -223,7 +250,13 @@ impl ObjectTrait for PatchSet {
     }
 
     fn get_size(&self) -> usize {
-        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
+        match serde_json::to_vec(self) {
+            Ok(v) => v.len(),
+            Err(e) => {
+                tracing::warn!("failed to compute PatchSet size: {}", e);
+                0
+            }
+        }
     }
 
     fn to_data(&self) -> Result<Vec<u8>, GitError> {
@@ -253,5 +286,28 @@ mod tests {
         assert_eq!(patchset.diff_format(), &DiffFormat::UnifiedDiff);
         assert_eq!(patchset.apply_status(), &ApplyStatus::Proposed);
         assert!(patchset.touched_files().is_empty());
+        assert!(patchset.supersedes_patchset_ids().is_empty());
+    }
+
+    #[test]
+    fn test_patchset_validate_supersedes_self_reference() {
+        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
+        let actor = ActorRef::agent("test-agent").expect("actor");
+        let run_id = Uuid::from_u128(0x1);
+        let base_hash = test_hash_hex();
+
+        let mut patchset = PatchSet::new(repo_id, actor, run_id, &base_hash, 1).expect("patchset");
+        let self_id = patchset.header().object_id();
+        patchset.add_supersedes_patchset_id(self_id);
+
+        let err = patchset
+            .validate_supersedes()
+            .expect_err("should be invalid");
+        match err {
+            GitError::InvalidPatchSetObject(msg) => {
+                assert!(msg.contains("supersede"), "unexpected message: {msg}");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 }
