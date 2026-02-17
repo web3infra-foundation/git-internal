@@ -325,19 +325,6 @@ impl Pack {
                     crc32,
                 )))
             }
-            ObjectType::ContextSnapshot
-            | ObjectType::Decision
-            | ObjectType::Evidence
-            | ObjectType::PatchSet
-            | ObjectType::Plan
-            | ObjectType::Provenance
-            | ObjectType::Run
-            | ObjectType::Task
-            | ObjectType::Intent
-            | ObjectType::ToolInvocation => {
-                // Wait for encode to implement corresponding compression
-                Ok(None)
-            }
             ObjectType::OffsetDelta | ObjectType::OffsetZstdelta => {
                 let (delta_offset, bytes) = utils::read_offset_encoding(&mut reader).unwrap();
                 *offset += bytes;
