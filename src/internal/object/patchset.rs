@@ -296,12 +296,13 @@ mod tests {
         let run_id = Uuid::from_u128(0x1);
         let base_hash = test_hash_hex();
 
-        let mut patchset =
-            PatchSet::new(repo_id, actor, run_id, &base_hash, 1).expect("patchset");
+        let mut patchset = PatchSet::new(repo_id, actor, run_id, &base_hash, 1).expect("patchset");
         let self_id = patchset.header().object_id();
         patchset.add_supersedes_patchset_id(self_id);
 
-        let err = patchset.validate_supersedes().expect_err("should be invalid");
+        let err = patchset
+            .validate_supersedes()
+            .expect_err("should be invalid");
         match err {
             GitError::InvalidPatchSetObject(msg) => {
                 assert!(msg.contains("supersede"), "unexpected message: {msg}");

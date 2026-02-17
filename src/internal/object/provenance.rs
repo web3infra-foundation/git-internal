@@ -42,8 +42,7 @@ impl TokenUsage {
         if self.total_tokens == 0 {
             return None;
         }
-        self.cost_usd
-            .map(|cost| cost / self.total_tokens as f64)
+        self.cost_usd.map(|cost| cost / self.total_tokens as f64)
     }
 }
 
