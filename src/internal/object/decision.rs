@@ -1,15 +1,55 @@
 //! AI Decision Definition
 //!
-//! `Decision` represents the final outcome of an agent's run. It signals whether the proposed
-//! changes should be applied, rejected, or if the agent needs human intervention.
+//! A `Decision` is the **terminal verdict** of a [`Run`](super::run::Run).
+//! After the agent finishes generating and validating PatchSets, the
+//! orchestrator (or the agent itself) creates a Decision to record what
+//! should happen next.
+//!
+//! # Position in Lifecycle
+//!
+//! ```text
+//! Task ──runs──▶ Run ──patchsets──▶ [PatchSet₀, PatchSet₁, ...]
+//!                  │
+//!                  └──(terminal)──▶ Decision
+//!                                     ├── chosen_patchset ──▶ PatchSet
+//!                                     └── evidence (via Evidence.decision)
+//! ```
+//!
+//! A Decision is created **once per Run**, at the end of execution.
+//! It selects which PatchSet (if any) to apply and records the
+//! resulting commit hash. [`Evidence`](super::evidence::Evidence)
+//! objects may reference the Decision to provide supporting data
+//! (test results, lint reports) that justified the verdict.
 //!
 //! # Decision Types
 //!
-//! - **Commit**: Changes are good, apply them.
-//! - **Abandon**: Task is impossible or not worth doing.
-//! - **Retry**: Something went wrong, try again (with different params/prompt).
-//! - **Checkpoint**: Save progress but don't finish yet.
-//! - **Rollback**: Revert changes.
+//! - **`Commit`**: Accept the chosen PatchSet and apply it to the
+//!   repository. `chosen_patchset` and `result_commit` should be set.
+//! - **`Checkpoint`**: Save intermediate progress without finishing.
+//!   The Run may continue or be resumed later. `checkpoint_id`
+//!   identifies the saved state.
+//! - **`Abandon`**: Give up on the Task. The goal is deemed impossible
+//!   or not worth pursuing. No PatchSet is applied.
+//! - **`Retry`**: The current attempt failed but the Task is still
+//!   viable. The orchestrator should create a new Run to try again,
+//!   potentially with different parameters or prompts.
+//! - **`Rollback`**: Revert previously applied changes. Used when a
+//!   committed PatchSet is later found to be incorrect.
+//!
+//! # Flow
+//!
+//! ```text
+//!   Run completes
+//!        │
+//!        ▼
+//!   Orchestrator creates Decision
+//!        │
+//!        ├─ Commit ──▶ apply PatchSet, record result_commit
+//!        ├─ Checkpoint ──▶ save state, record checkpoint_id
+//!        ├─ Abandon ──▶ mark Task as Failed
+//!        ├─ Retry ──▶ create new Run for same Task
+//!        └─ Rollback ──▶ revert applied PatchSet
+//! ```
 
 use std::fmt;
 
@@ -83,30 +123,70 @@ impl From<&str> for DecisionType {
     }
 }
 
-/// Decision object linking process to outcomes.
-/// Records the final outcome of a run.
+/// Terminal verdict of a [`Run`](super::run::Run).
+///
+/// Created once per Run at the end of execution. See module
+/// documentation for lifecycle position and decision type semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
+    /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
     header: Header,
+    /// The [`Run`](super::run::Run) this Decision concludes.
+    ///
+    /// Every Decision belongs to exactly one Run. The Run does not
+    /// store a back-reference; lookup is done by scanning or indexing.
     run_id: Uuid,
+    /// The verdict: what should happen as a result of this Run.
+    ///
+    /// See [`DecisionType`] variants for semantics. The orchestrator
+    /// inspects this field to determine the next action (apply patch,
+    /// retry, abandon, etc.).
     decision_type: DecisionType,
+    /// The [`PatchSet`](super::patchset::PatchSet) selected for
+    /// application.
+    ///
+    /// Set when `decision_type` is `Commit` — identifies which
+    /// PatchSet from `Run.patchsets` was chosen. `None` for
+    /// `Abandon`, `Retry`, `Rollback`, or when no suitable PatchSet
+    /// exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     chosen_patchset_id: Option<Uuid>,
+    /// Git commit hash produced after applying the chosen PatchSet.
+    ///
+    /// Set by the orchestrator after a successful `git commit`.
+    /// `None` until the PatchSet is actually committed, or when the
+    /// decision does not involve applying changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     result_commit_sha: Option<IntegrityHash>,
+    /// Opaque identifier for a saved checkpoint.
+    ///
+    /// Set when `decision_type` is `Checkpoint`. The format and
+    /// resolution of the ID are defined by the orchestrator (e.g.
+    /// a snapshot name, a storage key). `None` for all other
+    /// decision types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     checkpoint_id: Option<String>,
+    /// Human-readable explanation of why this decision was made.
+    ///
+    /// Written by the agent or orchestrator to justify the verdict.
+    /// For `Commit`: summarises why the chosen PatchSet is correct.
+    /// For `Abandon`/`Retry`: explains what went wrong.
+    /// For `Rollback`: describes the defect that triggered reversion.
+    /// `None` if no explanation was provided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     rationale: Option<String>,
 }
 
 impl Decision {
     /// Create a new decision object
     pub fn new(
-        repo_id: Uuid,
         created_by: ActorRef,
         run_id: Uuid,
         decision_type: impl Into<DecisionType>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new(ObjectType::Decision, repo_id, created_by)?,
+            header: Header::new(ObjectType::Decision, created_by)?,
             run_id,
             decision_type: decision_type.into(),
             chosen_patchset_id: None,
@@ -200,13 +280,12 @@ mod tests {
 
     #[test]
     fn test_decision_fields() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::agent("test-agent").expect("actor");
         let run_id = Uuid::from_u128(0x1);
         let patchset_id = Uuid::from_u128(0x2);
         let expected_hash = IntegrityHash::compute(b"decision-hash");
 
-        let mut decision = Decision::new(repo_id, actor, run_id, "commit").expect("decision");
+        let mut decision = Decision::new(actor, run_id, "commit").expect("decision");
         decision.set_chosen_patchset_id(Some(patchset_id));
         decision.set_result_commit_sha(Some(expected_hash));
         decision.set_rationale(Some("tests passed".to_string()));

@@ -1,4 +1,5 @@
 # Background and Problem Overview
+
 Since its inception, Git has relied on **SHA-1** as its core hash algorithm for naming all objects (commits, trees, blobs, and tags). The 160-bit hash values are represented as 40-character hexadecimal strings and are deeply embedded in repository storage, index structures, network protocols, and a wide range of tooling.
 
 However, practical collision attacks against **SHA-1** have already been demonstrated, and its security no longer meets long-term requirements. The Git community has outlined a migration path from **SHA-1** to **SHA-256** in the [_hash-function-transition_](https://git-scm.com/docs/hash-function-transition) document, and introduced experimental features such as `--object-format=sha256` in the 2.x series, with the plan to gradually adopt **SHA-256** as the default object format for newly created repositories in Git 3.0.

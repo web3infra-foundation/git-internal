@@ -32,7 +32,11 @@ where
     pub fn new(inner: R, obj_type: ObjectType, size: usize) -> Self {
         // Initialize the hash with the object header.
         let mut hash = HashAlgorithm::new();
-        hash.update(obj_type.to_bytes());
+        hash.update(
+            obj_type
+                .to_bytes()
+                .expect("ReadBoxed::new called with a delta type"),
+        );
         hash.update(b" ");
         hash.update(size.to_string().as_bytes());
         hash.update(b"\0");
@@ -143,7 +147,7 @@ mod tests {
 
         // Expected hash: header "blob <len>\\0" + body
         let mut expected = Sha1::new();
-        expected.update(ObjectType::Blob.to_bytes());
+        expected.update(ObjectType::Blob.to_bytes().unwrap());
         expected.update(b" ");
         expected.update(body.len().to_string());
         expected.update(b"\0");

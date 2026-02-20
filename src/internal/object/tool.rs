@@ -1,20 +1,38 @@
 //! AI Tool Invocation Definition
 //!
-//! A `ToolInvocation` records a specific action taken by an agent, such as reading a file,
-//! running a command, or querying a search engine.
+//! A `ToolInvocation` records a single action taken by an agent during
+//! a [`Run`](super::run::Run) — reading a file, running a shell
+//! command, calling an API, etc. It is the finest-grained unit of
+//! agent activity, capturing *what* was done, *with which arguments*,
+//! and *what happened*.
+//!
+//! # Position in Lifecycle
+//!
+//! ```text
+//! Run ──patchsets──▶ [PatchSet₀, ...]
+//!  │
+//!  ├── evidence ──▶ [Evidence₀, ...]
+//!  │
+//!  └── tool invocations ──▶ [ToolInvocation₀, ToolInvocation₁, ...]
+//!                                  │
+//!                                  └── io_footprint (paths read/written)
+//! ```
+//!
+//! ToolInvocations are produced **throughout** a Run, one per tool
+//! call. They form a chronological log of every action the agent
+//! performed. Unlike Evidence (which validates a PatchSet) or
+//! Decision (which concludes a Run), ToolInvocations are low-level
+//! operational records.
 //!
 //! # Purpose
 //!
-//! - **Audit Trail**: Allows reconstructing exactly what the agent did.
-//! - **Cost Tracking**: Can be used to calculate token/resource usage.
-//! - **Debugging**: Helps understand why an agent made a particular decision.
-//!
-//! # Fields
-//!
-//! - `tool_name`: The identifier of the tool (e.g., "read_file").
-//! - `args`: JSON arguments passed to the tool.
-//! - `io_footprint`: Files read/written during the operation (for dependency tracking).
-//! - `status`: Whether the tool call succeeded or failed.
+//! - **Audit Trail**: Allows reconstructing exactly what the agent did
+//!   step by step, including arguments and results.
+//! - **Dependency Tracking**: `io_footprint` records which files were
+//!   read or written, enabling incremental re-runs and cache
+//!   invalidation.
+//! - **Debugging**: When a Run produces unexpected results, reviewing
+//!   the ToolInvocation sequence reveals the agent's reasoning path.
 
 use std::fmt;
 
@@ -55,42 +73,91 @@ impl fmt::Display for ToolStatus {
     }
 }
 
-/// IO footprint of a tool invocation.
-/// Tracks reads and writes for auditability.
+/// File-level I/O footprint of a tool invocation.
+///
+/// Records which files were read and written during the tool call.
+/// Used for dependency tracking (which inputs influenced which
+/// outputs) and for cache invalidation on incremental re-runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IoFootprint {
-    #[serde(default)]
+    /// Paths the tool read during execution (e.g. source files,
+    /// config files). Relative to the repository root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths_read: Vec<String>,
-    #[serde(default)]
+    /// Paths the tool wrote or modified (e.g. generated files,
+    /// patch output). Relative to the repository root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths_written: Vec<String>,
 }
 
-/// Tool invocation record.
-/// Records a single tool call within a run.
+/// Record of a single tool call made by an agent during a Run.
+///
+/// One ToolInvocation per tool call. The chronological sequence of
+/// ToolInvocations within a Run forms the agent's action log. See
+/// module documentation for lifecycle position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvocation {
+    /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
     header: Header,
+    /// The [`Run`](super::run::Run) during which this tool was called.
+    ///
+    /// Every ToolInvocation belongs to exactly one Run. The Run does
+    /// not store a back-reference; the full invocation log is
+    /// reconstructed by querying all ToolInvocations with the same
+    /// `run_id`, ordered by `created_at`.
     run_id: Uuid,
+    /// Identifier of the tool that was called (e.g. "read_file",
+    /// "bash", "search_code").
+    ///
+    /// This is the tool's registered name in the agent's tool
+    /// catalogue, not a human-readable label.
     tool_name: String,
+    /// Files read and written during this tool call.
+    ///
+    /// `None` when the tool has no file-system side effects (e.g. a
+    /// pure computation or API call). See [`IoFootprint`] for details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     io_footprint: Option<IoFootprint>,
+    /// Arguments passed to the tool, as a JSON value.
+    ///
+    /// The schema depends on the tool. For example, `read_file` might
+    /// have `{"path": "src/main.rs"}`, while `bash` might have
+    /// `{"command": "cargo test"}`. `Null` when the tool takes no
+    /// arguments.
     #[serde(default)]
     args: serde_json::Value,
+    /// Whether the tool call succeeded or failed.
+    ///
+    /// `Ok` means the tool returned a normal result; `Error` means it
+    /// returned an error. The orchestrator may use this to decide
+    /// whether to retry or abort the Run.
     status: ToolStatus,
+    /// Short human-readable summary of the tool's output.
+    ///
+    /// For `read_file`: might be the file size or first few lines.
+    /// For `bash`: might be the last line of stdout. For failed calls:
+    /// the error message. `None` if no summary was captured. For full
+    /// output, see `artifacts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     result_summary: Option<String>,
-    #[serde(default)]
+    /// References to full output files in object storage.
+    ///
+    /// May include stdout/stderr logs, generated files, screenshots,
+    /// etc. Each [`ArtifactRef`] points to one stored file. Empty
+    /// when the tool produced no persistent output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<ArtifactRef>,
 }
 
 impl ToolInvocation {
     pub fn new(
-        repo_id: Uuid,
         created_by: ActorRef,
         run_id: Uuid,
         tool_name: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            header: Header::new(ObjectType::ToolInvocation, repo_id, created_by)?,
+            header: Header::new(ObjectType::ToolInvocation, created_by)?,
             run_id,
             tool_name: tool_name.into(),
             io_footprint: None,
@@ -193,12 +260,11 @@ mod tests {
 
     #[test]
     fn test_tool_invocation_io_footprint() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::human("jackie").expect("actor");
         let run_id = Uuid::from_u128(0x1);
 
         let mut tool_inv =
-            ToolInvocation::new(repo_id, actor, run_id, "read_file").expect("tool_invocation");
+            ToolInvocation::new(actor, run_id, "read_file").expect("tool_invocation");
 
         let footprint = IoFootprint {
             paths_read: vec!["src/main.rs".to_string()],
@@ -217,12 +283,11 @@ mod tests {
 
     #[test]
     fn test_tool_invocation_fields() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::human("jackie").expect("actor");
         let run_id = Uuid::from_u128(0x1);
 
         let mut tool_inv =
-            ToolInvocation::new(repo_id, actor, run_id, "apply_patch").expect("tool_invocation");
+            ToolInvocation::new(actor, run_id, "apply_patch").expect("tool_invocation");
         tool_inv.set_status(ToolStatus::Error);
         tool_inv.set_args(serde_json::json!({"path": "src/lib.rs"}));
         tool_inv.set_result_summary(Some("failed".to_string()));
