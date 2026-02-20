@@ -46,8 +46,8 @@
 //! | From | Field | To | Notes |
 //! |------|-------|----|-------|
 //! | Plan | `pipeline` | ContextPipeline | 0..1 |
-//! | PlanStep | `iframes` | ContextFrame indices | consumed context |
-//! | PlanStep | `oframes` | ContextFrame indices | produced context |
+//! | PlanStep | `iframes` | ContextFrame IDs | consumed context |
+//! | PlanStep | `oframes` | ContextFrame IDs | produced context |
 //!
 //! The pipeline itself has no back-references — it is a passive
 //! container. [`PlanStep`](super::plan::PlanStep)s own the
@@ -164,6 +164,13 @@ impl fmt::Display for FrameKind {
 /// and `oframes`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextFrame {
+    /// Stable monotonic identifier for this frame.
+    ///
+    /// Assigned by [`ContextPipeline::push_frame`] from a monotonic
+    /// counter (`next_frame_id`). Unlike Vec indices, frame IDs remain
+    /// stable across eviction — [`PlanStep`](super::plan::PlanStep)s
+    /// reference frames by ID via `iframes` and `oframes`.
+    frame_id: u64,
     /// The kind of context this frame captures.
     ///
     /// Determines how `summary` and `data` should be interpreted.
@@ -204,14 +211,24 @@ pub struct ContextFrame {
 
 impl ContextFrame {
     /// Create a new frame with the given kind and summary.
-    pub fn new(kind: FrameKind, summary: impl Into<String>) -> Self {
+    ///
+    /// `frame_id` is typically assigned by
+    /// [`ContextPipeline::push_frame`]; callers building frames
+    /// manually can pass any unique monotonic value.
+    pub fn new(frame_id: u64, kind: FrameKind, summary: impl Into<String>) -> Self {
         Self {
+            frame_id,
             kind,
             summary: summary.into(),
             data: None,
             created_at: Utc::now(),
             token_estimate: None,
         }
+    }
+
+    /// Returns this frame's stable ID.
+    pub fn frame_id(&self) -> u64 {
+        self.frame_id
     }
 
     pub fn kind(&self) -> &FrameKind {
@@ -262,10 +279,17 @@ pub struct ContextPipeline {
     /// New frames are appended via [`push_frame`](ContextPipeline::push_frame).
     /// If `max_frames > 0` and the limit is exceeded, the oldest
     /// evictable frame is removed (see eviction rules in module docs).
-    /// [`PlanStep`](super::plan::PlanStep)s reference frames by index
-    /// via `iframes` and `oframes`.
+    /// [`PlanStep`](super::plan::PlanStep)s reference frames by stable
+    /// `frame_id` via `iframes` and `oframes`. Frame IDs are monotonic
+    /// and survive eviction (indices do not).
     #[serde(default)]
     frames: Vec<ContextFrame>,
+    /// Monotonic counter for assigning stable [`ContextFrame::frame_id`]s.
+    ///
+    /// Incremented by [`push_frame`](ContextPipeline::push_frame) each
+    /// time a frame is added. Never decremented, even after eviction.
+    #[serde(default)]
+    next_frame_id: u64,
     /// Maximum number of active frames before eviction kicks in.
     ///
     /// `0` means unlimited (no eviction). When the frame count
@@ -294,6 +318,7 @@ impl ContextPipeline {
         Ok(Self {
             header: Header::new(ObjectType::ContextPipeline, created_by)?,
             frames: Vec::new(),
+            next_frame_id: 0,
             max_frames: 0,
             global_summary: None,
         })
@@ -324,11 +349,36 @@ impl ContextPipeline {
         self.global_summary = summary;
     }
 
-    /// Append a frame. If `max_frames > 0` and the limit is exceeded,
-    /// the oldest non-Checkpoint frame is removed to make room.
-    pub fn push_frame(&mut self, frame: ContextFrame) {
+    /// Append a frame, assigning it a stable `frame_id`.
+    ///
+    /// Returns the assigned `frame_id`. If `max_frames > 0` and the
+    /// limit is exceeded, the oldest evictable (non-IntentAnalysis,
+    /// non-Checkpoint) frame is removed to make room. Eviction does
+    /// not affect the IDs of surviving frames.
+    pub fn push_frame(&mut self, kind: FrameKind, summary: impl Into<String>) -> u64 {
+        let frame = ContextFrame::new(self.next_frame_id, kind, summary);
+        self.push_frame_raw(frame)
+    }
+
+    /// Append a pre-built frame, overwriting its `frame_id` with the
+    /// next monotonic ID. Returns the assigned `frame_id`.
+    ///
+    /// Use this when you need to set properties (e.g. `token_estimate`,
+    /// `data`) on the frame before pushing.
+    pub fn push_frame_raw(&mut self, mut frame: ContextFrame) -> u64 {
+        let id = self.next_frame_id;
+        self.next_frame_id += 1;
+        frame.frame_id = id;
         self.frames.push(frame);
         self.evict_if_needed();
+        id
+    }
+
+    /// Look up a frame by its stable `frame_id`.
+    ///
+    /// Returns `None` if the frame has been evicted or the ID is invalid.
+    pub fn frame_by_id(&self, frame_id: u64) -> Option<&ContextFrame> {
+        self.frames.iter().find(|f| f.frame_id == frame_id)
     }
 
     /// Returns frames that contribute to the active context window
@@ -423,22 +473,33 @@ mod tests {
     fn test_push_and_retrieve_frames() {
         let mut pipeline = make_pipeline();
 
-        let mut f1 = ContextFrame::new(FrameKind::StepSummary, "Completed auth refactor");
+        let mut f1 = ContextFrame::new(0, FrameKind::StepSummary, "Completed auth refactor");
         f1.set_token_estimate(Some(200));
-        pipeline.push_frame(f1);
+        let id0 = pipeline.push_frame_raw(f1);
 
-        let f2 = ContextFrame::new(FrameKind::CodeChange, "Modified 3 files, +120 -45 lines");
-        pipeline.push_frame(f2);
+        let id1 = pipeline.push_frame(FrameKind::CodeChange, "Modified 3 files, +120 -45 lines");
 
-        let mut f3 = ContextFrame::new(FrameKind::Checkpoint, "User save-point");
+        let mut f3 = ContextFrame::new(0, FrameKind::Checkpoint, "User save-point");
         f3.set_data(Some(serde_json::json!({"key": "value"})));
-        pipeline.push_frame(f3);
+        let id2 = pipeline.push_frame_raw(f3);
 
         assert_eq!(pipeline.frames().len(), 3);
-        assert_eq!(pipeline.frames()[0].kind(), &FrameKind::StepSummary);
-        assert_eq!(pipeline.frames()[1].kind(), &FrameKind::CodeChange);
-        assert_eq!(pipeline.frames()[2].kind(), &FrameKind::Checkpoint);
-        assert!(pipeline.frames()[2].data().is_some());
+        assert_eq!(id0, 0);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(
+            pipeline.frame_by_id(0).unwrap().kind(),
+            &FrameKind::StepSummary
+        );
+        assert_eq!(
+            pipeline.frame_by_id(1).unwrap().kind(),
+            &FrameKind::CodeChange
+        );
+        assert_eq!(
+            pipeline.frame_by_id(2).unwrap().kind(),
+            &FrameKind::Checkpoint
+        );
+        assert!(pipeline.frame_by_id(2).unwrap().data().is_some());
     }
 
     #[test]
@@ -447,17 +508,19 @@ mod tests {
         pipeline.set_max_frames(3);
 
         // Push a checkpoint (should survive eviction)
-        pipeline.push_frame(ContextFrame::new(FrameKind::Checkpoint, "save-point"));
+        let cp_id = pipeline.push_frame(FrameKind::Checkpoint, "save-point");
         // Push regular frames
-        pipeline.push_frame(ContextFrame::new(FrameKind::StepSummary, "step 1"));
-        pipeline.push_frame(ContextFrame::new(FrameKind::StepSummary, "step 2"));
+        let s1_id = pipeline.push_frame(FrameKind::StepSummary, "step 1");
+        pipeline.push_frame(FrameKind::StepSummary, "step 2");
         assert_eq!(pipeline.frames().len(), 3);
 
         // This push exceeds max_frames → oldest non-Checkpoint ("step 1") is evicted
-        pipeline.push_frame(ContextFrame::new(FrameKind::CodeChange, "code change"));
+        pipeline.push_frame(FrameKind::CodeChange, "code change");
         assert_eq!(pipeline.frames().len(), 3);
 
         // Checkpoint survived, "step 1" was evicted
+        assert!(pipeline.frame_by_id(cp_id).is_some());
+        assert!(pipeline.frame_by_id(s1_id).is_none()); // evicted
         assert_eq!(pipeline.frames()[0].kind(), &FrameKind::Checkpoint);
         assert_eq!(pipeline.frames()[1].summary(), "step 2");
         assert_eq!(pipeline.frames()[2].summary(), "code change");
@@ -467,16 +530,16 @@ mod tests {
     fn test_total_token_estimate() {
         let mut pipeline = make_pipeline();
 
-        let mut f1 = ContextFrame::new(FrameKind::StepSummary, "s1");
+        let mut f1 = ContextFrame::new(0, FrameKind::StepSummary, "s1");
         f1.set_token_estimate(Some(100));
-        pipeline.push_frame(f1);
+        pipeline.push_frame_raw(f1);
 
-        let mut f2 = ContextFrame::new(FrameKind::StepSummary, "s2");
+        let mut f2 = ContextFrame::new(0, FrameKind::StepSummary, "s2");
         f2.set_token_estimate(Some(250));
-        pipeline.push_frame(f2);
+        pipeline.push_frame_raw(f2);
 
         // Frame without token estimate
-        pipeline.push_frame(ContextFrame::new(FrameKind::Checkpoint, "cp"));
+        pipeline.push_frame(FrameKind::Checkpoint, "cp");
 
         assert_eq!(pipeline.total_token_estimate(), 350);
     }
@@ -486,16 +549,17 @@ mod tests {
         let mut pipeline = make_pipeline();
         pipeline.set_global_summary(Some("Overall progress summary".to_string()));
 
-        let mut frame = ContextFrame::new(FrameKind::StepSummary, "did stuff");
+        let mut frame = ContextFrame::new(0, FrameKind::StepSummary, "did stuff");
         frame.set_token_estimate(Some(150));
         frame.set_data(Some(serde_json::json!({"files": ["a.rs", "b.rs"]})));
-        pipeline.push_frame(frame);
+        pipeline.push_frame_raw(frame);
 
         let data = pipeline.to_data().expect("serialize");
         let restored =
             ContextPipeline::from_bytes(&data, ObjectHash::default()).expect("deserialize");
 
         assert_eq!(restored.frames().len(), 1);
+        assert_eq!(restored.frames()[0].frame_id(), 0);
         assert_eq!(restored.frames()[0].summary(), "did stuff");
         assert_eq!(restored.frames()[0].token_estimate(), Some(150));
         assert_eq!(restored.global_summary(), Some("Overall progress summary"));
@@ -507,16 +571,15 @@ mod tests {
         pipeline.set_max_frames(2);
 
         // Seed with IntentAnalysis (protected)
-        pipeline.push_frame(ContextFrame::new(
-            FrameKind::IntentAnalysis,
-            "AI analysis of user intent",
-        ));
-        pipeline.push_frame(ContextFrame::new(FrameKind::StepSummary, "step 1"));
+        let ia_id = pipeline.push_frame(FrameKind::IntentAnalysis, "AI analysis of user intent");
+        let s1_id = pipeline.push_frame(FrameKind::StepSummary, "step 1");
         assert_eq!(pipeline.frames().len(), 2);
 
         // Adding another frame should evict "step 1", not IntentAnalysis
-        pipeline.push_frame(ContextFrame::new(FrameKind::CodeChange, "code change"));
+        pipeline.push_frame(FrameKind::CodeChange, "code change");
         assert_eq!(pipeline.frames().len(), 2);
+        assert!(pipeline.frame_by_id(ia_id).is_some());
+        assert!(pipeline.frame_by_id(s1_id).is_none()); // evicted
         assert_eq!(pipeline.frames()[0].kind(), &FrameKind::IntentAnalysis);
         assert_eq!(pipeline.frames()[1].summary(), "code change");
     }

@@ -73,12 +73,20 @@
 //!
 //! ## Step Context Tracking
 //!
-//! Each step tracks its relationship to pipeline frames via two index
-//! vectors:
+//! Each step tracks its relationship to pipeline frames via two
+//! ID vectors:
 //!
-//! - `iframes` — indices of frames the step **consumed** as context.
-//! - `oframes` — indices of frames the step **produced** (e.g.
-//!   `StepSummary`, `CodeChange`).
+//! - `iframes` — stable `frame_id`s of frames the step **consumed**
+//!   as context.
+//! - `oframes` — stable `frame_id`s of frames the step **produced**
+//!   (e.g. `StepSummary`, `CodeChange`).
+//!
+//! Frame IDs are monotonic integers assigned by
+//! [`ContextPipeline::push_frame`](super::pipeline::ContextPipeline::push_frame).
+//! Unlike Vec indices, IDs survive eviction — a step's `iframes`
+//! remain valid even after older frames are evicted from the pipeline.
+//! Look up frames via
+//! [`ContextPipeline::frame_by_id`](super::pipeline::ContextPipeline::frame_by_id).
 //!
 //! All context association is owned by the step side;
 //! [`ContextFrame`](super::pipeline::ContextFrame) itself is a passive
@@ -88,7 +96,7 @@
 //! ContextPipeline.frames:  [F₀, F₁, F₂, F₃, F₄, F₅]
 //!                            │    │         ▲
 //!                            ╰────╯         │
-//!                            iframes       oframes
+//!                         iframes=[0,1]  oframes=[4]
 //!                              ╰── Step₀ ──╯
 //! ```
 //!
@@ -267,20 +275,23 @@ pub struct PlanStep {
     /// Indices into the pipeline's frame list that this step **consumed**
     /// as input context.
     ///
-    /// Set when the step begins execution. The indices reference
-    /// [`ContextFrame`](super::pipeline::ContextFrame)s in the
-    /// [`ContextPipeline`](super::pipeline::ContextPipeline) that the
-    /// Plan references. Empty when no prior context was consumed.
+    /// Set when the step begins execution. Values are stable
+    /// [`ContextFrame::frame_id`](super::pipeline::ContextFrame::frame_id)s
+    /// (not Vec indices), so they survive pipeline eviction. Look up
+    /// frames via
+    /// [`ContextPipeline::frame_by_id`](super::pipeline::ContextPipeline::frame_by_id).
+    /// Empty when no prior context was consumed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    iframes: Vec<u32>,
-    /// Indices into the pipeline's frame list that this step **produced**
+    iframes: Vec<u64>,
+    /// Stable frame IDs in the pipeline that this step **produced**
     /// as output context.
     ///
     /// Set after the step completes. The step pushes new frames (e.g.
-    /// `StepSummary`, `CodeChange`) to the pipeline and records their
-    /// indices here. Empty when the step produced no context frames.
+    /// `StepSummary`, `CodeChange`) to the pipeline and records the
+    /// returned `frame_id`s here. Empty when the step produced no
+    /// context frames.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    oframes: Vec<u32>,
+    oframes: Vec<u64>,
     /// Optional sub-[`Task`](super::task::Task) spawned for this step.
     ///
     /// When set, the step delegates execution to an independent Task
@@ -334,12 +345,12 @@ impl PlanStep {
     }
 
     /// Returns the current step status (last entry in the history).
-    pub fn status(&self) -> &StepStatus {
-        &self
-            .statuses
-            .last()
-            .expect("statuses is never empty")
-            .status
+    ///
+    /// Returns `None` only if `statuses` is empty, which should not
+    /// happen for objects created via [`PlanStep::new`] (seeds with
+    /// `Pending`), but may occur for malformed deserialized data.
+    pub fn status(&self) -> Option<&StepStatus> {
+        self.statuses.last().map(|e| &e.status)
     }
 
     /// Returns the full chronological status history.
@@ -370,24 +381,24 @@ impl PlanStep {
         self.checks = checks;
     }
 
-    /// Returns the pipeline frame indices this step consumed as input context.
-    pub fn iframes(&self) -> &[u32] {
+    /// Returns the pipeline frame IDs this step consumed as input context.
+    pub fn iframes(&self) -> &[u64] {
         &self.iframes
     }
 
-    /// Returns the pipeline frame indices this step produced as output context.
-    pub fn oframes(&self) -> &[u32] {
+    /// Returns the pipeline frame IDs this step produced as output context.
+    pub fn oframes(&self) -> &[u64] {
         &self.oframes
     }
 
-    /// Records the pipeline frame indices this step consumed as input.
-    pub fn set_iframes(&mut self, indices: Vec<u32>) {
-        self.iframes = indices;
+    /// Records the pipeline frame IDs this step consumed as input.
+    pub fn set_iframes(&mut self, ids: Vec<u64>) {
+        self.iframes = ids;
     }
 
-    /// Records the pipeline frame indices this step produced as output.
-    pub fn set_oframes(&mut self, indices: Vec<u32>) {
-        self.oframes = indices;
+    /// Records the pipeline frame IDs this step produced as output.
+    pub fn set_oframes(&mut self, ids: Vec<u64>) {
+        self.oframes = ids;
     }
 
     /// Returns the sub-Task ID if this step has been elevated to an
@@ -601,16 +612,16 @@ mod tests {
 
         // Initial state: one Pending entry
         assert_eq!(step.statuses().len(), 1);
-        assert_eq!(step.status(), &StepStatus::Pending);
+        assert_eq!(step.status(), Some(&StepStatus::Pending));
 
         // Transition to Progressing
         step.set_status(StepStatus::Progressing);
-        assert_eq!(step.status(), &StepStatus::Progressing);
+        assert_eq!(step.status(), Some(&StepStatus::Progressing));
         assert_eq!(step.statuses().len(), 2);
 
         // Transition to Completed with reason
         step.set_status_with_reason(StepStatus::Completed, "all checks passed");
-        assert_eq!(step.status(), &StepStatus::Completed);
+        assert_eq!(step.status(), Some(&StepStatus::Completed));
         assert_eq!(step.statuses().len(), 3);
 
         // Verify full history

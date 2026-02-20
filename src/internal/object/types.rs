@@ -148,24 +148,29 @@ impl ObjectType {
         }
     }
 
-    pub fn to_bytes(&self) -> &[u8] {
+    /// Returns the loose-object type header bytes (e.g. `b"commit"`, `b"blob"`).
+    ///
+    /// Delta types (`OffsetDelta`, `HashDelta`, `OffsetZstdelta`) only
+    /// exist inside pack files and have no loose-object representation.
+    /// Passing a delta type is a logic error and returns `None`.
+    pub fn to_bytes(&self) -> Option<&[u8]> {
         match self {
-            ObjectType::Commit => COMMIT_OBJECT_TYPE,
-            ObjectType::Tree => TREE_OBJECT_TYPE,
-            ObjectType::Blob => BLOB_OBJECT_TYPE,
-            ObjectType::Tag => TAG_OBJECT_TYPE,
-            ObjectType::ContextSnapshot => CONTEXT_SNAPSHOT_OBJECT_TYPE,
-            ObjectType::Decision => DECISION_OBJECT_TYPE,
-            ObjectType::Evidence => EVIDENCE_OBJECT_TYPE,
-            ObjectType::PatchSet => PATCH_SET_OBJECT_TYPE,
-            ObjectType::Plan => PLAN_OBJECT_TYPE,
-            ObjectType::Provenance => PROVENANCE_OBJECT_TYPE,
-            ObjectType::Run => RUN_OBJECT_TYPE,
-            ObjectType::Task => TASK_OBJECT_TYPE,
-            ObjectType::Intent => INTENT_OBJECT_TYPE,
-            ObjectType::ToolInvocation => TOOL_INVOCATION_OBJECT_TYPE,
-            ObjectType::ContextPipeline => CONTEXT_PIPELINE_OBJECT_TYPE,
-            _ => panic!("can put compute the delta hash value"),
+            ObjectType::Commit => Some(COMMIT_OBJECT_TYPE),
+            ObjectType::Tree => Some(TREE_OBJECT_TYPE),
+            ObjectType::Blob => Some(BLOB_OBJECT_TYPE),
+            ObjectType::Tag => Some(TAG_OBJECT_TYPE),
+            ObjectType::ContextSnapshot => Some(CONTEXT_SNAPSHOT_OBJECT_TYPE),
+            ObjectType::Decision => Some(DECISION_OBJECT_TYPE),
+            ObjectType::Evidence => Some(EVIDENCE_OBJECT_TYPE),
+            ObjectType::PatchSet => Some(PATCH_SET_OBJECT_TYPE),
+            ObjectType::Plan => Some(PLAN_OBJECT_TYPE),
+            ObjectType::Provenance => Some(PROVENANCE_OBJECT_TYPE),
+            ObjectType::Run => Some(RUN_OBJECT_TYPE),
+            ObjectType::Task => Some(TASK_OBJECT_TYPE),
+            ObjectType::Intent => Some(INTENT_OBJECT_TYPE),
+            ObjectType::ToolInvocation => Some(TOOL_INVOCATION_OBJECT_TYPE),
+            ObjectType::ContextPipeline => Some(CONTEXT_PIPELINE_OBJECT_TYPE),
+            ObjectType::OffsetDelta | ObjectType::HashDelta | ObjectType::OffsetZstdelta => None,
         }
     }
 
@@ -268,27 +273,15 @@ impl ObjectType {
         }
     }
 
+    /// Returns `true` if this type is a base Git object that can appear
+    /// as a delta target in pack files. AI object types return `false`
+    /// because they cannot be encoded in pack files and should never
+    /// participate in delta window selection.
     pub fn is_base(&self) -> bool {
-        match self {
-            ObjectType::Commit => true,
-            ObjectType::Tree => true,
-            ObjectType::Blob => true,
-            ObjectType::Tag => true,
-            ObjectType::HashDelta => false,
-            ObjectType::OffsetZstdelta => false,
-            ObjectType::OffsetDelta => false,
-            ObjectType::ContextSnapshot => true,
-            ObjectType::Decision => true,
-            ObjectType::Evidence => true,
-            ObjectType::PatchSet => true,
-            ObjectType::Plan => true,
-            ObjectType::Provenance => true,
-            ObjectType::Run => true,
-            ObjectType::Task => true,
-            ObjectType::Intent => true,
-            ObjectType::ToolInvocation => true,
-            ObjectType::ContextPipeline => true,
-        }
+        matches!(
+            self,
+            ObjectType::Commit | ObjectType::Tree | ObjectType::Blob | ObjectType::Tag
+        )
     }
 
     /// Returns `true` if this type is an AI extension object (not representable
@@ -787,6 +780,8 @@ impl Header {
 
     /// Seal the header by calculating and setting the checksum of the provided object.
     /// The checksum field is temporarily cleared to keep sealing idempotent.
+    /// Also updates `updated_at` to the current time, since sealing
+    /// represents a semantic modification of the object.
     ///
     /// This is typically called just before storing the object to ensure `checksum` matches content.
     pub fn seal<T: Serialize>(&mut self, object: &T) -> Result<(), serde_json::Error> {
@@ -794,6 +789,7 @@ impl Header {
         match compute_integrity_hash(object) {
             Ok(checksum) => {
                 self.checksum = Some(checksum);
+                self.updated_at = Utc::now();
                 Ok(())
             }
             Err(err) => {

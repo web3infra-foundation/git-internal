@@ -72,7 +72,7 @@
 //!    [`PlanStep`](plan::PlanStep)s derived from the Intent. References
 //!    a [`ContextPipeline`](pipeline::ContextPipeline) and records the
 //!    visible frame range (`fwindow`). Steps track consumed/produced
-//!    frames (`iframes`/`oframes`). A step may spawn a sub-Task for
+//!    frames by stable ID (`iframes`/`oframes`). A step may spawn a sub-Task for
 //!    recursive decomposition. Plans form a revision chain via
 //!    `previous`.
 //!

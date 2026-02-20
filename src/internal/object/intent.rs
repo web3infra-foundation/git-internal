@@ -312,13 +312,12 @@ impl Intent {
     }
 
     /// Returns the current lifecycle status (the last entry in the history).
-    pub fn status(&self) -> &IntentStatus {
-        // statuses is never empty — initialized with Draft in `new()`.
-        &self
-            .statuses
-            .last()
-            .expect("statuses is never empty")
-            .status
+    ///
+    /// Returns `None` only if `statuses` is empty, which should not
+    /// happen for objects created via [`Intent::new`] (seeds with
+    /// `Draft`), but may occur for malformed deserialized data.
+    pub fn status(&self) -> Option<&IntentStatus> {
+        self.statuses.last().map(|e| &e.status)
     }
 
     /// Returns the full chronological status history.
@@ -403,7 +402,7 @@ mod tests {
         assert_eq!(intent.header().object_type(), &ObjectType::Intent);
         assert_eq!(intent.prompt(), "Refactor login flow");
         assert!(intent.content().is_none());
-        assert_eq!(intent.status(), &IntentStatus::Draft);
+        assert_eq!(intent.status(), Some(&IntentStatus::Draft));
         assert!(intent.parent().is_none());
         assert!(intent.plan().is_none());
 
@@ -426,16 +425,16 @@ mod tests {
 
         // Initial state: one Draft entry
         assert_eq!(intent.statuses().len(), 1);
-        assert_eq!(intent.status(), &IntentStatus::Draft);
+        assert_eq!(intent.status(), Some(&IntentStatus::Draft));
 
         // Transition to Active
         intent.set_status(IntentStatus::Active);
-        assert_eq!(intent.status(), &IntentStatus::Active);
+        assert_eq!(intent.status(), Some(&IntentStatus::Active));
         assert_eq!(intent.statuses().len(), 2);
 
         // Transition to Completed with reason
         intent.set_status_with_reason(IntentStatus::Completed, "All tasks done");
-        assert_eq!(intent.status(), &IntentStatus::Completed);
+        assert_eq!(intent.status(), Some(&IntentStatus::Completed));
         assert_eq!(intent.statuses().len(), 3);
 
         // Verify full history

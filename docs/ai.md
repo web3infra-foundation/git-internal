@@ -90,7 +90,7 @@ Context is tracked by two complementary mechanisms:
 
 3. **Plan** — a sequence of `PlanStep`s derived from the Intent. References a
    `ContextPipeline` and records the visible frame range (`fwindow`). Steps
-   track consumed/produced frames (`iframes`/`oframes`). A step may spawn a
+   track consumed/produced frames by stable ID (`iframes`/`oframes`). A step may spawn a
    sub-Task for recursive decomposition. Plans form a revision chain via
    `previous`.
 
@@ -274,8 +274,8 @@ Each step describes one unit of work within a Plan.
 | `inputs` | `Option<Value>` | Expected inputs (JSON) |
 | `outputs` | `Option<Value>` | Outputs after execution (JSON) |
 | `checks` | `Option<Value>` | Validation criteria (JSON) |
-| `iframes` | `Vec<u32>` | Pipeline frame indices consumed |
-| `oframes` | `Vec<u32>` | Pipeline frame indices produced |
+| `iframes` | `Vec<u64>` | Stable pipeline frame IDs consumed (survives eviction) |
+| `oframes` | `Vec<u64>` | Stable pipeline frame IDs produced (survives eviction) |
 | `task` | `Option<Uuid>` | Sub-Task for recursive decomposition |
 | `statuses` | `Vec<StepStatusEntry>` | Append-only status history |
 
@@ -685,6 +685,7 @@ Replan?                   → new Plan with updated fwindow
 |-------|------|-------------|
 | `header` | `Header` | Common metadata |
 | `frames` | `Vec<ContextFrame>` | Chronologically ordered frames |
+| `next_frame_id` | `u64` | Monotonic counter for stable frame IDs |
 | `max_frames` | `u32` | Max frames before eviction (0 = unlimited) |
 | `global_summary` | `Option<String>` | Aggregated summary |
 
@@ -692,6 +693,7 @@ Replan?                   → new Plan with updated fwindow
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `frame_id` | `u64` | Stable monotonic ID (survives eviction) |
 | `kind` | `FrameKind` | IntentAnalysis, StepSummary, CodeChange, etc. |
 | `summary` | `String` | Compact human-readable summary |
 | `data` | `Option<Value>` | Structured payload (JSON) |
@@ -721,25 +723,29 @@ never evicted.
 
 #### Step-Frame Association
 
-Steps track their relationship to frames via index vectors:
+Steps track their relationship to frames via stable frame IDs:
 
 ```
 ContextPipeline.frames:  [F₀, F₁, F₂, F₃, F₄, F₅]
                            │    │         ▲
                            ╰────╯         │
-                           iframes       oframes
+                        iframes=[0,1]  oframes=[4]
                              ╰── Step₀ ──╯
 ```
 
-- `iframes` — indices of frames the step consumed as context
-- `oframes` — indices of frames the step produced
+- `iframes` — stable `frame_id`s of frames the step consumed as context
+- `oframes` — stable `frame_id`s of frames the step produced
+
+Frame IDs are monotonic integers assigned by `push_frame`. Unlike Vec
+indices, IDs survive eviction — a step's `iframes` remain valid even
+after older frames are removed. Look up frames via `frame_by_id`.
 
 All association is owned by the step; `ContextFrame` has no back-references.
 
 #### Usage
 
 ```rust
-use git_internal::internal::object::pipeline::{ContextPipeline, ContextFrame, FrameKind};
+use git_internal::internal::object::pipeline::{ContextPipeline, FrameKind};
 use git_internal::internal::object::types::ActorRef;
 
 let actor = ActorRef::agent("orchestrator")?;
@@ -747,24 +753,25 @@ let actor = ActorRef::agent("orchestrator")?;
 // 1. Create pipeline after Intent content is analyzed
 let mut pipeline = ContextPipeline::new(actor)?;
 
-// 2. Seed with the Intent's analyzed content
-let seed = ContextFrame::new(
+// 2. Seed with the Intent's analyzed content — returns stable frame_id
+let seed_id = pipeline.push_frame(
     FrameKind::IntentAnalysis,
     "Add offset/limit pagination to GET /users with default page size 20",
 );
-pipeline.push_frame(seed);
 
 // 3. Create a Plan referencing this pipeline
 //    plan.set_pipeline(Some(pipeline.header().object_id()));
 //    plan.set_fwindow(Some((0, pipeline.frames().len() as u32)));
 
 // 4. As steps complete, push incremental frames
-let frame = ContextFrame::new(FrameKind::StepSummary, "Refactored auth module");
-pipeline.push_frame(frame);
+let step_id = pipeline.push_frame(FrameKind::StepSummary, "Refactored auth module");
 
-// 5. Track on PlanStep side:
-//    step.set_iframes(vec![0]);
-//    step.set_oframes(vec![1]);
+// 5. Track on PlanStep side using stable frame IDs:
+//    step.set_iframes(vec![seed_id]);
+//    step.set_oframes(vec![step_id]);
+
+// 6. Look up frame by ID (survives eviction)
+//    pipeline.frame_by_id(seed_id);
 ```
 
 ## Common Header
