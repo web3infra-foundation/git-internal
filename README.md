@@ -1,10 +1,10 @@
 ## Git Internal Module
 
-Git-Internal is a high-performance Rust library for encoding and decoding Git internal objects and Pack files. It provides comprehensive support for Git's internal object storage format with advanced features like delta compression, memory management, and concurrent processing.
+Git-Internal is a high-performance Rust library for Git internal objects, Pack files, and AI-assisted development workflows. It provides comprehensive support for Git's internal object storage format with delta compression, memory management, concurrent processing, and a structured AI object model that captures the full lifecycle of AI-driven code changes — from user intent through planning, execution, validation, and final decision.
 
 ## Overview
 
-This module is designed to handle Git internal objects and Pack files efficiently, supporting both reading and writing operations with optimized memory usage and multi-threaded processing capabilities. The library implements the complete Git Pack format specification with additional optimizations for large-scale Git operations.
+This library handles Git internal objects and Pack files efficiently, supporting both reading and writing with optimized memory usage and multi-threaded processing. Beyond the standard Git object model (Blob, Tree, Commit, Tag), it introduces a suite of **AI objects** (Intent, Plan, Task, Run, PatchSet, Evidence, Decision, and more) that record and audit every step of an AI agent's interaction with a codebase. These AI objects are stored as content-addressed JSON blobs in the Git object database, enabling reproducibility, auditability, and provenance tracking for AI-generated code changes.
 
 ## Quickstart
 
@@ -32,11 +32,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Modules at a glance
 
 - `hash.rs`: object IDs and hash algorithm selection (thread-local), set once by your app.
-- `internal/object` / `internal/index` / `internal/metadata`: object parse/serialize, .git/index IO, path/offset/CRC metadata.
+- `internal/object`: object parse/serialize — standard Git objects (Blob, Tree, Commit, Tag) and AI objects (Intent, Plan, Task, Run, etc.).
+- `internal/index` / `internal/metadata`: .git/index IO, path/offset/CRC metadata.
 - `delta` / `zstdelta` / `diff.rs`: delta compression, zstd dictionary delta, line-level diff.
 - `internal/pack`: pack decode/encode, waitlist, cache, idx building.
 - `protocol/*`: smart protocol + HTTP/SSH adapters, wrapping info-refs/upload-pack/receive-pack.
-- Docs: [docs/ARCHITECTURE.md (architecture)](docs/ARCHITECTURE.md), [docs/GIT_OBJECTS.md (objects)](docs/GIT_OBJECTS.md), [docs/GIT_PROTOCOL_GUIDE.md (protocol)](docs/GIT_PROTOCOL_GUIDE.md).
+- Docs: [docs/ARCHITECTURE.md (architecture)](docs/ARCHITECTURE.md), [docs/GIT_OBJECTS.md (objects)](docs/GIT_OBJECTS.md), [docs/GIT_PROTOCOL_GUIDE.md (protocol)](docs/GIT_PROTOCOL_GUIDE.md), [docs/ai.md (AI objects)](docs/ai.md).
 
 ## Key Features
 
@@ -65,6 +66,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - Stream-based pack file processing
 - Memory-efficient handling of large pack files
 - Support for network streams and file streams
+
+### 5. AI Object Model
+
+A structured object graph that captures the full lifecycle of AI-assisted code changes:
+
+```
+ ①  User input
+      │
+      ▼
+ ②  Intent (Draft → Active → Completed)
+      │
+      ▼
+ ③  Plan (steps + context pipeline)
+      │
+      ▼
+ ④  Task (unit of work with acceptance criteria)
+      │
+      ▼
+ ⑤  Run (execution attempt: patching → validating)
+      │
+      ├── ⑥ ToolInvocation (action log)
+      ├── ⑦ PatchSet (candidate diff)
+      ├── ⑧ Evidence (test/lint/build results)
+      │
+      ▼
+ ⑨  Decision (commit / retry / abandon / rollback)
+      │
+      ▼
+ ⑩  Intent (Completed, commit hash recorded)
+```
+
+| Object | Role |
+|--------|------|
+| **Intent** | Captures user prompt and AI interpretation; entry/exit point of the workflow |
+| **Plan** | Ordered sequence of steps derived from an Intent; supports revision chains |
+| **Task** | Stable work identity with constraints and acceptance criteria |
+| **Run** | Single execution attempt of a Task; accumulates artifacts |
+| **ToolInvocation** | Records each tool call (file read, shell command, etc.) |
+| **PatchSet** | Candidate code diff (unified format) relative to a baseline commit |
+| **Evidence** | Validation result (test pass/fail, lint output, build log) |
+| **Decision** | Terminal verdict on a Run (commit, retry, abandon, rollback) |
+| **Provenance** | LLM configuration and token usage metadata for a Run |
+| **ContextSnapshot** | Static capture of files/URLs/snippets at Run start |
+| **ContextPipeline** | Dynamic sliding-window context accumulated during planning |
+
+All AI objects share a common `Header` (UUID, timestamps, creator) and are serialized as JSON. See [docs/ai.md](docs/ai.md) for the full lifecycle, field-level documentation, and usage examples.
 
 ## Core Algorithms
 

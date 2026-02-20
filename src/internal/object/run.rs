@@ -1,20 +1,77 @@
 //! AI Run Definition
 //!
-//! A `Run` represents a single execution instance of an AI agent attempting to perform a `Task`.
-//! It captures the execution context (environment, agent role) and tracks the progress.
+//! A [`Run`] is a single execution attempt of a
+//! [`Task`](super::task::Task). It captures the execution context
+//! (baseline commit, environment, Plan version) and accumulates
+//! artifacts ([`PatchSet`](super::patchset::PatchSet)s,
+//! [`Evidence`](super::evidence::Evidence),
+//! [`ToolInvocation`](super::tool::ToolInvocation)s) during execution.
+//! The Run is step ⑤ in the end-to-end flow described in
+//! [`mod.rs`](super).
 //!
-//! # Relationship to Task
+//! # Position in Lifecycle
 //!
-//! A `Task` can have multiple `Run`s. This happens when:
-//! - An agent fails and retries.
-//! - A user requests a different approach.
-//! - Multiple agents work on the same task in parallel (future).
+//! ```text
+//!  ④  Task ──runs──▶ [Run₀, Run₁, ...]
+//!                        │
+//!                        ▼
+//!  ⑤  Run (Created → Patching → Validating → Completed/Failed)
+//!       │
+//!       ├──task──▶ Task          (mandatory, 1:1)
+//!       ├──plan──▶ Plan          (snapshot reference)
+//!       ├──snapshot──▶ ContextSnapshot  (optional)
+//!       │
+//!       │  ┌─── agent execution loop ───┐
+//!       │  │                            │
+//!       │  │  ⑥ ToolInvocation (1:N)    │
+//!       │  │       │                    │
+//!       │  │       ▼                    │
+//!       │  │  ⑦ PatchSet (Proposed)     │
+//!       │  │       │                    │
+//!       │  │       ▼                    │
+//!       │  │  ⑧ Evidence (1:N)          │
+//!       │  │       │                    │
+//!       │  │       ├─ pass ─────────────┘
+//!       │  │       └─ fail → new PatchSet
+//!       │  └────────────────────────────┘
+//!       │
+//!       ▼
+//!  ⑨  Decision (terminal verdict)
+//! ```
 //!
-//! # Key Fields
+//! # Status Transitions
 //!
-//! - `task_id`: Links back to the parent Task.
-//! - `base_commit_sha`: The Git commit hash where this run started.
-//! - `context_snapshot_id`: Links to the captured context (files, docs) used.
+//! ```text
+//! Created ──▶ Patching ──▶ Validating ──▶ Completed
+//!                │              │
+//!                └──────────────┴──▶ Failed
+//! ```
+//!
+//! # Relationships
+//!
+//! | Field | Target | Cardinality | Notes |
+//! |-------|--------|-------------|-------|
+//! | `task` | Task | 1 | Mandatory owning Task |
+//! | `plan` | Plan | 0..1 | Snapshot reference (frozen at Run start) |
+//! | `snapshot` | ContextSnapshot | 0..1 | Static context at Run start |
+//! | `patchsets` | PatchSet | 0..N | Candidate diffs, chronological |
+//!
+//! Reverse references (by `run_id`):
+//! - `Provenance.run_id` → this Run (1:1, LLM config)
+//! - `ToolInvocation.run_id` → this Run (1:N, action log)
+//! - `Evidence.run_id` → this Run (1:N, validation results)
+//! - `Decision.run_id` → this Run (1:1, terminal verdict)
+//!
+//! # Purpose
+//!
+//! - **Execution Context**: Records the baseline `commit`, host
+//!   `environment`, and Plan version so that results can be
+//!   reproduced.
+//! - **Artifact Collection**: Accumulates PatchSets (candidate diffs)
+//!   during the agent execution loop.
+//! - **Isolation**: Each Run is independent — a retry creates a new
+//!   Run with potentially different parameters, without mutating the
+//!   previous Run's state.
 
 use std::{collections::HashMap, fmt};
 
@@ -31,19 +88,30 @@ use crate::{
     },
 };
 
-/// Run lifecycle status.
+/// Lifecycle status of a [`Run`].
+///
+/// See module docs for the status transition diagram.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
-    /// Run created, agent not yet started.
+    /// Run has been created but the agent has not started execution.
+    /// Environment and baseline commit are captured at this point.
     Created,
-    /// Agent is generating patches.
+    /// Agent is actively generating code changes. One or more
+    /// [`ToolInvocation`](super::tool::ToolInvocation)s are being
+    /// produced.
     Patching,
-    /// Agent is running verification tools.
+    /// Agent has produced a candidate
+    /// [`PatchSet`](super::patchset::PatchSet) and is running
+    /// validation tools (tests, lint, build). One or more
+    /// [`Evidence`](super::evidence::Evidence) objects are being
+    /// produced.
     Validating,
-    /// Agent has finished successfully.
+    /// Agent has finished successfully. A
+    /// [`Decision`](super::decision::Decision) has been created.
     Completed,
-    /// Agent encountered an unrecoverable error.
+    /// Agent encountered an unrecoverable error. `Run.error` should
+    /// contain the error message.
     Failed,
 }
 
@@ -65,13 +133,21 @@ impl fmt::Display for RunStatus {
     }
 }
 
-/// Environment snapshot of the run host.
-/// Captured at run creation time.
+/// Host environment snapshot captured at Run creation time.
+///
+/// Records the OS, CPU architecture, and working directory so that
+/// results can be correlated with the execution environment. The
+/// `extra` map allows capturing additional environment details
+/// (e.g. tool versions, environment variables) without schema changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
-    pub os: String,   // e.g. "macos", "linux"
-    pub arch: String, // e.g. "aarch64", "x86_64"
-    pub cwd: String,  // Current working directory
+    /// Operating system identifier (e.g. "macos", "linux", "windows").
+    pub os: String,
+    /// CPU architecture (e.g. "aarch64", "x86_64").
+    pub arch: String,
+    /// Current working directory at Run creation time.
+    pub cwd: String,
+    /// Additional environment details (tool versions, etc.).
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -93,28 +169,91 @@ impl Environment {
     }
 }
 
-/// Agent instance participating in a run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentInstance {
-    pub role: String,
-    pub provider_route: Option<String>,
-}
-
-/// Run object for a single orchestration execution.
-/// Links a task to execution state and environment.
+/// A single execution attempt of a [`Task`](super::task::Task).
+///
+/// A Run captures the execution context and accumulates artifacts
+/// during the agent's work. It is step ⑤ in the end-to-end flow.
+/// See module documentation for lifecycle, relationships, and
+/// status transitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
+    /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
     header: Header,
-    task_id: Uuid,
-    orchestrator_version: String,
-    base_commit_sha: IntegrityHash,
+    /// The [`Task`](super::task::Task) this Run belongs to.
+    ///
+    /// Mandatory — every Run is an execution attempt of exactly one
+    /// Task. `Task.runs` holds the reverse reference. This field is
+    /// set at creation and never changes.
+    task: Uuid,
+    /// The [`Plan`](super::plan::Plan) this Run is executing.
+    ///
+    /// This is a **snapshot reference**: it records the specific Plan
+    /// version that was active when this Run started. After
+    /// replanning, existing Runs keep their original `plan` unchanged
+    /// — only new Runs reference the revised Plan.
+    /// `Intent.plan` always points to the latest revision, but a Run
+    /// may be executing an older version. `None` when no Plan was
+    /// associated (e.g. ad-hoc execution without formal planning).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plan: Option<Uuid>,
+    /// Git commit hash of the working tree when this Run started.
+    ///
+    /// Serves as the baseline for all code changes: the agent reads
+    /// files at this commit, and the resulting
+    /// [`PatchSet`](super::patchset::PatchSet) diffs are relative to
+    /// it. If the Run fails and a new Run is created, the new Run
+    /// may start from a different commit (e.g. after upstream changes
+    /// are pulled).
+    commit: IntegrityHash,
+    /// Current lifecycle status.
+    ///
+    /// Transitions follow the sequence:
+    /// `Created → Patching → Validating → Completed` (happy path),
+    /// or `→ Failed` from any active state. The orchestrator advances
+    /// the status as the agent progresses through execution phases.
     status: RunStatus,
-    context_snapshot_id: Option<Uuid>,
-    #[serde(default)]
-    agent_instances: Vec<AgentInstance>,
+    /// Optional [`ContextSnapshot`](super::context::ContextSnapshot)
+    /// captured at Run creation time.
+    ///
+    /// Records the file tree, documentation fragments, and other
+    /// static context the agent observed when the Run began. Used
+    /// for reproducibility: given the same snapshot and Plan, the
+    /// agent should produce equivalent results. `None` when no
+    /// snapshot was captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot: Option<Uuid>,
+    /// Chronological list of [`PatchSet`](super::patchset::PatchSet)
+    /// IDs generated during this Run.
+    ///
+    /// Append-only — each new PatchSet is pushed to the end. The
+    /// last entry is the most recent candidate. A Run may produce
+    /// multiple PatchSets when the agent iterates on validation
+    /// failures (step ⑦ → ⑧ retry loop). Empty when no PatchSet
+    /// has been generated yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    patchsets: Vec<Uuid>,
+    /// Execution metrics (token usage, timing, etc.).
+    ///
+    /// Free-form JSON for metrics not captured by
+    /// [`Provenance`](super::provenance::Provenance). For example,
+    /// wall-clock duration, number of tool calls, or retry count.
+    /// `None` when no metrics are available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     metrics: Option<serde_json::Value>,
+    /// Error message if the Run failed.
+    ///
+    /// Set when `status` transitions to `Failed`. Contains a
+    /// human-readable description of what went wrong. `None` while
+    /// the Run is in progress or completed successfully.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// Host [`Environment`] snapshot captured at Run creation time.
+    ///
+    /// Automatically populated by [`Run::new`] via
+    /// [`Environment::capture`]. Records OS, architecture, and
+    /// working directory for reproducibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     environment: Option<Environment>,
 }
 
@@ -122,25 +261,19 @@ impl Run {
     /// Create a new Run.
     ///
     /// # Arguments
-    /// * `repo_id` - Repository UUID
     /// * `created_by` - Actor (usually the Orchestrator)
-    /// * `task_id` - The Task this run belongs to
-    /// * `base_commit_sha` - The Git commit hash of the checkout
-    pub fn new(
-        repo_id: Uuid,
-        created_by: ActorRef,
-        task_id: Uuid,
-        base_commit_sha: impl AsRef<str>,
-    ) -> Result<Self, String> {
-        let base_commit_sha = base_commit_sha.as_ref().parse()?;
+    /// * `task` - The Task this run belongs to
+    /// * `commit` - The Git commit hash of the checkout
+    pub fn new(created_by: ActorRef, task: Uuid, commit: impl AsRef<str>) -> Result<Self, String> {
+        let commit = commit.as_ref().parse()?;
         Ok(Self {
-            header: Header::new(ObjectType::Run, repo_id, created_by)?,
-            task_id,
-            orchestrator_version: "libra-builtin".to_string(),
-            base_commit_sha,
+            header: Header::new(ObjectType::Run, created_by)?,
+            task,
+            plan: None,
+            commit,
             status: RunStatus::Created,
-            context_snapshot_id: None,
-            agent_instances: Vec::new(),
+            snapshot: None,
+            patchsets: Vec::new(),
             metrics: None,
             error: None,
             environment: Some(Environment::capture()),
@@ -151,28 +284,35 @@ impl Run {
         &self.header
     }
 
-    pub fn task_id(&self) -> Uuid {
-        self.task_id
+    pub fn task(&self) -> Uuid {
+        self.task
     }
 
-    pub fn orchestrator_version(&self) -> &str {
-        &self.orchestrator_version
+    /// Returns the Plan this Run is executing, if set.
+    pub fn plan(&self) -> Option<Uuid> {
+        self.plan
     }
 
-    pub fn base_commit_sha(&self) -> &IntegrityHash {
-        &self.base_commit_sha
+    /// Sets the Plan this Run will execute.
+    pub fn set_plan(&mut self, plan: Option<Uuid>) {
+        self.plan = plan;
+    }
+
+    pub fn commit(&self) -> &IntegrityHash {
+        &self.commit
     }
 
     pub fn status(&self) -> &RunStatus {
         &self.status
     }
 
-    pub fn context_snapshot_id(&self) -> Option<Uuid> {
-        self.context_snapshot_id
+    pub fn snapshot(&self) -> Option<Uuid> {
+        self.snapshot
     }
 
-    pub fn agent_instances(&self) -> &[AgentInstance] {
-        &self.agent_instances
+    /// Returns the chronological list of PatchSet IDs generated during this Run.
+    pub fn patchsets(&self) -> &[Uuid] {
+        &self.patchsets
     }
 
     pub fn metrics(&self) -> Option<&serde_json::Value> {
@@ -191,12 +331,13 @@ impl Run {
         self.status = status;
     }
 
-    pub fn set_context_snapshot_id(&mut self, context_snapshot_id: Option<Uuid>) {
-        self.context_snapshot_id = context_snapshot_id;
+    pub fn set_snapshot(&mut self, snapshot: Option<Uuid>) {
+        self.snapshot = snapshot;
     }
 
-    pub fn add_agent_instance(&mut self, instance: AgentInstance) {
-        self.agent_instances.push(instance);
+    /// Appends a PatchSet ID to this Run's generation history.
+    pub fn add_patchset(&mut self, patchset_id: Uuid) {
+        self.patchsets.push(patchset_id);
     }
 
     pub fn set_metrics(&mut self, metrics: Option<serde_json::Value>) {
@@ -251,12 +392,11 @@ mod tests {
 
     #[test]
     fn test_new_objects_creation() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::agent("test-agent").expect("actor");
         let base_hash = test_hash_hex();
 
         // Run with environment (auto captured)
-        let run = Run::new(repo_id, actor.clone(), Uuid::from_u128(0x1), &base_hash).expect("run");
+        let run = Run::new(actor.clone(), Uuid::from_u128(0x1), &base_hash).expect("run");
 
         let env = run.environment().unwrap();
         // Check if it captured real values (assuming we are running on some OS)

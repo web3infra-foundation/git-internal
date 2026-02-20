@@ -98,6 +98,10 @@ pub enum GitError {
     #[error("Not a valid agent tool invocation object: {0}")]
     InvalidToolInvocationObject(String),
 
+    /// Malformed context pipeline object.
+    #[error("Not a valid agent context pipeline object: {0}")]
+    InvalidContextPipelineObject(String),
+
     /// Malformed or unsupported index (.idx) file.
     #[error("The `{0}` is not a valid idx file.")]
     InvalidIdxFile(String),

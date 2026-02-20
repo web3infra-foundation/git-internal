@@ -267,11 +267,14 @@ pub fn read_delta_object_size<R: Read>(stream: &mut R) -> io::Result<(usize, usi
 /// <br> "`<type> <size>\0<content>`"
 /// <br> data: The decompressed content of the object
 pub fn calculate_object_hash(obj_type: ObjectType, data: &Vec<u8>) -> ObjectHash {
+    let type_bytes = obj_type
+        .to_bytes()
+        .expect("calculate_object_hash called with a delta type that has no loose-object header");
     match get_hash_kind() {
         crate::hash::HashKind::Sha1 => {
             let mut hash = Sha1::new();
             // Header: "<type> <size>\0"
-            hash.update(obj_type.to_bytes());
+            hash.update(type_bytes);
             hash.update(b" ");
             hash.update(data.len().to_string());
             hash.update(b"\0");
@@ -285,7 +288,7 @@ pub fn calculate_object_hash(obj_type: ObjectType, data: &Vec<u8>) -> ObjectHash
         crate::hash::HashKind::Sha256 => {
             let mut hash = sha2::Sha256::new();
             // Header: "<type> <size>\0"
-            hash.update(obj_type.to_bytes());
+            hash.update(type_bytes);
             hash.update(b" ");
             hash.update(data.len().to_string());
             hash.update(b"\0");
