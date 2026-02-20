@@ -64,6 +64,7 @@ pub enum ObjectType {
     Task,
     Intent,
     ToolInvocation,
+    ContextPipeline,
 }
 
 const COMMIT_OBJECT_TYPE: &[u8] = b"commit";
@@ -80,6 +81,7 @@ const RUN_OBJECT_TYPE: &[u8] = b"run";
 const TASK_OBJECT_TYPE: &[u8] = b"task";
 const INTENT_OBJECT_TYPE: &[u8] = b"intent";
 const TOOL_INVOCATION_OBJECT_TYPE: &[u8] = b"invocation";
+const CONTEXT_PIPELINE_OBJECT_TYPE: &[u8] = b"pipeline";
 
 /// Display trait for Git objects type
 impl Display for ObjectType {
@@ -102,6 +104,7 @@ impl Display for ObjectType {
             ObjectType::Task => write!(f, "task"),
             ObjectType::Intent => write!(f, "intent"),
             ObjectType::ToolInvocation => write!(f, "invocation"),
+            ObjectType::ContextPipeline => write!(f, "pipeline"),
         }
     }
 }
@@ -161,6 +164,7 @@ impl ObjectType {
             ObjectType::Task => TASK_OBJECT_TYPE,
             ObjectType::Intent => INTENT_OBJECT_TYPE,
             ObjectType::ToolInvocation => TOOL_INVOCATION_OBJECT_TYPE,
+            ObjectType::ContextPipeline => CONTEXT_PIPELINE_OBJECT_TYPE,
             _ => panic!("can put compute the delta hash value"),
         }
     }
@@ -182,6 +186,7 @@ impl ObjectType {
             "task" => Ok(ObjectType::Task),
             "intent" => Ok(ObjectType::Intent),
             "invocation" => Ok(ObjectType::ToolInvocation),
+            "pipeline" => Ok(ObjectType::ContextPipeline),
             _ => Err(GitError::InvalidObjectType(s.to_string())),
         }
     }
@@ -207,6 +212,7 @@ impl ObjectType {
             ObjectType::ToolInvocation => Ok(vec![
                 0x69, 0x6e, 0x76, 0x6f, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e,
             ]), // invocation
+            ObjectType::ContextPipeline => Ok(vec![0x70, 0x69, 0x70, 0x65, 0x6c, 0x69, 0x6e, 0x65]), // pipeline
             _ => Err(GitError::InvalidObjectType(self.to_string())),
         }
     }
@@ -231,6 +237,7 @@ impl ObjectType {
             ObjectType::Task => 15,
             ObjectType::Intent => 16,
             ObjectType::ToolInvocation => 17,
+            ObjectType::ContextPipeline => 18,
         }
     }
 
@@ -254,6 +261,7 @@ impl ObjectType {
             15 => Ok(ObjectType::Task),
             16 => Ok(ObjectType::Intent),
             17 => Ok(ObjectType::ToolInvocation),
+            18 => Ok(ObjectType::ContextPipeline),
             _ => Err(GitError::InvalidObjectType(format!(
                 "Invalid object type number: {number}"
             ))),
@@ -279,6 +287,7 @@ impl ObjectType {
             ObjectType::Task => true,
             ObjectType::Intent => true,
             ObjectType::ToolInvocation => true,
+            ObjectType::ContextPipeline => true,
         }
     }
 
@@ -297,6 +306,7 @@ impl ObjectType {
                 | ObjectType::Task
                 | ObjectType::Intent
                 | ObjectType::ToolInvocation
+                | ObjectType::ContextPipeline
         )
     }
 }
@@ -561,6 +571,13 @@ fn default_updated_at() -> DateTime<Utc> {
     Utc::now()
 }
 
+fn default_header_version() -> u32 {
+    1
+}
+
+/// Current header format version for newly created objects.
+pub const CURRENT_HEADER_VERSION: u32 = 1;
+
 /// Header shared by all AI Process Objects.
 ///
 /// Contains standard metadata like ID, type, creator, and timestamps.
@@ -571,7 +588,7 @@ fn default_updated_at() -> DateTime<Utc> {
 ///
 /// ```rust,ignore
 /// #[derive(Serialize, Deserialize)]
-/// pub struct MyObject {
+/// pub struct AIObject {
 ///     #[serde(flatten)]
 ///     header: Header,
 ///     // specific fields...
@@ -584,10 +601,12 @@ pub struct Header {
     object_id: Uuid,
     /// Object type (task/run/patchset/...)
     object_type: ObjectType,
-    /// Model version
+    /// Format version of the Header struct itself.
+    /// Defaults to 1 when deserializing old data that lacks this field.
+    #[serde(default = "default_header_version")]
+    header_version: u32,
+    /// Per-object-type schema version for body fields.
     schema_version: u32,
-    /// Repository identifier
-    repo_id: Uuid,
     /// Creation time
     created_at: DateTime<Utc>,
     #[serde(default = "default_updated_at")]
@@ -613,19 +632,14 @@ impl Header {
     /// # Arguments
     ///
     /// * `object_type` - The specific type of the AI object.
-    /// * `repo_id` - The UUID of the repository this object belongs to.
     /// * `created_by` - The actor (human/agent) creating this object.
-    pub fn new(
-        object_type: ObjectType,
-        repo_id: Uuid,
-        created_by: ActorRef,
-    ) -> Result<Self, String> {
+    pub fn new(object_type: ObjectType, created_by: ActorRef) -> Result<Self, String> {
         let now = Utc::now();
         Ok(Self {
             object_id: Uuid::now_v7(),
             object_type,
+            header_version: CURRENT_HEADER_VERSION,
             schema_version: 1,
-            repo_id,
             created_at: now,
             updated_at: now,
             created_by,
@@ -644,12 +658,12 @@ impl Header {
         &self.object_type
     }
 
-    pub fn schema_version(&self) -> u32 {
-        self.schema_version
+    pub fn header_version(&self) -> u32 {
+        self.header_version
     }
 
-    pub fn repo_id(&self) -> Uuid {
-        self.repo_id
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
     }
 
     pub fn created_at(&self) -> DateTime<Utc> {
@@ -690,6 +704,14 @@ impl Header {
 
     pub fn set_object_type(&mut self, object_type: ObjectType) -> Result<(), String> {
         self.object_type = object_type;
+        Ok(())
+    }
+
+    pub fn set_header_version(&mut self, header_version: u32) -> Result<(), String> {
+        if header_version == 0 {
+            return Err("header_version must be greater than 0".to_string());
+        }
+        self.header_version = header_version;
         Ok(())
     }
 
@@ -813,16 +835,50 @@ mod tests {
 
     #[test]
     fn test_header_serialization() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::human("jackie").expect("actor");
-        let header = Header::new(ObjectType::Task, repo_id, actor).expect("header");
+        let header = Header::new(ObjectType::Task, actor).expect("header");
 
         let json = serde_json::to_string(&header).unwrap();
         let deserialized: Header = serde_json::from_str(&json).unwrap();
 
         assert_eq!(header.object_id(), deserialized.object_id());
         assert_eq!(header.object_type(), deserialized.object_type());
-        assert_eq!(header.repo_id(), deserialized.repo_id());
+        assert_eq!(header.header_version(), deserialized.header_version());
+    }
+
+    #[test]
+    fn test_header_version_new_uses_current() {
+        let actor = ActorRef::human("jackie").expect("actor");
+        let header = Header::new(ObjectType::Task, actor).expect("header");
+        assert_eq!(
+            header.header_version(),
+            crate::internal::object::types::CURRENT_HEADER_VERSION
+        );
+    }
+
+    #[test]
+    fn test_header_version_defaults_on_missing() {
+        // Simulate old serialized data without header_version
+        let json = r#"{
+            "object_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "object_type": "task",
+            "schema_version": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "created_by": {"kind": "human", "id": "jackie"},
+            "visibility": "private"
+        }"#;
+        let header: Header = serde_json::from_str(json).unwrap();
+        assert_eq!(header.header_version(), 1);
+    }
+
+    #[test]
+    fn test_header_version_setter_rejects_zero() {
+        let actor = ActorRef::human("jackie").expect("actor");
+        let mut header = Header::new(ObjectType::Task, actor).expect("header");
+        assert!(header.set_header_version(0).is_err());
+        assert!(header.set_header_version(3).is_ok());
+        assert_eq!(header.header_version(), 3);
     }
 
     #[test]
@@ -854,9 +910,8 @@ mod tests {
 
     #[test]
     fn test_header_checksum() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, repo_id, actor).expect("header");
+        let mut header = Header::new(ObjectType::Task, actor).expect("header");
         // Fix time for deterministic checksum
         header.set_created_at(
             DateTime::parse_from_rfc3339("2026-02-10T00:00:00Z")
@@ -917,9 +972,8 @@ mod tests {
 
     #[test]
     fn test_header_seal() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, repo_id, actor).expect("header");
+        let mut header = Header::new(ObjectType::Task, actor).expect("header");
 
         let content = serde_json::json!({"key": "value"});
         header.seal(&content).expect("seal");
@@ -932,9 +986,8 @@ mod tests {
 
     #[test]
     fn test_header_updated_at_on_seal() {
-        let repo_id = Uuid::from_u128(0x0123456789abcdef0123456789abcdef);
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, repo_id, actor).expect("header");
+        let mut header = Header::new(ObjectType::Task, actor).expect("header");
 
         let before = header.updated_at();
         let content = serde_json::json!({"key": "value"});
