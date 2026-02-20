@@ -567,10 +567,6 @@ impl ArtifactRef {
     }
 }
 
-fn default_updated_at() -> DateTime<Utc> {
-    Utc::now()
-}
-
 fn default_header_version() -> u32 {
     1
 }
@@ -595,7 +591,7 @@ pub const CURRENT_HEADER_VERSION: u32 = 1;
 /// }
 /// ```
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Header {
     /// Global unique ID (UUID v7)
     object_id: Uuid,
@@ -609,7 +605,11 @@ pub struct Header {
     schema_version: u32,
     /// Creation time
     created_at: DateTime<Utc>,
-    #[serde(default = "default_updated_at")]
+    /// Last modification time.
+    ///
+    /// When deserializing legacy data that lacks this field, falls back
+    /// to `created_at` for deterministic behavior (see custom
+    /// `Deserialize` impl below).
     updated_at: DateTime<Utc>,
     /// Creator
     created_by: ActorRef,
@@ -624,6 +624,51 @@ pub struct Header {
     /// Content checksum (optional)
     #[serde(default)]
     checksum: Option<IntegrityHash>,
+}
+
+/// Custom `Deserialize` for [`Header`] so that a missing `updated_at`
+/// falls back to `created_at` instead of `Utc::now()`.  This avoids
+/// nondeterministic metadata when loading legacy objects that predate
+/// the `updated_at` field.
+impl<'de> Deserialize<'de> for Header {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawHeader {
+            object_id: Uuid,
+            object_type: ObjectType,
+            #[serde(default = "default_header_version")]
+            header_version: u32,
+            schema_version: u32,
+            created_at: DateTime<Utc>,
+            updated_at: Option<DateTime<Utc>>,
+            created_by: ActorRef,
+            visibility: Visibility,
+            #[serde(default)]
+            tags: HashMap<String, String>,
+            #[serde(default)]
+            external_ids: HashMap<String, String>,
+            #[serde(default)]
+            checksum: Option<IntegrityHash>,
+        }
+
+        let raw = RawHeader::deserialize(deserializer)?;
+        Ok(Header {
+            object_id: raw.object_id,
+            object_type: raw.object_type,
+            header_version: raw.header_version,
+            schema_version: raw.schema_version,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at.unwrap_or(raw.created_at),
+            created_by: raw.created_by,
+            visibility: raw.visibility,
+            tags: raw.tags,
+            external_ids: raw.external_ids,
+            checksum: raw.checksum,
+        })
+    }
 }
 
 impl Header {

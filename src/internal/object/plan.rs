@@ -222,6 +222,12 @@ impl StepStatusEntry {
     }
 }
 
+/// Default for [`PlanStep::statuses`] when deserializing legacy data
+/// that lacks the `statuses` field.
+fn default_step_statuses() -> Vec<StepStatusEntry> {
+    vec![StepStatusEntry::new(StepStatus::Pending, None)]
+}
+
 /// A single step within a [`Plan`], describing one unit of work.
 ///
 /// Steps are executed in order by the agent. Each step can be either
@@ -288,6 +294,12 @@ pub struct PlanStep {
     ///
     /// Initialized with a single `Pending` entry at creation. The
     /// current status is always `statuses.last().status`.
+    ///
+    /// `#[serde(default)]` ensures backward compatibility with the
+    /// legacy schema that used a single `status: PlanStatus` field.
+    /// When deserializing old data that lacks `statuses`, the default
+    /// produces a single `Pending` entry.
+    #[serde(default = "default_step_statuses")]
     statuses: Vec<StepStatusEntry>,
 }
 

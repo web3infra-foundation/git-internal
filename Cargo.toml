@@ -10,7 +10,6 @@ documentation = "https://libra.tools/docs/internal"
 readme = "README.md"
 homepage = "https://libra.tools"
 repository = "https://github.com/web3infra-foundation/libra"
-license-file = "LICENSE"
 license = "MIT"
 exclude = ["tests", ".github"]
 
