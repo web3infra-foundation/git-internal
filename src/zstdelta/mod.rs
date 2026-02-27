@@ -146,9 +146,9 @@ pub fn apply(base: &[u8], delta: &[u8]) -> io::Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use chacha20::ChaCha20Rng;
     use quickcheck::quickcheck;
-    use rand::{RngCore, SeedableRng};
-    use rand_chacha::ChaChaRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
 
@@ -174,7 +174,7 @@ mod tests {
     fn test_delta_efficiency() {
         // 1 MB incompressible random data
         let mut base = vec![0u8; 1000000];
-        let mut rng = ChaChaRng::from_seed([0; 32]);
+        let mut rng = ChaCha20Rng::from_seed([0; 32]);
         rng.fill_bytes(&mut base);
         // Change a few bytes
         let mut data = base.clone();

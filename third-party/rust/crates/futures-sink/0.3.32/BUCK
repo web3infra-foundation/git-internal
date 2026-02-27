@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "futures-sink-vendor",
-    urls = ["https://static.crates.io/crates/futures-sink/futures-sink-0.3.31.crate"],
-    sha256 = "e575fab7d1e0dcb8d0c7bcf9a63ee213816ab51902e6d244a95819acacf1d4f7",
+    urls = ["https://static.crates.io/crates/futures-sink/futures-sink-0.3.32.crate"],
+    sha256 = "c39754e157331b013978ec91992bde1ac089843443c49cbc7f46150b0fad0893",
     type = "tar.gz",
-    strip_prefix = "futures-sink-0.3.31",
+    strip_prefix = "futures-sink-0.3.32",
     out = "vendor",
 )
 

@@ -26,7 +26,10 @@ rust_library(
     env = {
         "OUT_DIR": "$(location :getrandom-build-script-run[out_dir])",
     },
-    features = ["sys_rng"],
+    features = [
+        "std",
+        "sys_rng",
+    ],
     rustc_flags = [
         "@$(location :getrandom-build-script-run[rustc_flags])",
         "@$(location :getrandom-manifest[env_flags])",
@@ -49,7 +52,10 @@ rust_binary(
     crate = "build_script_build",
     crate_root = "vendor/build.rs",
     edition = "2024",
-    features = ["sys_rng"],
+    features = [
+        "std",
+        "sys_rng",
+    ],
     rustc_flags = ["@$(location :getrandom-manifest[env_flags])"],
     visibility = [],
 )
@@ -59,7 +65,10 @@ buildscript_run(
     package_name = "getrandom",
     buildscript_rule = ":getrandom-build-script-build",
     env_srcs = [":getrandom-manifest[env_dict]"],
-    features = ["sys_rng"],
+    features = [
+        "std",
+        "sys_rng",
+    ],
     version = "0.4.1",
     manifest_dir = ":getrandom-vendor",
     visibility = ["PUBLIC"],
