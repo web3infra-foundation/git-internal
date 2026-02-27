@@ -38,8 +38,8 @@ rust_library(
     rustc_flags = ["@$(location :tower-manifest[env_flags])"],
     visibility = ["PUBLIC"],
     deps = [
-        "//third-party/rust/crates/futures-core/0.3.31:futures-core",
-        "//third-party/rust/crates/futures-util/0.3.31:futures-util",
+        "//third-party/rust/crates/futures-core/0.3.32:futures-core",
+        "//third-party/rust/crates/futures-util/0.3.32:futures-util",
         "//third-party/rust/crates/pin-project-lite/0.2.16:pin-project-lite",
         "//third-party/rust/crates/sync_wrapper/1.0.2:sync_wrapper",
         "//third-party/rust/crates/tokio/1.49.0:tokio",

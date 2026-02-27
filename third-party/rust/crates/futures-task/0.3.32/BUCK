@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "futures-task-vendor",
-    urls = ["https://static.crates.io/crates/futures-task/futures-task-0.3.31.crate"],
-    sha256 = "f90f7dce0722e95104fcb095585910c0977252f286e354b5e3bd38902cd99988",
+    urls = ["https://static.crates.io/crates/futures-task/futures-task-0.3.32.crate"],
+    sha256 = "037711b3d59c33004d3856fbdc83b99d4ff37a24768fa1be9ce3538a1cde4393",
     type = "tar.gz",
-    strip_prefix = "futures-task-0.3.31",
+    strip_prefix = "futures-task-0.3.32",
     out = "vendor",
 )
 

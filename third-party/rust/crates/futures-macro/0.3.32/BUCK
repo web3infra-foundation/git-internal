@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "futures-macro-vendor",
-    urls = ["https://static.crates.io/crates/futures-macro/futures-macro-0.3.31.crate"],
-    sha256 = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650",
+    urls = ["https://static.crates.io/crates/futures-macro/futures-macro-0.3.32.crate"],
+    sha256 = "e835b70203e41293343137df5c0664546da5745f82ec9b84d40be8336958447b",
     type = "tar.gz",
-    strip_prefix = "futures-macro-0.3.31",
+    strip_prefix = "futures-macro-0.3.32",
     out = "vendor",
 )
 

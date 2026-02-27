@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "futures-core-vendor",
-    urls = ["https://static.crates.io/crates/futures-core/futures-core-0.3.31.crate"],
-    sha256 = "05f29059c0c2090612e8d742178b0580d2dc940c837851ad723096f87af6663e",
+    urls = ["https://static.crates.io/crates/futures-core/futures-core-0.3.32.crate"],
+    sha256 = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d",
     type = "tar.gz",
-    strip_prefix = "futures-core-0.3.31",
+    strip_prefix = "futures-core-0.3.32",
     out = "vendor",
 )
 

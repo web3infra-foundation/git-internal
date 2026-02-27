@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "futures-channel-vendor",
-    urls = ["https://static.crates.io/crates/futures-channel/futures-channel-0.3.31.crate"],
-    sha256 = "2dff15bf788c671c1934e366d07e30c1814a8ef514e1af724a602e8a2fbe1b10",
+    urls = ["https://static.crates.io/crates/futures-channel/futures-channel-0.3.32.crate"],
+    sha256 = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d",
     type = "tar.gz",
-    strip_prefix = "futures-channel-0.3.31",
+    strip_prefix = "futures-channel-0.3.32",
     out = "vendor",
 )
 
@@ -33,7 +33,7 @@ rust_library(
     rustc_flags = ["@$(location :futures-channel-manifest[env_flags])"],
     visibility = ["PUBLIC"],
     deps = [
-        "//third-party/rust/crates/futures-core/0.3.31:futures-core",
-        "//third-party/rust/crates/futures-sink/0.3.31:futures-sink",
+        "//third-party/rust/crates/futures-core/0.3.32:futures-core",
+        "//third-party/rust/crates/futures-sink/0.3.32:futures-sink",
     ],
 )
