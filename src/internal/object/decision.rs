@@ -8,11 +8,18 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//! Task ──runs──▶ Run ──patchsets──▶ [PatchSet₀, PatchSet₁, ...]
-//!                  │
-//!                  └──(terminal)──▶ Decision
-//!                                     ├── chosen_patchset ──▶ PatchSet
-//!                                     └── evidence (via Evidence.decision)
+//! ⑤ Run
+//!    ├─ PatchSet*     (⑦)
+//!    ├─ Evidence*     (⑧)
+//!    └─▶ ⑨ Decision (terminal for this Run)
+//!                      │
+//!                      ├─ Commit   → applied patch recorded in Intent/Task context
+//!                      ├─ Checkpoint→ saved progress
+//!                      ├─ Retry    → new Run for same Task
+//!                      └─ Abandon/Rollback → stop or revert
+//!                               │
+//!                               ▼
+//!                           ⑩ Intent terminalization
 //! ```
 //!
 //! A Decision is created **once per Run**, at the end of execution.
@@ -128,6 +135,7 @@ impl From<&str> for DecisionType {
 /// Created once per Run at the end of execution. See module
 /// documentation for lifecycle position and decision type semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Decision {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]

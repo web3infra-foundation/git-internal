@@ -9,13 +9,12 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//! Run ──patchsets──▶ [PatchSet₀, ...]
-//!  │
-//!  ├── evidence ──▶ [Evidence₀, ...]
-//!  │
-//!  └── tool invocations ──▶ [ToolInvocation₀, ToolInvocation₁, ...]
-//!                                  │
-//!                                  └── io_footprint (paths read/written)
+//! ⑤ Run
+//!   └─ execution loop ──▶ [ToolInvocation₀, ToolInvocation₁, ...] (⑥)
+//!                          │
+//!                          ├─ updates io_footprint (paths read/written)
+//!                          ├─ supports PatchSet generation (⑦)
+//!                          └─ feeds Evidence (⑧)
 //! ```
 //!
 //! ToolInvocations are produced **throughout** a Run, one per tool
@@ -79,6 +78,7 @@ impl fmt::Display for ToolStatus {
 /// Used for dependency tracking (which inputs influenced which
 /// outputs) and for cache invalidation on incremental re-runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IoFootprint {
     /// Paths the tool read during execution (e.g. source files,
     /// config files). Relative to the repository root.
@@ -96,6 +96,7 @@ pub struct IoFootprint {
 /// ToolInvocations within a Run forms the agent's action log. See
 /// module documentation for lifecycle position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolInvocation {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]

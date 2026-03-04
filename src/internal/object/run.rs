@@ -12,31 +12,31 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//!  ④  Task ──runs──▶ [Run₀, Run₁, ...]
-//!                        │
-//!                        ▼
+//!  ④ Task
+//!     │
+//!     └──runs──▶ [Run₀, Run₁, ...]
+//!                            │
+//!                            ▼
 //!  ⑤  Run (Created → Patching → Validating → Completed/Failed)
 //!       │
-//!       ├──task──▶ Task          (mandatory, 1:1)
-//!       ├──plan──▶ Plan          (snapshot reference)
-//!       ├──snapshot──▶ ContextSnapshot  (optional)
+//!       ├─ task ──▶ Task          (mandatory, 1:1)
+//!       ├─ plan ──▶ Plan          (snapshot reference)
+//!       ├─ snapshot ──▶ ContextSnapshot (optional, static)
+//!       ├─ provenance ──▶ Provenance (1:1, sibling)
 //!       │
-//!       │  ┌─── agent execution loop ───┐
-//!       │  │                            │
-//!       │  │  ⑥ ToolInvocation (1:N)    │
-//!       │  │       │                    │
-//!       │  │       ▼                    │
-//!       │  │  ⑦ PatchSet (Proposed)     │
-//!       │  │       │                    │
-//!       │  │       ▼                    │
-//!       │  │  ⑧ Evidence (1:N)          │
-//!       │  │       │                    │
-//!       │  │       ├─ pass ─────────────┘
-//!       │  │       └─ fail → new PatchSet
-//!       │  └────────────────────────────┘
-//!       │
-//!       ▼
-//!  ⑨  Decision (terminal verdict)
+//!       │  ┌─── verification loop ───┐
+//!       │  │                        │
+//!       │  │  ⑥ ToolInvocation (1:N) │
+//!       │  │         │              │
+//!       │  │         ▼              │
+//!       │  │  ⑦ PatchSet (Proposed) │
+//!       │  │         │              │
+//!       │  │         ▼              │
+//!       │  │  ⑧ Evidence (1:N)      │
+//!       │  │         │              │
+//!       │  │         ├─ pass ───────┴────▶ ⑨ Decision
+//!       │  │         └─ fail → retry in same Run/next Run
+//!       │  └────────────────────────┘
 //! ```
 //!
 //! # Status Transitions
@@ -140,6 +140,7 @@ impl fmt::Display for RunStatus {
 /// `extra` map allows capturing additional environment details
 /// (e.g. tool versions, environment variables) without schema changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Environment {
     /// Operating system identifier (e.g. "macos", "linux", "windows").
     pub os: String,
@@ -176,6 +177,7 @@ impl Environment {
 /// See module documentation for lifecycle, relationships, and
 /// status transitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Run {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]

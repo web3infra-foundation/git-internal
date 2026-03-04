@@ -1,7 +1,7 @@
 //! AI Plan Definition
 //!
 //! A [`Plan`] is a sequence of [`PlanStep`]s derived from an
-//! [`Intent`](super::intent::Intent)'s analyzed content. It defines
+//! [`Intent`](super::intent::Intent)'s analyzed spec. It defines
 //! *what* to do — the strategy and decomposition — while
 //! [`Run`](super::run::Run) handles *how* to execute it. The Plan is
 //! step ③ in the end-to-end flow described in [`mod.rs`](super).
@@ -9,19 +9,18 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//!  ②  Intent (Active)       ← content analyzed
+//!  ②  Intent (Active, spec present)
 //!       │
-//!       ├──▶ ContextPipeline ← seeded with IntentAnalysis frame
+//!       ├─ seeds ContextPipeline with IntentAnalysis
 //!       │
-//!       ▼
-//!  ③  Plan (pipeline, fwindow, steps)
-//!       │
-//!       ├─ PlanStep₀ (inline)
-//!       ├─ PlanStep₁ ──task──▶ sub-Task (recursive)
-//!       └─ PlanStep₂ (inline)
-//!       │
-//!       ▼
-//!  ④  Task ──runs──▶ Run ──plan──▶ Plan (snapshot reference)
+//!       └─→ ③ Plan (pipeline, fwindow, steps)
+//!                │
+//!                ├─ PlanStep₀ (inline)
+//!                ├─ PlanStep₁ ──task──▶ sub-Task
+//!                └─ PlanStep₂ (inline)
+//!                       │
+//!                       ▼
+//!                    ④ Task (execution target)
 //! ```
 //!
 //! # Revision Chain
@@ -195,6 +194,7 @@ impl fmt::Display for StepStatus {
 /// Each transition appends a new entry; entries are never removed
 /// or mutated, forming an append-only audit log.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct StepStatusEntry {
     /// The [`StepStatus`] that was entered by this transition.
     status: StepStatus,
@@ -230,12 +230,6 @@ impl StepStatusEntry {
     }
 }
 
-/// Default for [`PlanStep::statuses`] when deserializing legacy data
-/// that lacks the `statuses` field.
-fn default_step_statuses() -> Vec<StepStatusEntry> {
-    vec![StepStatusEntry::new(StepStatus::Pending, None)]
-}
-
 /// A single step within a [`Plan`], describing one unit of work.
 ///
 /// Steps are executed in order by the agent. Each step can be either
@@ -243,12 +237,11 @@ fn default_step_statuses() -> Vec<StepStatusEntry> {
 /// (spawning a sub-Task via the `task` field). See module documentation
 /// for context tracking and recursive decomposition details.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PlanStep {
     /// Human-readable description of what this step should accomplish.
     ///
-    /// Set once at creation. The `alias = "intent"` supports legacy
-    /// serialized data where this field was named `intent`.
-    #[serde(alias = "intent")]
+    /// Human-readable description of the step.
     description: String,
     /// Expected inputs for this step as a JSON value.
     ///
@@ -303,14 +296,9 @@ pub struct PlanStep {
     task: Option<Uuid>,
     /// Append-only chronological history of status transitions.
     ///
-    /// Initialized with a single `Pending` entry at creation. The
-    /// current status is always `statuses.last().status`.
-    ///
-    /// `#[serde(default)]` ensures backward compatibility with the
-    /// legacy schema that used a single `status: PlanStatus` field.
-    /// When deserializing old data that lacks `statuses`, the default
-    /// produces a single `Pending` entry.
-    #[serde(default = "default_step_statuses")]
+    /// Initialized with a single `Pending` entry in [`PlanStep::new`].
+    /// This field is required when deserializing. Omit it only in
+    /// data produced by `PlanStep::new` during in-memory construction.
     statuses: Vec<StepStatusEntry>,
 }
 
@@ -414,7 +402,7 @@ impl PlanStep {
     }
 }
 
-/// A sequence of steps derived from an Intent's analyzed content.
+/// A sequence of steps derived from an Intent's analyzed spec.
 ///
 /// A Plan is a pure planning artifact — it defines *what* to do, not
 /// *how* to execute. It is step ③ in the end-to-end flow. A
@@ -422,6 +410,7 @@ impl PlanStep {
 /// execute it. See module documentation for revision chain, context
 /// range, and recursive decomposition details.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Plan {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -440,7 +429,7 @@ pub struct Plan {
     /// The [`ContextPipeline`](super::pipeline::ContextPipeline) that
     /// served as the context basis for this Plan.
     ///
-    /// Set when the Plan is created from an Intent's analyzed content.
+    /// Set when the Plan is created from an Intent's analyzed spec.
     /// The pipeline contains the [`ContextFrame`](super::pipeline::ContextFrame)s
     /// that informed this Plan's decomposition. `None` when no pipeline
     /// was used (e.g. a manually created Plan).
@@ -639,12 +628,12 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_step_deserializes_legacy_intent_field() {
+    fn test_plan_step_deserializes_description_field() {
         let step: PlanStep = serde_json::from_value(json!({
-            "intent": "run tests",
+            "description": "run tests",
             "statuses": [{"status": "pending", "changed_at": "2026-01-01T00:00:00Z"}]
         }))
-        .expect("deserialize legacy step");
+        .expect("deserialize step");
 
         assert_eq!(step.description(), "run tests");
     }

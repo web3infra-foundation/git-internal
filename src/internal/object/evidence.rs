@@ -8,13 +8,13 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//! Run ──patchsets──▶ [PatchSet₀, PatchSet₁, ...]
-//!  │                       │
-//!  │                       ▼
-//!  └──────────────▶ Evidence (run_id + optional patchset_id)
-//!                       │
-//!                       ▼
-//!                   Decision (uses Evidence to justify verdict)
+//! ⑥ ToolInvocation / ⑦ PatchSet
+//!      │              │
+//!      │              ▼
+//!      └──────────▶ Evidence (run_id + optional patchset_id)
+//!                         │
+//!                         ▼
+//!                     ⑨ Decision (verdict justification)
 //! ```
 //!
 //! Evidence is produced **during** a Run, typically after a PatchSet is
@@ -101,6 +101,7 @@ impl From<&str> for EvidenceKind {
 /// exist for the same PatchSet (one per validation tool). See module
 /// documentation for lifecycle position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Evidence {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]

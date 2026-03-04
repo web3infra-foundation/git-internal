@@ -10,12 +10,18 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//!  ⑤  Run ──snapshot──▶ ContextSnapshot (optional, static)
+//!  ②  Intent (Active)
 //!       │
-//!       ├──▶ ContextPipeline (dynamic, via Plan.pipeline)
-//!       │
-//!       ▼
-//!  ⑥  ToolInvocations ...
+//!       └─ plans → ContextPipeline (dynamic)
+//!            │
+//!            │  ③ Plan references pipeline + fwindow
+//!            ▼
+//!       ⑤  Run created
+//!            │
+//!            └─ context snapshot captured ──▶ ContextSnapshot (optional, static)
+//!                     │
+//!                     ▼
+//!                 Reproducible execution baseline
 //! ```
 //!
 //! A ContextSnapshot is created at step ⑤ when the Run is initialized.
@@ -140,6 +146,7 @@ pub enum ContextItemKind {
 /// module documentation for the three-layer design (`path` / `blob` /
 /// `preview`) and blob retention strategies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextItem {
     /// The kind of content this item represents. Determines how
     /// `path` and `blob` should be interpreted.
@@ -194,6 +201,7 @@ impl ContextItem {
 /// snippets, etc. the agent had access to. See module documentation
 /// for lifecycle position, item design, and blob retention.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextSnapshot {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]

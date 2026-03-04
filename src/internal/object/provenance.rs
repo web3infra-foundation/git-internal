@@ -9,11 +9,13 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//! Run ──(1:1)──▶ Provenance
-//!  │
-//!  ├── patchsets ──▶ [PatchSet₀, ...]
-//!  ├── evidence  ──▶ [Evidence₀, ...]
-//!  └── decision  ──▶ Decision
+//! ⑤ Run
+//!    ├─ (1:1)──▶ Provenance (LLM config + token usage)
+//!    ├─ patchsets ──▶ [PatchSet₀, ...]
+//!    ├─ evidence  ──▶ [Evidence₀, ...]
+//!    └─ decision  ──▶ Decision
+//!                     │
+//!                     └─ ties execution trace back to Intent / Task outcomes
 //! ```
 //!
 //! A Provenance is created **once per Run**, typically at run start
@@ -53,6 +55,7 @@ use crate::{
 /// from different LLM providers (OpenAI, Anthropic, etc.) can be
 /// compared directly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TokenUsage {
     /// Number of tokens in the prompt / input.
     pub input_tokens: u64,
@@ -85,6 +88,7 @@ impl TokenUsage {
 /// Created once per Run. See module documentation for lifecycle
 /// position and purpose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Provenance {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]

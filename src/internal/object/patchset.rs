@@ -8,9 +8,15 @@
 //! # Relationships
 //!
 //! ```text
-//! Run ──patchsets──▶ [PatchSet₀, PatchSet₁, ...]
+//! ⑤ Run
+//!    └─ patchsets ──▶ [PatchSet₀, PatchSet₁, ...]
 //!                        │
-//!                        └──run──▶ Run  (back-reference)
+//!                        └── run ──▶ Run (back-reference)
+//!                                  │
+//!                                  └─ decision branch after validation
+//!                                       │
+//!                                       ├─ evidence pass → Decision Commit
+//!                                       └─ evidence fail → emit new PatchSet
 //! ```
 //!
 //! - **Run** (bidirectional): `Run.patchsets` holds the forward reference
@@ -133,6 +139,7 @@ pub enum ChangeType {
 ///
 /// Provides a quick overview of what files are modified without parsing the full diff.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TouchedFile {
     pub path: String,
     pub change_type: ChangeType,
@@ -166,6 +173,7 @@ impl TouchedFile {
 /// [`Run.patchsets`](super::run::Run). The PatchSet itself does not
 /// carry a generation number or supersession list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchSet {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -182,7 +190,6 @@ pub struct PatchSet {
     /// `GitDiff` extends it with binary file support, rename detection,
     /// and mode-change headers. The orchestrator sets this at creation
     /// time based on the tool that generated the diff.
-    #[serde(alias = "diff_format")]
     format: DiffFormat,
     /// Reference to the actual diff content in object storage.
     ///
@@ -191,7 +198,6 @@ pub struct PatchSet {
     /// `None` while the diff is still being generated; set once the
     /// agent finishes producing the patch. Consumers fetch the artifact,
     /// then interpret it according to `format`.
-    #[serde(alias = "diff_artifact")]
     artifact: Option<ArtifactRef>,
     /// Lightweight summary of files modified in this PatchSet.
     ///
@@ -201,7 +207,7 @@ pub struct PatchSet {
     /// downloading or parsing the full diff artifact. The list is
     /// populated incrementally as the agent produces changes and should
     /// be consistent with the actual diff content.
-    #[serde(default, alias = "touched_files")]
+    #[serde(default)]
     touched: Vec<TouchedFile>,
     /// Human-readable explanation of the changes in this PatchSet.
     ///

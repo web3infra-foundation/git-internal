@@ -3,28 +3,14 @@
 //! This module defines the common metadata header shared by all AI process objects
 //! and the object type enumeration used across pack/object modules.
 
-use std::{
-    collections::HashMap,
-    fmt::{self, Display},
-};
+use std::fmt::{self, Display};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::integrity::{IntegrityHash, compute_integrity_hash};
+use super::integrity::IntegrityHash;
 use crate::errors::GitError;
-
-/// Visibility of an AI process object.
-///
-/// Determines whether the object is accessible only within the project (Private)
-/// or can be shared externally (Public).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Visibility {
-    Private,
-    Public,
-}
 
 /// In Git, each object type is assigned a unique integer value, which is used to identify the
 /// type of the object in Git repositories.
@@ -41,7 +27,7 @@ pub enum Visibility {
 ///   is stored as a hash of the base object.
 ///
 /// By assigning unique integer values to each Git object type, Git can easily and efficiently
-/// identify the type of an object and perform the appropriate operations on it. when parsing a Git
+/// identify the type of an object and perform the appropriate operations on it. When parsing a Git
 /// repository, Git can use the integer value of an object's type to determine how to parse
 /// the object's content.
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
@@ -83,7 +69,7 @@ const INTENT_OBJECT_TYPE: &[u8] = b"intent";
 const TOOL_INVOCATION_OBJECT_TYPE: &[u8] = b"invocation";
 const CONTEXT_PIPELINE_OBJECT_TYPE: &[u8] = b"pipeline";
 
-/// Display trait for Git objects type
+/// Display conversion for object type values.
 impl Display for ObjectType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -109,7 +95,7 @@ impl Display for ObjectType {
     }
 }
 
-/// Display trait for Git objects type
+/// Object type conversion helpers.
 impl ObjectType {
     /// Convert object type to 3-bit pack header type id.
     ///
@@ -174,7 +160,7 @@ impl ObjectType {
         }
     }
 
-    /// Parses a string representation of a Git object type and returns an ObjectType value
+    /// Parse a string representation of a Git object type and return an ObjectType value.
     pub fn from_string(s: &str) -> Result<ObjectType, GitError> {
         match s {
             "blob" => Ok(ObjectType::Blob),
@@ -304,7 +290,7 @@ impl ObjectType {
     }
 }
 
-/// Actor kind enum
+/// Actor kind enum.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActorKind {
@@ -355,13 +341,13 @@ impl From<&str> for ActorKind {
 /// Actor reference (who created/triggered).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActorRef {
-    /// Kind: human/agent/system/mcp_client
+    /// Actor kind: human, agent, system, mcp_client, or other.
     kind: ActorKind,
-    /// Subject ID (user/agent name or client ID)
+    /// Subject ID (user name, agent name, or client ID).
     id: String,
-    /// Display name (optional)
+    /// Display name (optional).
     display_name: Option<String>,
-    /// Auth context (optional, Libra usually empty)
+    /// Auth context (optional).
     auth_context: Option<String>,
 }
 
@@ -438,20 +424,20 @@ impl ActorRef {
     }
 }
 
-/// Artifact reference (external content).
+/// External content artifact reference.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArtifactRef {
-    /// Store type: local_fs/s3
+    /// Store type (for example, local_fs or s3).
     store: String,
-    /// Storage key (e.g., path or object key)
+    /// Storage key (for example, file path or object key).
     key: String,
-    /// MIME type (optional)
+    /// MIME type (optional).
     content_type: Option<String>,
-    /// Size in bytes (optional)
+    /// Size in bytes (optional).
     size_bytes: Option<u64>,
-    /// Content hash (strongly recommended)
+    /// Content hash (strongly recommended).
     hash: Option<IntegrityHash>,
-    /// Expiration time (optional)
+    /// Expiration time (optional).
     expires_at: Option<DateTime<Utc>>,
 }
 
@@ -529,7 +515,7 @@ impl ArtifactRef {
         self.expires_at = expires_at;
     }
 
-    /// Verify if the provided content matches the stored checksum
+    /// Verify whether the provided content matches the stored checksum.
     #[must_use = "handle integrity verification result"]
     pub fn verify_integrity(&self, content: &[u8]) -> Result<bool, String> {
         let stored_hash = self
@@ -540,7 +526,7 @@ impl ArtifactRef {
         Ok(IntegrityHash::compute(content) == *stored_hash)
     }
 
-    /// Check if two artifacts have the same content based on checksum
+    /// Check whether two artifacts have the same content based on checksum.
     #[must_use]
     pub fn content_eq(&self, other: &Self) -> Option<bool> {
         match (&self.hash, &other.hash) {
@@ -549,7 +535,7 @@ impl ArtifactRef {
         }
     }
 
-    /// Check if the artifact has expired
+    /// Check whether the artifact has expired.
     #[must_use]
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
@@ -560,14 +546,21 @@ impl ArtifactRef {
     }
 }
 
+/// Header version compatibility helper.
+/// Keeps behavior unchanged while preserving a safe default when older serialized data
+/// omits `header_version`.
 fn default_header_version() -> u32 {
-    1
+    if CURRENT_HEADER_VERSION == 1 {
+        CURRENT_HEADER_VERSION
+    } else {
+        1
+    }
 }
 
 /// Current header format version for newly created objects.
 pub const CURRENT_HEADER_VERSION: u32 = 1;
 
-/// Header shared by all AI Process Objects.
+/// Header shared by all AI objects.
 ///
 /// Contains standard metadata like ID, type, creator, and timestamps.
 ///
@@ -586,49 +579,32 @@ pub const CURRENT_HEADER_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Header {
-    /// Global unique ID (UUID v7)
+    /// Global unique ID (UUID v7).
     object_id: Uuid,
-    /// Object type (task/run/patchset/...)
+    /// Object type (for example, task, run, patchset).
     object_type: ObjectType,
     /// Format version of the Header struct itself.
-    /// Defaults to 1 when deserializing old data that lacks this field.
+    /// Defaults to 1 only when processing compatibility paths for
+    /// pre-compat versions.
     #[serde(default = "default_header_version")]
     header_version: u32,
     /// Per-object-type schema version for body fields.
     schema_version: u32,
-    /// Creation time
+    /// Creation time.
     created_at: DateTime<Utc>,
-    /// Last modification time.
-    ///
-    /// When deserializing legacy data that lacks this field, falls back
-    /// to `created_at` for deterministic behavior (see custom
-    /// `Deserialize` impl below).
-    updated_at: DateTime<Utc>,
-    /// Creator
+    /// Creator.
     created_by: ActorRef,
-    /// Visibility (fixed to private for Libra)
-    visibility: Visibility,
-    /// Search tags
-    #[serde(default)]
-    tags: HashMap<String, String>,
-    /// External ID mapping
-    #[serde(default)]
-    external_ids: HashMap<String, String>,
-    /// Content checksum (optional)
-    #[serde(default)]
-    checksum: Option<IntegrityHash>,
 }
 
-/// Custom `Deserialize` for [`Header`] so that a missing `updated_at`
-/// falls back to `created_at` instead of `Utc::now()`.  This avoids
-/// nondeterministic metadata when loading legacy objects that predate
-/// the `updated_at` field.
+/// Custom `Deserialize` for [`Header`] that materializes only
+/// current header fields.
 impl<'de> Deserialize<'de> for Header {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct RawHeader {
             object_id: Uuid,
             object_type: ObjectType,
@@ -636,15 +612,7 @@ impl<'de> Deserialize<'de> for Header {
             header_version: u32,
             schema_version: u32,
             created_at: DateTime<Utc>,
-            updated_at: Option<DateTime<Utc>>,
             created_by: ActorRef,
-            visibility: Visibility,
-            #[serde(default)]
-            tags: HashMap<String, String>,
-            #[serde(default)]
-            external_ids: HashMap<String, String>,
-            #[serde(default)]
-            checksum: Option<IntegrityHash>,
         }
 
         let raw = RawHeader::deserialize(deserializer)?;
@@ -654,12 +622,7 @@ impl<'de> Deserialize<'de> for Header {
             header_version: raw.header_version,
             schema_version: raw.schema_version,
             created_at: raw.created_at,
-            updated_at: raw.updated_at.unwrap_or(raw.created_at),
             created_by: raw.created_by,
-            visibility: raw.visibility,
-            tags: raw.tags,
-            external_ids: raw.external_ids,
-            checksum: raw.checksum,
         })
     }
 }
@@ -679,12 +642,7 @@ impl Header {
             header_version: CURRENT_HEADER_VERSION,
             schema_version: 1,
             created_at: now,
-            updated_at: now,
             created_by,
-            visibility: Visibility::Private,
-            tags: HashMap::new(),
-            external_ids: HashMap::new(),
-            checksum: None,
         })
     }
 
@@ -708,32 +666,8 @@ impl Header {
         self.created_at
     }
 
-    pub fn updated_at(&self) -> DateTime<Utc> {
-        self.updated_at
-    }
-
     pub fn created_by(&self) -> &ActorRef {
         &self.created_by
-    }
-
-    pub fn visibility(&self) -> &Visibility {
-        &self.visibility
-    }
-
-    pub fn tags(&self) -> &HashMap<String, String> {
-        &self.tags
-    }
-
-    pub fn tags_mut(&mut self) -> &mut HashMap<String, String> {
-        &mut self.tags
-    }
-
-    pub fn external_ids(&self) -> &HashMap<String, String> {
-        &self.external_ids
-    }
-
-    pub fn external_ids_mut(&mut self) -> &mut HashMap<String, String> {
-        &mut self.external_ids
     }
 
     pub fn set_object_id(&mut self, object_id: Uuid) {
@@ -763,40 +697,6 @@ impl Header {
 
     pub fn set_created_at(&mut self, created_at: DateTime<Utc>) {
         self.created_at = created_at;
-    }
-
-    pub fn set_updated_at(&mut self, updated_at: DateTime<Utc>) {
-        self.updated_at = updated_at;
-    }
-
-    pub fn set_visibility(&mut self, visibility: Visibility) {
-        self.visibility = visibility;
-    }
-
-    /// Accessor for checksum
-    pub fn checksum(&self) -> Option<&IntegrityHash> {
-        self.checksum.as_ref()
-    }
-
-    /// Seal the header by calculating and setting the checksum of the provided object.
-    /// The checksum field is temporarily cleared to keep sealing idempotent.
-    /// Also updates `updated_at` to the current time, since sealing
-    /// represents a semantic modification of the object.
-    ///
-    /// This is typically called just before storing the object to ensure `checksum` matches content.
-    pub fn seal<T: Serialize>(&mut self, object: &T) -> Result<(), serde_json::Error> {
-        let previous_checksum = self.checksum.take();
-        match compute_integrity_hash(object) {
-            Ok(checksum) => {
-                self.checksum = Some(checksum);
-                self.updated_at = Utc::now();
-                Ok(())
-            }
-            Err(err) => {
-                self.checksum = previous_checksum;
-                Err(err)
-            }
-        }
     }
 }
 
@@ -905,9 +805,7 @@ mod tests {
             "object_type": "task",
             "schema_version": 1,
             "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "created_by": {"kind": "human", "id": "jackie"},
-            "visibility": "private"
+            "created_by": {"kind": "human", "id": "jackie"}
         }"#;
         let header: Header = serde_json::from_str(json).unwrap();
         assert_eq!(header.header_version(), 1);
@@ -1009,34 +907,6 @@ mod tests {
             .expect("artifact")
             .with_hash_hex("bad_hash");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_header_seal() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, actor).expect("header");
-
-        let content = serde_json::json!({"key": "value"});
-        header.seal(&content).expect("seal");
-
-        assert!(header.checksum().is_some());
-        let expected =
-            crate::internal::object::integrity::compute_integrity_hash(&content).expect("checksum");
-        assert_eq!(header.checksum().expect("checksum"), &expected);
-    }
-
-    #[test]
-    fn test_header_updated_at_on_seal() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, actor).expect("header");
-
-        let before = header.updated_at();
-        let content = serde_json::json!({"key": "value"});
-
-        header.seal(&content).expect("seal");
-
-        let after = header.updated_at();
-        assert!(after >= before);
     }
 
     #[test]

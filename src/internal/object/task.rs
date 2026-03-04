@@ -9,15 +9,18 @@
 //!
 //! ```text
 //!  ③  Plan ──steps──▶ [PlanStep₀, PlanStep₁, ...]
-//!                          │
-//!                          ├─ inline (no task)
-//!                          └─ task ──▶ ④ Task
-//!                                        │
-//!                                        ├──▶ Run₀ ──plan──▶ Plan_v1
-//!                                        ├──▶ Run₁ ──plan──▶ Plan_v2
-//!                                        │
-//!                                        ▼
-//!                                    ⑤  Run (execution)
+//!                           │
+//!                           ├─ inline (no task)
+//!                           └─ task ──▶ ④ Task
+//!                                          │
+//!                                          ├──▶ Run₀ ──plan──▶ Plan_v1
+//!                                          ├──▶ Run₁ ──plan──▶ Plan_v2
+//!                                          │
+//!                                          ▼
+//!                                      ⑤  Run (execution loop)
+//!                                           │
+//!                                           ├─ ToolInvocation* → PatchSet* → Evidence*
+//!                                           └─ Decision
 //! ```
 //!
 //! # Status Transitions
@@ -203,6 +206,7 @@ impl FromStr for GoalType {
 /// See module documentation for lifecycle, relationships, and
 /// replanning semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Task {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -511,9 +515,7 @@ mod tests {
             "object_type": "task",
             "schema_version": 1,
             "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
             "created_by": {"kind": "human", "id": "jackie"},
-            "visibility": "private",
             "title": "old task",
             "status": "draft"
         });

@@ -9,42 +9,43 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//!  ②  Intent (Active)         ← content analyzed
+//!  ② Intent created (ContextPipeline created eagerly and retained)
 //!       │
 //!       ▼
-//!      ContextPipeline created ← seeded with IntentAnalysis frame
+//!  ContextPipeline
+//!       │
+//!       ├─ seeded by [`IntentAnalysis`](FrameKind::IntentAnalysis) after spec
+//!       │  analysis
 //!       │
 //!       ▼
-//!  ③  Plan (Plan.pipeline → Pipeline, Plan.fwindow = visible range)
-//!       │  steps execute
+//!  ③ Plan references pipeline + fwindow
+//!       │  StepSummary / CodeChange / ToolCall frames appended
 //!       ▼
-//!      Frames accumulate       ← StepSummary, CodeChange, ToolCall, ...
+//! ④ Task/Run
 //!       │
-//!       ▼
-//!      Replan? → new Plan with updated fwindow
+//!       └─ Replan? → new Plan with updated fwindow
 //! ```
 //!
-//! The pipeline is created *after* an Intent's content is analyzed
-//! (step ②) but *before* a Plan exists. The initial
-//! [`IntentAnalysis`](FrameKind::IntentAnalysis) frame captures the
-//! AI's structured interpretation, which serves as the foundation
-//! for Plan creation. The [`Plan`](super::plan::Plan) then references
-//! this pipeline via `pipeline` and records the visible frame range
-//! via `fwindow`. During execution, frames accumulate to track
-//! step-by-step progress.
+//! The pipeline is created when the Intent is created and linked from
+//! `Intent.context_pipeline`. After the spec is analyzed, it is seeded
+//! with a seed [`IntentAnalysis`](FrameKind::IntentAnalysis) frame, then
+//! referenced by `Plan.pipeline` as the context basis for planning.
 //!
 //! # Relationship to Other Objects
 //!
 //! ```text
-//! Intent ──plan──→ Plan ──pipeline──→ ContextPipeline
-//!                   │                        │
-//!              [PlanStep₀, ...]   [IntentAnalysis, StepSummary, ...]
-//!                   │                        ▲
-//!              iframes/oframes ──────────────┘
+//! Intent ──context_pipeline──→ ContextPipeline
+//!   │                                      │
+//!   └─plan────────────────────────────→ Plan ──pipeline──→ ContextPipeline
+//!                    │                                          │
+//!               [PlanStep₀, ...]          [IntentAnalysis, StepSummary, ...]
+//!                    │                                         ▲
+//!               iframes/oframes ───────────────────────────────┘
 //! ```
 //!
 //! | From | Field | To | Notes |
 //! |------|-------|----|-------|
+//! | Intent | `context_pipeline` | ContextPipeline | 1 |
 //! | Plan | `pipeline` | ContextPipeline | 0..1 |
 //! | PlanStep | `iframes` | ContextFrame IDs | consumed context |
 //! | PlanStep | `oframes` | ContextFrame IDs | produced context |
@@ -94,9 +95,9 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FrameKind {
-    /// Initial context derived from an Intent's analyzed content.
+    /// Initial context derived from an Intent's analyzed spec.
     ///
-    /// Created when the AI fills in the `content` field on an Intent,
+    /// Created when the AI fills in the `spec` field on an Intent,
     /// serving as the foundation for subsequent Plan creation. This
     /// is the **seed frame** — always the first frame in a pipeline.
     /// **Protected from eviction.**
@@ -163,6 +164,7 @@ impl fmt::Display for FrameKind {
 /// them; that association is tracked on the step side via `iframes`
 /// and `oframes`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextFrame {
     /// Stable monotonic identifier for this frame.
     ///
@@ -263,13 +265,15 @@ impl ContextFrame {
 /// A dynamic context pipeline that accumulates
 /// [`ContextFrame`]s throughout an AI workflow.
 ///
-/// Created when an [`Intent`](super::intent::Intent)'s content is
-/// first analyzed, seeded with an
-/// [`IntentAnalysis`](FrameKind::IntentAnalysis) frame. The
-/// [`Plan`](super::plan::Plan) references this pipeline via
+/// Created during [`Intent`](super::intent::Intent) creation and
+/// retained for context continuity across planning and execution.
+/// After the intent is analyzed (`spec` becomes available), it is
+/// seeded with an [`IntentAnalysis`](FrameKind::IntentAnalysis) frame.
+/// The [`Plan`](super::plan::Plan) then references this pipeline via
 /// `pipeline` as its context basis. See module documentation for
 /// lifecycle position, eviction rules, and purpose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextPipeline {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -311,9 +315,10 @@ pub struct ContextPipeline {
 impl ContextPipeline {
     /// Create a new empty pipeline.
     ///
-    /// After creation, seed it with an [`IntentAnalysis`](FrameKind::IntentAnalysis)
-    /// frame, then create a [`Plan`](super::plan::Plan) that references this
-    /// pipeline via `pipeline`.
+    /// The returned pipeline has no frames initially.
+    /// It is expected to be seeded later after an
+    /// [`Intent`](super::intent::Intent) is analyzed and then
+    /// referenced by a [`Plan`](super::plan::Plan).
     pub fn new(created_by: ActorRef) -> Result<Self, String> {
         Ok(Self {
             header: Header::new(ObjectType::ContextPipeline, created_by)?,

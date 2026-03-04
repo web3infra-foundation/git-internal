@@ -1,77 +1,64 @@
-//! AI Intent Definition
+//! AI Intent definition and lifecycle contract.
 //!
-//! An [`Intent`] is the **entry point** of every AI-assisted workflow — it
-//! captures the raw user request (`prompt`) and the AI's structured
-//! interpretation of that request (`content`). The Intent is the first
-//! object created (step ① → ②) and the last one completed (step ⑩) in
-//! the end-to-end flow described in [`mod.rs`](super).
+//! This module defines the `Intent` object used by the AI workflow and
+//! keeps the raw user request anchored to all downstream objects. It
+//! follows the same step chain in `docs/agent-workflow.md`:
+//! `User Query -> Intent -> Plan -> Task -> Run -> (ToolInvocation, PatchSet,
+//! Evidence) -> Decision -> Intent complete`.
 //!
-//! # Position in Lifecycle
+//! The workflow-level structured understanding is captured as `IntentSpec`
+//! (`goal`, `constraints`, `risk_level`) and serialized in the `spec`
+//! field. The full historical state is an append-only `statuses` vector;
+//! each transition writes a new [`StatusEntry`] with an immutable timestamp.
+//!
+//! # Position in the AI workflow
 //!
 //! ```text
-//!  ①  User input (natural-language request)
-//!       │
-//!       ▼
-//!  ②  Intent (Draft)        ← prompt recorded, content = None
-//!       │  AI analysis
-//!       ▼
-//!      Intent (Active)       ← content filled, plan linked
-//!       │
-//!       ├──▶ ContextPipeline ← seeded with IntentAnalysis frame
-//!       │
-//!       ▼
-//!  ③  Plan (derived from content)
-//!       │
-//!       ▼
-//!  ④–⑨ Task → Run → PatchSet → Evidence → Decision
-//!       │
-//!       ▼
-//!  ⑩  Intent (Completed)    ← commit recorded
+//! User Query
+//!    │
+//!    ▼
+//! ② Intent (Draft → Active)
+//!    │
+//!    ├─ Draft: prompt captured, `spec=None`
+//!    └─ Active: AI has produced `IntentSpec`
+//!         └─ Direct link to ContextPipeline (`context_pipeline`)
+//!         
+//!         ▼
+//! ③ Plan (workflow decomposition)
+//!    │
+//!    ▼
+//! ④ Task
+//!    │
+//!    ▼
+//! ⑤ Run(s)
+//!    ├─ ⑥ ToolInvocation*
+//!    ├─ ⑦ PatchSet*
+//!    ├─ ⑧ Evidence*
+//!    └─ ⑨ Decision
+//!         │
+//!         ▼
+//! ⑩ Intent terminal state (Completed / Cancelled)
 //! ```
 //!
 //! ## Conversational Refinement
 //!
+//! `Intent` objects can form a parent chain to represent iterative user
+//! refinement. Each follow-up `Intent` stores a `parent` UUID and does not
+//! mutate its predecessor.
 //! ```text
-//!  Intent₀ ("Add pagination")
-//!     ▲
-//!     │ parent
-//!  Intent₁ ("Also add cursor-based pagination")
-//!     ▲
-//!     │ parent
-//!  Intent₂ ("Use opaque cursors, not offsets")
+//! Intent_N -> parent -> Intent_(N-1) -> ... -> Intent_0
 //! ```
-//!
-//! Each follow-up Intent links to its predecessor via `parent`,
-//! forming a singly-linked list from newest to oldest. This
-//! preserves the full conversational history without mutating
-//! earlier Intents.
-//!
-//! ## Status Transitions
-//!
-//! ```text
-//!  Draft ──▶ Active ──▶ Completed
-//!    │          │
-//!    └──────────┴──▶ Cancelled
-//! ```
-//!
-//! Status changes are **append-only**: each transition pushes a
-//! [`StatusEntry`] onto the `statuses` vector. The current status
-//! is always the last entry. This design preserves the full
-//! transition history with timestamps and optional reasons.
 //!
 //! # Purpose
 //!
-//! - **Traceability**: Links the original human request to all
-//!   downstream artifacts (Plan, Tasks, Runs, PatchSets). Reviewers
-//!   can trace any code change back to the Intent that motivated it.
-//! - **Reproducibility**: Stores both the verbatim prompt and the
-//!   AI's interpretation, allowing re-analysis with different models
-//!   or parameters.
-//! - **Conversational Context**: The `parent` chain captures iterative
-//!   refinement, so the agent can understand how the user's request
-//!   evolved over multiple exchanges.
-//! - **Completion Tracking**: The `commit` field closes the loop by
-//!   recording which git commit satisfied the Intent.
+//! - **Traceability**: links the original request to every downstream
+//!   object.
+//! - **Reproducibility**: keeps both raw `prompt` and structured analysis in
+//!   `spec` for re-analysis with different models/parameters.
+//! - **Risk-aware execution**: `risk_level` in `IntentSpec` is used by the
+//!   workflow to drive review thresholds and automation gates.
+//! - **Completion closing**: `commit` records the exact repository commit
+//!   that satisfies the request when status reaches `Completed`.
 
 use std::fmt;
 
@@ -85,6 +72,7 @@ use crate::{
     internal::object::{
         ObjectTrait,
         integrity::IntegrityHash,
+        pipeline::ContextPipeline,
         types::{ActorRef, Header, ObjectType},
     },
 };
@@ -93,7 +81,7 @@ use crate::{
 ///
 /// Valid transitions (see module docs for diagram):
 ///
-/// - `Draft` → `Active`: AI has analyzed the prompt and filled `content`.
+/// - `Draft` → `Active`: AI has analyzed the prompt and filled `spec`.
 /// - `Active` → `Completed`: All downstream Tasks finished successfully
 ///   and the result commit has been recorded in `Intent.commit`.
 /// - `Draft` → `Cancelled`: User abandoned the request before AI analysis.
@@ -105,9 +93,9 @@ use crate::{
 #[serde(rename_all = "snake_case")]
 pub enum IntentStatus {
     /// Initial state. The `prompt` has been captured but the AI has not
-    /// yet analyzed it — `Intent.content` is `None`.
+    /// yet analyzed it — `Intent.spec` is `None`.
     Draft,
-    /// AI interpretation is available in `Intent.content`. Downstream
+    /// AI interpretation is available in `Intent.spec`. Downstream
     /// objects (Plan, Tasks, Runs) may be in progress.
     Active,
     /// The Intent has been fully satisfied. `Intent.commit` should
@@ -143,6 +131,7 @@ impl fmt::Display for IntentStatus {
 /// forming an append-only audit log. The current status is always
 /// `statuses.last().status`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct StatusEntry {
     /// The [`IntentStatus`] that was entered by this transition.
     status: IntentStatus,
@@ -190,11 +179,30 @@ impl StatusEntry {
 /// The entry point of every AI-assisted workflow.
 ///
 /// An `Intent` captures both the verbatim user input (`prompt`) and the
-/// AI's structured understanding of that input (`content`). It is
+/// AI's structured understanding of that input (`spec`). It is
 /// created at step ② and completed at step ⑩ of the end-to-end flow.
 /// See module documentation for lifecycle position, status transitions,
 /// and conversational refinement.
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[serde(transparent)]
+pub struct IntentSpec(pub serde_json::Value);
+
+impl From<String> for IntentSpec {
+    fn from(value: String) -> Self {
+        Self(serde_json::Value::String(value))
+    }
+}
+
+impl From<&str> for IntentSpec {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Intent {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -211,15 +219,15 @@ pub struct Intent {
     /// `None` while the Intent is in `Draft` status — the AI has not
     /// yet processed the prompt. Set to `Some(...)` when the AI
     /// completes its analysis, at which point the status should
-    /// transition to `Active`. The content typically includes:
+    /// transition to `Active`. The spec typically includes:
     /// - Disambiguated requirements
     /// - Identified scope (which files, modules, APIs are affected)
     /// - Inferred constraints or acceptance criteria
     ///
-    /// Unlike `prompt`, `content` is the AI's output and may be
+    /// Unlike `prompt`, `spec` is the AI's output and may be
     /// regenerated if the analysis is re-run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    spec: Option<IntentSpec>,
     /// Link to a predecessor Intent for conversational refinement.
     ///
     /// Forms a singly-linked list from newest to oldest: each
@@ -240,10 +248,16 @@ pub struct Intent {
     /// status should be `Completed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     commit: Option<IntegrityHash>,
+    /// Link to the [`ContextPipeline`](super::pipeline::ContextPipeline)
+    /// reserved for this Intent.
+    ///
+    /// `Intent::new` creates the pipeline eagerly and stores its ID
+    /// here for one-step traversal from Intent → ContextPipeline.
+    context_pipeline: Uuid,
     /// Link to the [`Plan`](super::plan::Plan) derived from this
     /// Intent.
     ///
-    /// Set after the AI analyzes `content` and produces a Plan at
+    /// Set after the AI analyzes `spec` and produces a Plan at
     /// step ③. Always points to the **latest** Plan revision — if
     /// the Plan is revised (via `Plan.previous` chain), this field
     /// is updated to the newest version. `None` while no Plan has
@@ -267,18 +281,31 @@ pub struct Intent {
 impl Intent {
     /// Create a new intent in `Draft` status from a raw user prompt.
     ///
-    /// The `content` field is initially `None` — call [`set_content`](Intent::set_content)
+    /// A [`ContextPipeline`](super::pipeline::ContextPipeline) is
+    /// created first, then linked into the returned Intent.
+    ///
+    /// The `spec` field is initially `None` — call [`set_spec`](Intent::set_spec)
     /// after the AI has analyzed the prompt.
-    pub fn new(created_by: ActorRef, prompt: impl Into<String>) -> Result<Self, String> {
-        Ok(Self {
-            header: Header::new(ObjectType::Intent, created_by)?,
-            prompt: prompt.into(),
-            content: None,
-            parent: None,
-            commit: None,
-            plan: None,
-            statuses: vec![StatusEntry::new(IntentStatus::Draft, None)],
-        })
+    pub fn new(
+        created_by: ActorRef,
+        prompt: impl Into<String>,
+    ) -> Result<(Self, ContextPipeline), String> {
+        let pipeline = ContextPipeline::new(created_by.clone())?;
+        let pipeline_id = pipeline.header().object_id();
+
+        Ok((
+            Self {
+                header: Header::new(ObjectType::Intent, created_by)?,
+                prompt: prompt.into(),
+                spec: None,
+                parent: None,
+                commit: None,
+                context_pipeline: pipeline_id,
+                plan: None,
+                statuses: vec![StatusEntry::new(IntentStatus::Draft, None)],
+            },
+            pipeline,
+        ))
     }
 
     /// Returns a reference to the common header.
@@ -291,14 +318,18 @@ impl Intent {
         &self.prompt
     }
 
-    /// Returns the AI-analyzed content, if available.
-    pub fn content(&self) -> Option<&str> {
-        self.content.as_deref()
+    /// Returns the AI-analyzed spec, if available.
+    pub fn spec(&self) -> Option<&IntentSpec> {
+        self.spec.as_ref()
     }
 
-    /// Sets the AI-analyzed content.
-    pub fn set_content(&mut self, content: Option<String>) {
-        self.content = content;
+    /// Sets the AI-analyzed spec.
+    pub fn set_spec(&mut self, spec: Option<IntentSpec>) {
+        let is_draft = matches!(self.status(), Some(&IntentStatus::Draft));
+        self.spec = spec;
+        if self.spec.is_some() && is_draft {
+            self.set_status(IntentStatus::Active);
+        }
     }
 
     /// Returns the parent intent ID, if this is part of a refinement chain.
@@ -309,6 +340,11 @@ impl Intent {
     /// Returns the result commit SHA, if the intent has been fulfilled.
     pub fn commit(&self) -> Option<&IntegrityHash> {
         self.commit.as_ref()
+    }
+
+    /// Returns the linked ContextPipeline ID.
+    pub fn context_pipeline(&self) -> Uuid {
+        self.context_pipeline
     }
 
     /// Returns the current lifecycle status (the last entry in the history).
@@ -338,6 +374,11 @@ impl Intent {
     /// Returns the associated Plan ID, if a Plan has been derived from this intent.
     pub fn plan(&self) -> Option<Uuid> {
         self.plan
+    }
+
+    /// Sets the linked ContextPipeline ID.
+    pub fn set_context_pipeline(&mut self, context_pipeline: Uuid) {
+        self.context_pipeline = context_pipeline;
     }
 
     /// Associates this intent with a [`Plan`](super::plan::Plan).
@@ -397,22 +438,26 @@ mod tests {
     #[test]
     fn test_intent_creation() {
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut intent = Intent::new(actor, "Refactor login flow").expect("intent");
+        let (mut intent, pipeline) = Intent::new(actor, "Refactor login flow").expect("intent");
 
         assert_eq!(intent.header().object_type(), &ObjectType::Intent);
         assert_eq!(intent.prompt(), "Refactor login flow");
-        assert!(intent.content().is_none());
+        assert!(intent.spec().is_none());
         assert_eq!(intent.status(), Some(&IntentStatus::Draft));
         assert!(intent.parent().is_none());
+        assert_eq!(intent.context_pipeline(), pipeline.header().object_id());
         assert!(intent.plan().is_none());
 
-        intent.set_content(Some("Restructure the authentication module".to_string()));
-        assert_eq!(
-            intent.content(),
-            Some("Restructure the authentication module")
-        );
+        let spec = IntentSpec(serde_json::json!({
+            "objective": "Restructure the authentication module",
+            "scope": ["auth module"],
+            "constraints": ["keep API contract stable"]
+        }));
+        intent.set_spec(Some(spec.clone()));
+        assert_eq!(intent.spec(), Some(&spec));
+        assert_eq!(intent.status(), Some(&IntentStatus::Active));
 
-        // After content is analyzed, a Plan can be linked
+        // After spec is analyzed, a Plan can be linked
         let plan_id = Uuid::from_u128(0x42);
         intent.set_plan(Some(plan_id));
         assert_eq!(intent.plan(), Some(plan_id));
@@ -421,7 +466,7 @@ mod tests {
     #[test]
     fn test_statuses() {
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut intent = Intent::new(actor, "Fix bug").expect("intent");
+        let (mut intent, _) = Intent::new(actor, "Fix bug").expect("intent");
 
         // Initial state: one Draft entry
         assert_eq!(intent.statuses().len(), 1);
