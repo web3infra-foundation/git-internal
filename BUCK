@@ -34,7 +34,7 @@ rust_library(
         "//third-party/rust/crates/bstr/1.12.1:bstr",
         "//third-party/rust/crates/byteorder/1.5.0:byteorder",
         "//third-party/rust/crates/bytes/1.11.1:bytes",
-        "//third-party/rust/crates/chrono/0.4.43:chrono",
+        "//third-party/rust/crates/chrono/0.4.44:chrono",
         "//third-party/rust/crates/colored/3.1.1:colored",
         "//third-party/rust/crates/crc32fast/1.5.0:crc32fast",
         "//third-party/rust/crates/dashmap/6.1.0:dashmap",
@@ -65,7 +65,7 @@ rust_library(
         "//third-party/rust/crates/tokio/1.49.0:tokio",
         "//third-party/rust/crates/tracing-subscriber/0.3.22:tracing-subscriber",
         "//third-party/rust/crates/tracing/0.1.44:tracing",
-        "//third-party/rust/crates/uuid/1.20.0:uuid",
+        "//third-party/rust/crates/uuid/1.21.0:uuid",
         "//third-party/rust/crates/zstd-sys/2.0.16+zstd.1.5.7:zstd-sys",
     ],
 )
