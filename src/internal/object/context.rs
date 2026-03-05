@@ -14,7 +14,7 @@
 //!       │
 //!       └─ plans → ContextPipeline (dynamic)
 //!            │
-//!            │  ③ Plan references pipeline + fwindow
+//!            │  ③ Plan references pipeline + iframes
 //!            ▼
 //!       ⑤  Run created
 //!            │

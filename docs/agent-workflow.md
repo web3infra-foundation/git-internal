@@ -120,18 +120,68 @@ graph TD
  ├─ Auto-generate Change Log based on PatchSet + Task Description 
  └─ Update API Docs, CHANGELOG 
  ══════════════════════════════════════════════════════ 
- Phase 4: Decision & Release 
- ══════════════════════════════════════════════════════ 
- ├─ Aggregate Risk Score (IntentSpec.risk_level + Security Report + Scope) 
- │ 
- ├─ Low Risk → Auto-Merge 
- │    └─ commit → Production Repo + Sync Docs + Trigger CD Pipeline 
- │ 
- └─ High Risk → Human-in-the-loop Review 
- ├─ Show: Change Summary, Exec Chain, Security Report, Impact Analysis 
- ├─ Options: Approve / Reject / Request Changes (Re-exec) 
- └─ Approve → commit → Production Repo + Sync Docs + Trigger CD Pipeline 
+   Phase 4: Decision & Release 
+   ══════════════════════════════════════════════════════ 
+  ├─ Aggregate Risk Score (IntentSpec.risk_level + Security Report + Scope) 
+  │ 
+  ├─ Low Risk → Auto-Merge 
+  │    └─ commit → Production Repo + Sync Docs + Trigger CD Pipeline 
+  │ 
+  └─ High Risk → Human-in-the-loop Review 
+     ├─ Show: Change Summary, Exec Chain, Security Report, Impact Analysis 
+     ├─ Options: Approve / Reject / Request Changes (Re-exec) 
+     └─ Approve → commit → Production Repo + Sync Docs + Trigger CD Pipeline 
 ```
+
+## Threaded Conversation Thread Model (v1 Draft)
+
+Thread is designed as a separate object to persist conversation-level history and
+all related Intents.
+
+### Thread object (draft fields)
+
+| Field | Type | Description |
+|---|---|---|
+| `header` | `Header` | Thread metadata (id/type/timestamps/creator). |
+| `title` | `Option<String>` | Human-readable thread title. |
+| `owner` | `ActorRef` | Conversation creator. |
+| `participants` | `Vec<ActorRef>` | Optional actor members (agent + humans). |
+| `intent_ids` | `Vec<Uuid>` | Ordered list of Intents attached to this thread. |
+| `head_intent_ids` | `Vec<Uuid>` | Current branch heads after merges/refinement. |
+| `latest_intent_id` | `Option<Uuid>` | Canonical latest Intent for default resume. |
+| `metadata` | `Option<serde_json::Value>` | Strategy hints / routing policies. |
+| `archived` | `bool` | Read-only flag after terminal workflow. |
+
+### Draft relation graph
+
+```text
+Thread ──intent_ids──→ Intent (ordered)
+     │                    ├─parents─→ Intent
+     │                    ├─parents─→ Intent  (merge style)
+     │                    └─thread_id (optional, migration-safe)
+     │
+     └─head_intent_ids───→ latest branching endpoints
+
+Intent
+   └─ thread_id (0..1, optional) → Thread
+```
+
+### Migration steps
+
+1. Add `Thread` object schema and optional `thread_id` on `Intent`.
+2. When a new root intent is created:
+   - create a new thread,
+   - set `Intent.thread_id` to that thread,
+   - write intent ID into `thread.intent_ids`.
+3. Rebuild history for existing intents in batches:
+   - walk `Intent.parents` DAG to infer existing conversation roots,
+   - create one thread per root,
+   - fill `intent_ids`, `head_intent_ids`, `latest_intent_id`,
+   - persist `thread_id` for migrated intents.
+4. Keep read path tolerant: if `thread_id` is absent, derive session by
+   parent chain and deterministic timestamp policy (`header.created_at`).
+5. Gradually enforce `thread_id` at creation once writer-side migrations are
+   fully rolled out.
 
 ## Phase 0: Input Preprocessing
 

@@ -42,11 +42,66 @@
 //!
 //! ## Conversational Refinement
 //!
-//! `Intent` objects can form a parent chain to represent iterative user
-//! refinement. Each follow-up `Intent` stores a `parent` UUID and does not
-//! mutate its predecessor.
+//! `Intent` objects can form a parent DAG to represent iterative user
+//! refinement. Each follow-up `Intent` stores one or more parent `Intent`
+//! IDs (for merges/branching) and does not mutate its predecessors.
 //! ```text
-//! Intent_N -> parent -> Intent_(N-1) -> ... -> Intent_0
+//! Intent_N -> parent/parents -> Intent_(N-1) -> ... -> Intent_0
+//! ```
+//!
+//! ## Headless example: fork and walk a chain
+//!
+//! From one intent, create multiple follow-up intents, and query all
+//! descendants from a root intent.
+//!
+//! ```rust,ignore
+//! use git_internal::internal::object::intent::Intent;
+//! use git_internal::internal::object::types::ActorRef;
+//! use std::collections::HashSet;
+//! use uuid::Uuid;
+//!
+//! let actor = ActorRef::human("agent").unwrap();
+//! let (root, _) = Intent::new(actor.clone(), "Support new tracing mode").unwrap();
+//!
+//! // 1) Fork: multiple Intents from the same parent.
+//! let (opt_a, _) = Intent::new_revision_chain(
+//!     actor.clone(),
+//!     "Add event-level tracing",
+//!     &[&root],
+//! )
+//! .unwrap();
+//! let (opt_b, _) = Intent::new_revision_chain(
+//!     actor.clone(),
+//!     "Add span-level tracing",
+//!     &[&root],
+//! )
+//! .unwrap();
+//! let (merged, _) = Intent::new_revision_chain(
+//!     actor,
+//!     "Merge event + span design",
+//!     &[&opt_a, &opt_b],
+//! )
+//! .unwrap();
+//!
+//! // 2) Query: find every descendant under the root intent.
+//! let all = vec![root, opt_a, opt_b, merged];
+//! let mut frontier = vec![all[0].header().object_id()];
+//! let mut visited: HashSet<Uuid> = HashSet::new();
+//! let mut descendants = Vec::new();
+//!
+//! while let Some(current) = frontier.pop() {
+//!     for candidate in all.iter() {
+//!         let candidate_id = candidate.header().object_id();
+//!         if visited.contains(&candidate_id) {
+//!             continue;
+//!         }
+//!         if candidate.parents().iter().any(|p| *p == current) {
+//!             descendants.push(candidate_id);
+//!             frontier.push(candidate_id);
+//!             visited.insert(candidate_id);
+//!         }
+//!     }
+//! }
 //! ```
 //!
 //! # Purpose
@@ -59,6 +114,52 @@
 //!   workflow to drive review thresholds and automation gates.
 //! - **Completion closing**: `commit` records the exact repository commit
 //!   that satisfies the request when status reaches `Completed`.
+//!
+//! # Thread draft (for full conversation records)
+//!
+//! To preserve complete conversational records, a Thread aggregate can be
+//! introduced as a lightweight container object. This draft is intentionally
+//! versioned separately from `Intent`, so migration can be rolled out safely.
+//!
+//! ## Thread object fields (draft)
+//!
+//! | Field | Type | Description |
+//! |---|---|---|
+//! | `header` | `Header` | Thread metadata (id/type/timestamps/creator). |
+//! | `title` | `Option<String>` | Human-readable conversation title. |
+//! | `owner` | `ActorRef` | Conversation owner / initiator. |
+//! | `participants` | `Vec<ActorRef>` | Optional actor list for collaboration. |
+//! | `intent_ids` | `Vec<Uuid>` | All intents under this thread, ordered by creation. |
+//! | `head_intent_ids` | `Vec<Uuid>` | Current non-finalized branch tips (one or more). |
+//! | `metadata` | `Option<serde_json::Value>` | Optional strategy, routing, policy tags. |
+//! | `archived` | `bool` | Marks historical threads as read-only for UI. |
+//! | `latest_intent_id` | `Option<Uuid>` | Latest materialized intent in canonical path. |
+//!
+//! ## Draft relation graph
+//!
+//! ```text
+//! Thread ──intent_ids──→ Intent₀
+//!        ├─intent_ids──→ Intent₁ ──parents──→ Intent₀
+//!        ├─intent_ids──→ Intent₂ ──parents──→ Intent₁
+//!        └─intent_ids──→ Intent₃ ──parents──→ Intent₀/Intent₁ (merge)
+//! Intent.thread_id             (1:1 link once introduced)
+//! ```
+//!
+//! ## Migration sketch
+//!
+//! 1. Add `Thread` object definition and add optional `thread_id` field to
+//!    `Intent` payload.
+//! 2. Add `Thread` on demand: when a new root intent arrives, create one thread
+//!    and append the intent to `intent_ids`.
+//! 3. Backfill existing intents in batches:
+//!    - group intents by `prompt`/request source correlation,
+//!    - create one thread per group,
+//!    - set `Intent.thread_id` accordingly,
+//!    - populate `intent_ids`, `head_intent_ids`, and `latest_intent_id`.
+//! 4. Keep parent chain resolution (`parents`) intact as fallback for objects
+//!    created before migration.
+//! 5. For future writes, require `thread_id` while keeping reads backward
+//!    compatible with unset field.
 
 use std::fmt;
 
@@ -76,6 +177,22 @@ use crate::{
         types::{ActorRef, Header, ObjectType},
     },
 };
+
+trait ParentLike {
+    fn parent_id(&self) -> Uuid;
+}
+
+impl ParentLike for Uuid {
+    fn parent_id(&self) -> Uuid {
+        *self
+    }
+}
+
+impl ParentLike for &Intent {
+    fn parent_id(&self) -> Uuid {
+        self.header.object_id()
+    }
+}
 
 /// Status of an Intent through its lifecycle.
 ///
@@ -207,6 +324,16 @@ pub struct Intent {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
     header: Header,
+    /// Links to predecessor Intents for conversational refinement.
+    ///
+    /// Acts like commit parents: one `Intent` can point to multiple
+    /// predecessors. The orchestrator can walk the parent set recursively
+    /// to reconstruct the full refinement graph/history.
+    ///
+    /// Example: Intent₃ can reference Intent₁ and Intent₂ if both provide
+    /// usable context for follow-up synthesis.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parents: Vec<Uuid>,
     /// Verbatim natural-language request from the user.
     ///
     /// This is the unmodified input exactly as the user typed it (e.g.
@@ -228,26 +355,6 @@ pub struct Intent {
     /// regenerated if the analysis is re-run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spec: Option<IntentSpec>,
-    /// Link to a predecessor Intent for conversational refinement.
-    ///
-    /// Forms a singly-linked list from newest to oldest: each
-    /// follow-up Intent points to the Intent it refines. `None` for
-    /// the first Intent in a conversation. The orchestrator can walk
-    /// the `parent` chain to reconstruct the full conversational
-    /// history and provide prior context to the AI.
-    ///
-    /// Example chain: Intent₂ → Intent₁ → Intent₀ (root, parent=None).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    parent: Option<Uuid>,
-    /// Git commit hash recorded when this Intent is fulfilled.
-    ///
-    /// Set by the orchestrator at step ⑩ after the
-    /// [`Decision`](super::decision::Decision) applies the final
-    /// PatchSet. `None` while the Intent is in progress (`Draft` or
-    /// `Active`) or if it was `Cancelled`. When set, the Intent's
-    /// status should be `Completed`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    commit: Option<IntegrityHash>,
     /// Link to the [`ContextPipeline`](super::pipeline::ContextPipeline)
     /// reserved for this Intent.
     ///
@@ -264,6 +371,15 @@ pub struct Intent {
     /// been created yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     plan: Option<Uuid>,
+    /// Git commit hash recorded when this Intent is fulfilled.
+    ///
+    /// Set by the orchestrator at step ⑩ after the
+    /// [`Decision`](super::decision::Decision) applies the final
+    /// PatchSet. `None` while the Intent is in progress (`Draft` or
+    /// `Active`) or if it was `Cancelled`. When set, the Intent's
+    /// status should be `Completed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    commit: Option<IntegrityHash>,
     /// Append-only chronological history of status transitions.
     ///
     /// Initialized with a single `Draft` entry at creation. Each call
@@ -298,7 +414,7 @@ impl Intent {
                 header: Header::new(ObjectType::Intent, created_by)?,
                 prompt: prompt.into(),
                 spec: None,
-                parent: None,
+                parents: Vec::new(),
                 commit: None,
                 context_pipeline: pipeline_id,
                 plan: None,
@@ -332,9 +448,102 @@ impl Intent {
         }
     }
 
-    /// Returns the parent intent ID, if this is part of a refinement chain.
-    pub fn parent(&self) -> Option<Uuid> {
-        self.parent
+    /// Create a new intent as a revision from an existing intent.
+    ///
+    /// This keeps a single-element parent chain by default (`parent_id`).
+    /// Additional parents can be added with [`add_parent`](Intent::add_parent)
+    /// for merge-style refinements.
+    pub fn new_revision_from(
+        created_by: ActorRef,
+        prompt: impl Into<String>,
+        parent: &Self,
+    ) -> Result<(Self, ContextPipeline), String> {
+        Self::new_revision_chain(created_by, prompt, &[parent])
+    }
+
+    /// Create a new revision intent with multiple parents in one step.
+    ///
+    /// The function accepts either ID-based or intent-based parent inputs
+    /// and automatically deduplicates parents.
+    ///
+    /// - For ID-based input: `Intent::new_revision_chain(actor, prompt, &[id1, id2])`
+    /// - For intent-based input: `Intent::new_revision_chain(actor, prompt, &[&intent1, &intent2])`
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use git_internal::internal::object::intent::Intent;
+    /// use git_internal::internal::object::types::ActorRef;
+    /// use uuid::Uuid;
+    ///
+    /// let actor = ActorRef::human("agent").expect("actor");
+    /// let (base, _) = Intent::new(actor.clone(), "Build API rate-limiting").expect("base");
+    ///
+    /// // 1) single parent (same as `new_revision_from`)
+    /// let (r1, _) = Intent::new_revision_chain(
+    ///     actor.clone(),
+    ///     "Split into middleware + config",
+    ///     &[&base],
+    /// ).expect("revision");
+    ///
+    /// // 2) multi-parent merge from existing intents
+    /// let extra_parent = Uuid::from_u128(0x1001);
+    /// let (_merged, _) = Intent::new_revision_chain(
+    ///     actor.clone(),
+    ///     "Merge constraints from policy + implementation feedback",
+    ///     &[&base, &r1],
+    /// ).expect("merge");
+    /// ```
+    ///
+    /// # Chained updates
+    ///
+    /// ```rust
+    /// use git_internal::internal::object::intent::Intent;
+    /// use git_internal::internal::object::types::ActorRef;
+    /// use uuid::Uuid;
+    ///
+    /// let actor = ActorRef::human("agent").expect("actor");
+    /// let (first, _) = Intent::new(actor.clone(), "A").expect("first");
+    /// let (second, _) = Intent::new_revision_chain(
+    ///     actor.clone(),
+    ///     "B",
+    ///     &[Uuid::from_u128(0x2001)],
+    /// ).expect("second");
+    /// let (_third, _) = Intent::new_revision_chain(
+    ///     actor,
+    ///     "C",
+    ///     &[&first, &second],
+    /// ).expect("third");
+    /// ```
+    #[allow(private_bounds)]
+    pub fn new_revision_chain<P: ParentLike>(
+        created_by: ActorRef,
+        prompt: impl Into<String>,
+        parents: &[P],
+    ) -> Result<(Self, ContextPipeline), String> {
+        let (mut intent, pipeline) = Self::new(created_by, prompt)?;
+        for p in parents {
+            intent.add_parent(p.parent_id());
+        }
+        Ok((intent, pipeline))
+    }
+
+    /// Returns the parent Intent IDs, if this is part of a refinement graph.
+    pub fn parents(&self) -> &[Uuid] {
+        &self.parents
+    }
+
+    /// Add a parent Intent ID with dedupe and self-parent guard.
+    ///
+    /// Duplicate parent IDs are ignored to keep the parent vector
+    /// canonical for deterministic serialization and simple diffs.
+    pub fn add_parent(&mut self, parent_id: Uuid) {
+        if parent_id == self.header.object_id() {
+            return;
+        }
+        if !self.parents.contains(&parent_id) {
+            self.parents.push(parent_id);
+        }
     }
 
     /// Returns the result commit SHA, if the intent has been fulfilled.
@@ -361,9 +570,9 @@ impl Intent {
         &self.statuses
     }
 
-    /// Links this intent to a parent intent for conversational refinement.
-    pub fn set_parent(&mut self, parent: Option<Uuid>) {
-        self.parent = parent;
+    /// Sets the parent Intent IDs for conversational refinement.
+    pub fn set_parents(&mut self, parents: Vec<Uuid>) {
+        self.parents = parents;
     }
 
     /// Records the git commit SHA that fulfilled this intent.
@@ -438,13 +647,14 @@ mod tests {
     #[test]
     fn test_intent_creation() {
         let actor = ActorRef::human("jackie").expect("actor");
-        let (mut intent, pipeline) = Intent::new(actor, "Refactor login flow").expect("intent");
+        let (mut intent, pipeline) =
+            Intent::new(actor.clone(), "Refactor login flow").expect("intent");
 
         assert_eq!(intent.header().object_type(), &ObjectType::Intent);
         assert_eq!(intent.prompt(), "Refactor login flow");
         assert!(intent.spec().is_none());
         assert_eq!(intent.status(), Some(&IntentStatus::Draft));
-        assert!(intent.parent().is_none());
+        assert!(intent.parents().is_empty());
         assert_eq!(intent.context_pipeline(), pipeline.header().object_id());
         assert!(intent.plan().is_none());
 
@@ -461,6 +671,56 @@ mod tests {
         let plan_id = Uuid::from_u128(0x42);
         intent.set_plan(Some(plan_id));
         assert_eq!(intent.plan(), Some(plan_id));
+
+        // Multiple parents are supported for merge-style refinement.
+        let mut intent = intent;
+        intent.set_parents(vec![Uuid::from_u128(0x43), Uuid::from_u128(0x44)]);
+        assert_eq!(intent.parents().len(), 2);
+        assert_eq!(intent.parents()[0], Uuid::from_u128(0x43));
+        assert_eq!(intent.parents()[1], Uuid::from_u128(0x44));
+
+        // new_revision_from automatically links the previous intent.
+        let (followup, _) = Intent::new_revision_from(
+            actor.clone(),
+            "Refactor login flow with stricter constraints",
+            &intent,
+        )
+        .expect("intent revision");
+        assert_eq!(followup.parents(), &[intent.header().object_id()]);
+
+        // new_revision_chain accepts either parent IDs...
+        let merge_parent_a = Uuid::from_u128(0x201);
+        let merge_parent_b = Uuid::from_u128(0x202);
+        let (merge_from_ids, _) = Intent::new_revision_chain(
+            actor.clone(),
+            "Refactor login flow with merged context",
+            &[merge_parent_a, merge_parent_b, merge_parent_a],
+        )
+        .expect("intent revision by ids");
+        assert_eq!(merge_from_ids.parents(), &[merge_parent_a, merge_parent_b]);
+
+        // ...or parent intent references...
+        let (merge_from_intents, _) = Intent::new_revision_chain(
+            actor.clone(),
+            "Refactor login flow with intent merge",
+            &[&intent, &followup],
+        )
+        .expect("intent revision by intents");
+        assert_eq!(
+            merge_from_intents.parents(),
+            &[intent.header().object_id(), followup.header().object_id()]
+        );
+
+        // add_parent deduplicates and ignores self-parent.
+        let (mut with_helpers, _) =
+            Intent::new(actor.clone(), "parent merge helper").expect("intent helper");
+        let p1 = Uuid::from_u128(0x101);
+        let p2 = Uuid::from_u128(0x102);
+        with_helpers.add_parent(p1);
+        with_helpers.add_parent(p1);
+        with_helpers.add_parent(p2);
+        with_helpers.add_parent(with_helpers.header().object_id());
+        assert_eq!(with_helpers.parents(), &[p1, p2]);
     }
 
     #[test]

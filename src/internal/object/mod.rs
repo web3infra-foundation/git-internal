@@ -17,7 +17,7 @@
 //!       ├──▶ ContextPipeline  ← seeded with IntentAnalysis frame
 //!       │
 //!       ▼
-//!  ③  Plan (pipeline, fwindow, steps)
+//!  ③  Plan (pipeline, iframes, steps)
 //!       │
 //!       ├─ PlanStep₀ (inline)
 //!       ├─ PlanStep₁ ──task──▶ sub-Task (recursive)
@@ -71,7 +71,7 @@
 //! 3. **[`Plan`](plan::Plan)** — a sequence of
 //!    [`PlanStep`](plan::PlanStep)s derived from the Intent. References
 //!    a [`ContextPipeline`](pipeline::ContextPipeline) and records the
-//!    visible frame range (`fwindow`). Steps track consumed/produced
+//!    consumed/derived stable frame IDs (`iframes`). Steps track consumed/produced
 //!    frames by stable ID (`iframes`/`oframes`). A step may spawn a sub-Task for
 //!    recursive decomposition. Plans form a revision chain via
 //!    `previous`.
@@ -115,8 +115,10 @@
 //!
 //! | From | Field | To | Cardinality |
 //! |------|-------|----|-------------|
-//! | Intent | `parent` | Intent | 0..1 |
+//! | Intent | `parents` | Intent | 0..N |
 //! | Intent | `plan` | Plan | 0..1 |
+//! | Intent | `thread_id` | Thread | 0..1 |
+//! | Thread | `head_intent_ids` | Intent | 0..N |
 //! | Plan | `previous` | Plan | 0..1 |
 //! | Plan | `pipeline` | ContextPipeline | 0..1 |
 //! | PlanStep | `task` | Task | 0..1 |

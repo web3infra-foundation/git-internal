@@ -18,12 +18,12 @@
 //!       │  analysis
 //!       │
 //!       ▼
-//!  ③ Plan references pipeline + fwindow
+//!  ③ Plan references pipeline + iframes
 //!       │  StepSummary / CodeChange / ToolCall frames appended
 //!       ▼
 //! ④ Task/Run
 //!       │
-//!       └─ Replan? → new Plan with updated fwindow
+//!       └─ Replan? → new Plan with updated iframes
 //! ```
 //!
 //! The pipeline is created when the Intent is created and linked from
@@ -70,7 +70,7 @@
 //! - **Bounded Memory**: `max_frames` + eviction ensures the pipeline
 //!   doesn't grow unboundedly in long-running workflows.
 //! - **Replan Support**: When replanning occurs, a new Plan can
-//!   reference the same pipeline with an updated `fwindow` that
+//!   reference the same pipeline with an updated `iframes` that
 //!   includes frames accumulated since the previous plan.
 
 use std::fmt;

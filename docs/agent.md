@@ -38,7 +38,7 @@ Context is tracked by two complementary mechanisms:
       ├──▶ ContextPipeline  ← seeded with IntentAnalysis frame
       │
       ▼
- ③  Plan (pipeline, fwindow, steps)
+ ③  Plan (pipeline, iframes, steps)
       │
       ├─ PlanStep₀ (inline)
       ├─ PlanStep₁ ──task──▶ sub-Task (recursive)
@@ -86,11 +86,12 @@ Context is tracked by two complementary mechanisms:
 
 2. **Intent** — captures the raw prompt and the AI's structured interpretation.
    Status transitions from `Draft` (prompt only) to `Active` (analysis
-   complete). Supports conversational refinement via `parent` chain.
+   complete). Supports conversational refinement via the `parents` set.
 
 3. **Plan** — a sequence of `PlanStep`s derived from the Intent. References a
-   `ContextPipeline` and records the visible frame range (`fwindow`). Steps
-   track consumed/produced frames by stable ID (`iframes`/`oframes`). A step may spawn a
+   `ContextPipeline` and records the consumed/derived stable frame IDs
+   (`iframes`). Steps track consumed/produced frames by stable ID
+   (`iframes`/`oframes`). A step may spawn a
    sub-Task for recursive decomposition. Plans form a revision chain via
    `previous`.
 
@@ -128,8 +129,10 @@ Context is tracked by two complementary mechanisms:
 
 | From | Field | To | Cardinality |
 |------|-------|----|-------------|
-| Intent | `parent` | Intent | 0..1 |
+| Intent | `parents` | Intent | 0..N |
+| Intent | `thread_id` | Thread | 0..1 |
 | Intent | `plan` | Plan | 0..1 |
+| Thread | `head_intent_ids` | Intent | 0..N |
 | Plan | `previous` | Plan | 0..1 |
 | Plan | `pipeline` | ContextPipeline | 0..1 |
 | PlanStep | `task` | Task | 0..1 |
@@ -154,7 +157,7 @@ Context is tracked by two complementary mechanisms:
 ### Intent (`intent.rs`)
 
 The **entry point** of every AI-assisted workflow. Captures the verbatim user
-request (`prompt`) and the AI's structured interpretation (`content`).
+request (`prompt`) and the AI's structured interpretation (`spec`).
 
 #### Status Transitions
 
@@ -164,8 +167,8 @@ Draft ──▶ Active ──▶ Completed
   └──────────┴──▶ Cancelled
 ```
 
-- **Draft**: Prompt recorded, AI has not analyzed it yet. `content = None`.
-- **Active**: AI interpretation available in `content`. Plan, Tasks, and Runs
+- **Draft**: Prompt recorded, AI has not analyzed it yet. `spec = None`.
+- **Active**: AI interpretation available in `spec`. Plan, Tasks, and Runs
   may be in progress.
 - **Completed**: All downstream work finished. `commit` contains the result
   git commit hash.
@@ -177,8 +180,9 @@ Draft ──▶ Active ──▶ Completed
 |-------|------|-------------|
 | `header` | `Header` | Common metadata (ID, type, timestamps, creator) |
 | `prompt` | `String` | Verbatim user input, immutable after creation |
-| `content` | `Option<String>` | AI-analyzed interpretation; `None` in Draft |
-| `parent` | `Option<Uuid>` | Predecessor Intent for conversational refinement |
+| `spec` | `Option<IntentSpec>` | AI-analyzed interpretation; `None` in Draft |
+| `parents` | `Vec<Uuid>` | Predecessor Intents for conversational refinement |
+| `thread_id` | `Option<Uuid>` | Owner thread for conversation-level history |
 | `commit` | `Option<IntegrityHash>` | Result git commit, set at step ⑩ |
 | `plan` | `Option<Uuid>` | Latest Plan revision derived from this Intent |
 | `statuses` | `Vec<StatusEntry>` | Append-only status transition history |
@@ -188,15 +192,19 @@ Draft ──▶ Active ──▶ Completed
 ```
 Intent₀ ("Add pagination")
    ▲
-   │ parent
+   │ parents (single predecessor in simple case)
 Intent₁ ("Also add cursor-based pagination")
    ▲
-   │ parent
+   │ parents
 Intent₂ ("Use opaque cursors, not offsets")
+   ▲
+   │ parents (branch merge point)
+Intent₃ ("Add pagination + cursor docs")
 ```
 
-Each follow-up Intent links to its predecessor via `parent`, forming a
-singly-linked list from newest to oldest.
+Each follow-up Intent links to one or more predecessors via `parents`,
+forming a refinement DAG. A single-thread view can still be rendered via
+`thread_id` + `Thread.head_intent_ids`.
 
 #### Usage
 
@@ -210,12 +218,52 @@ let mut intent = Intent::new(actor, "Add pagination to the user list API")?;
 assert_eq!(intent.status(), &IntentStatus::Draft);
 
 // 2. AI analyzes the prompt
-intent.set_content(Some("Add offset/limit pagination to GET /users".into()));
+intent.set_spec(Some("Add offset/limit pagination to GET /users".into()));
 intent.set_status(IntentStatus::Active);
 
 // 3. After execution completes
 intent.set_status_with_reason(IntentStatus::Completed, "All tasks finished");
 ```
+
+---
+
+### Thread (`thread` / 草案)
+
+Thread is a conversation-level aggregate that keeps all related Intents in one
+container and records the active branch heads for resumable sessions.
+
+#### Draft fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `header` | `Header` | Thread metadata (id/type/timestamps, creator) |
+| `title` | `Option<String>` | Human-readable thread title |
+| `owner` | `ActorRef` | Conversation owner / initiator |
+| `intent_ids` | `Vec<Uuid>` | All Intents that belong to this thread |
+| `head_intent_ids` | `Vec<Uuid>` | Active refinement heads (non-finalized branches) |
+| `latest_intent_id` | `Option<Uuid>` | Canonical head for default continue/resume |
+| `metadata` | `Option<Value>` | Optional workflow metadata and policies |
+| `archived` | `bool` | Marks closed threads for read-only behavior |
+
+#### Draft relation graph
+
+```text
+Thread ──intent_ids──→ Intent₀
+       ├─intent_ids──→ Intent₁
+       ├─intent_ids──→ Intent₂
+       └─head_intent_ids──→ {Intent₁, Intent₂}
+Intent.thread_id ─────────────→ Thread
+```
+
+#### Draft migration
+
+1. Add `Thread` schema and optional `thread_id` on `Intent`.
+2. For each existing conversation root intent, create one thread and append its
+   full descendant subtree by `parents` ancestry order.
+3. Populate `head_intent_ids` by selecting non-parented leaves in each thread.
+4. Populate `latest_intent_id` from policy (e.g. `max(created_at)` or caller-selected).
+5. Keep reads compatible with existing un-threaded intents until all producers set
+   `thread_id`.
 
 ---
 
@@ -244,14 +292,13 @@ Intent.plan ──▶ Plan_v3 (latest)
 
 #### Context Range
 
-A Plan references a `ContextPipeline` via `pipeline` and records the visible
-frame range `fwindow = (start, end)` — the half-open range `[start..end)` of
-frames that were visible at creation time.
+A Plan references a `ContextPipeline` via `pipeline` and records the frame IDs
+that fed plan generation in `iframes`.
 
 ```
 ContextPipeline.frames:  [F₀, F₁, F₂, F₃, F₄, F₅, ...]
-                          ^^^^^^^^^^^^^^^^
-                          fwindow = (0, 4)
+                           │    │    │
+                           iframes = [0, 1, 2, 3]
 ```
 
 #### Fields
@@ -261,7 +308,7 @@ ContextPipeline.frames:  [F₀, F₁, F₂, F₃, F₄, F₅, ...]
 | `header` | `Header` | Common metadata |
 | `previous` | `Option<Uuid>` | Predecessor Plan in revision chain |
 | `pipeline` | `Option<Uuid>` | ContextPipeline used as context basis |
-| `fwindow` | `Option<(u32, u32)>` | Visible frame range `[start..end)` |
+| `iframes` | `Vec<u64>` | Stable frame IDs of frames used for plan derivation |
 | `steps` | `Vec<PlanStep>` | Ordered sequence of steps |
 
 #### PlanStep
@@ -313,7 +360,7 @@ let actor = ActorRef::agent("planner")?;
 // Create initial plan
 let mut plan = Plan::new(actor.clone())?;
 plan.set_pipeline(Some(pipeline_id));
-plan.set_fwindow(Some((0, 3)));
+plan.set_iframes(vec![0, 1, 2, 3]);
 
 // Add steps
 let mut step = PlanStep::new("Refactor auth module");
@@ -670,13 +717,13 @@ Intent (Active)           ← content analyzed
 ContextPipeline created   ← seeded with IntentAnalysis frame
     │
     ▼
-Plan created              ← Plan.pipeline → Pipeline, Plan.fwindow = range
+Plan created              ← Plan.pipeline → Pipeline, Plan.iframes = [0,1,2,3]
     │  steps execute
     ▼
 Frames accumulate         ← StepSummary, CodeChange, ToolCall, ...
     │
     ▼
-Replan?                   → new Plan with updated fwindow
+Replan?                   → new Plan with updated iframes
 ```
 
 #### Fields
@@ -761,7 +808,7 @@ let seed_id = pipeline.push_frame(
 
 // 3. Create a Plan referencing this pipeline
 //    plan.set_pipeline(Some(pipeline.header().object_id()));
-//    plan.set_fwindow(Some((0, pipeline.frames().len() as u32)));
+//    plan.set_iframes(vec![0, 1, 2, 3]);
 
 // 4. As steps complete, push incremental frames
 let step_id = pipeline.push_frame(FrameKind::StepSummary, "Refactored auth module");

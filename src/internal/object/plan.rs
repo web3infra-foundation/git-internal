@@ -13,7 +13,7 @@
 //!       │
 //!       ├─ seeds ContextPipeline with IntentAnalysis
 //!       │
-//!       └─→ ③ Plan (pipeline, fwindow, steps)
+//!       └─→ ③ Plan (pipeline, iframes, steps)
 //!                │
 //!                ├─ PlanStep₀ (inline)
 //!                ├─ PlanStep₁ ──task──▶ sub-Task
@@ -48,20 +48,19 @@
 //! # Context Range
 //!
 //! A Plan references a [`ContextPipeline`](super::pipeline::ContextPipeline)
-//! via `pipeline` and records the visible frame range `fwindow = (start,
-//! end)` — the half-open range `[start..end)` of frames that were
-//! visible when this Plan was created. This enables retrospective
-//! analysis: given the context the agent saw, was the plan a reasonable
+//! via `pipeline` and records stable `frame_id`s in `iframes` for the
+//! plan-generation context. This enables retrospective analysis:
+//! given the context frames the agent saw, was the plan a reasonable
 //! decomposition?
 //!
 //! ```text
 //! ContextPipeline.frames:  [F₀, F₁, F₂, F₃, F₄, F₅, ...]
-//!                           ^^^^^^^^^^^^^^^^
-//!                           fwindow = (0, 4)
+//!                           │    │
+//!                           iframes = [0, 1]
 //! ```
 //!
-//! When replanning occurs, a new Plan is created with an updated frame
-//! range that includes frames accumulated since the previous plan.
+//! When replanning occurs, a new Plan is created with an updated frame-id
+//! basis that includes newly appended context frames since the previous plan.
 //!
 //! # Steps
 //!
@@ -120,7 +119,7 @@
 //!
 //! - **Decomposition**: Breaks a complex Intent into manageable,
 //!   ordered steps that an agent can execute sequentially.
-//! - **Context Scoping**: `pipeline` + `fwindow` record exactly what
+//! - **Context Scoping**: `pipeline` + `iframes` record exactly what
 //!   context the Plan was derived from. Step-level `iframes`/`oframes`
 //!   track fine-grained context flow.
 //! - **Versioning**: The `previous` revision chain preserves the full
@@ -435,15 +434,15 @@ pub struct Plan {
     /// was used (e.g. a manually created Plan).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pipeline: Option<Uuid>,
-    /// Frame visibility window `(start, end)`.
+    /// Stable frame IDs from the context pipeline that this plan was
+    /// derived from.
     ///
-    /// A half-open range `[start..end)` into the pipeline's frame list
-    /// that was visible when this Plan was created. Enables
-    /// retrospective analysis: given the context the agent saw, was the
-    /// decomposition reasonable? `None` when `pipeline` is not set or
-    /// when the entire pipeline was visible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    fwindow: Option<(u32, u32)>,
+    /// Equivalent to a captured context frame vector, using
+    /// `ContextFrame::frame_id` (stable under eviction), so replay and
+    /// audit remain valid even if early frames are removed from the
+    /// visible window.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    iframes: Vec<u64>,
     /// Ordered sequence of steps to execute.
     ///
     /// Steps are executed in order (index 0 first). Each step can be
@@ -461,7 +460,7 @@ impl Plan {
             header: Header::new(ObjectType::Plan, created_by)?,
             previous: None,
             pipeline: None,
-            fwindow: None,
+            iframes: Vec::new(),
             steps: Vec::new(),
         })
     }
@@ -472,7 +471,7 @@ impl Plan {
             header: Header::new(ObjectType::Plan, created_by)?,
             previous: Some(self.header.object_id()),
             pipeline: None,
-            fwindow: None,
+            iframes: Vec::new(),
             steps: Vec::new(),
         })
     }
@@ -507,16 +506,14 @@ impl Plan {
         self.pipeline = pipeline;
     }
 
-    /// Returns the frame window `(start, end)` — the half-open range
-    /// `[start..end)` of pipeline frames visible when this plan was created.
-    pub fn fwindow(&self) -> Option<(u32, u32)> {
-        self.fwindow
+    /// Returns the stable frame IDs this plan was derived from.
+    pub fn iframes(&self) -> &[u64] {
+        &self.iframes
     }
 
-    /// Sets the frame window `(start, end)` — the half-open range
-    /// `[start..end)` of pipeline frames visible when this plan was created.
-    pub fn set_fwindow(&mut self, fwindow: Option<(u32, u32)>) {
-        self.fwindow = fwindow;
+    /// Sets the stable frame IDs this plan was derived from.
+    pub fn set_iframes(&mut self, iframes: Vec<u64>) {
+        self.iframes = iframes;
     }
 }
 
@@ -580,19 +577,19 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_pipeline_and_fwindow() {
+    fn test_plan_pipeline_and_iframes() {
         let actor = ActorRef::human("jackie").expect("actor");
         let mut plan = Plan::new(actor).expect("plan");
 
         assert!(plan.pipeline().is_none());
-        assert!(plan.fwindow().is_none());
+        assert!(plan.iframes().is_empty());
 
         let pipeline_id = Uuid::from_u128(0x42);
         plan.set_pipeline(Some(pipeline_id));
-        plan.set_fwindow(Some((0, 3)));
+        plan.set_iframes(vec![0, 1, 2]);
 
         assert_eq!(plan.pipeline(), Some(pipeline_id));
-        assert_eq!(plan.fwindow(), Some((0, 3)));
+        assert_eq!(plan.iframes(), &[0, 1, 2]);
     }
 
     #[test]
@@ -691,11 +688,11 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_fwindow_serde_roundtrip() {
+    fn test_plan_iframes_serde_roundtrip() {
         let actor = ActorRef::human("jackie").expect("actor");
         let mut plan = Plan::new(actor).expect("plan");
         plan.set_pipeline(Some(Uuid::from_u128(0x99)));
-        plan.set_fwindow(Some((2, 7)));
+        plan.set_iframes(vec![2, 3]);
 
         let mut step = PlanStep::new("step 0");
         step.set_iframes(vec![2, 3]);
@@ -705,7 +702,7 @@ mod tests {
         let data = plan.to_data().expect("serialize");
         let restored = Plan::from_bytes(&data, ObjectHash::default()).expect("deserialize");
 
-        assert_eq!(restored.fwindow(), Some((2, 7)));
+        assert_eq!(restored.iframes(), &[2, 3]);
         assert_eq!(restored.steps()[0].iframes(), &[2, 3]);
         assert_eq!(restored.steps()[0].oframes(), &[7]);
     }
