@@ -8,13 +8,13 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//! Run ──patchsets──▶ [PatchSet₀, PatchSet₁, ...]
-//!  │                       │
-//!  │                       ▼
-//!  └──────────────▶ Evidence (run_id + optional patchset_id)
-//!                       │
-//!                       ▼
-//!                   Decision (uses Evidence to justify verdict)
+//! ⑥ ToolInvocation / ⑦ PatchSet
+//!      │              │
+//!      │              ▼
+//!      └──────────▶ Evidence (run_id + optional patchset_id)
+//!                         │
+//!                         ▼
+//!                     ⑨ Decision (verdict justification)
 //! ```
 //!
 //! Evidence is produced **during** a Run, typically after a PatchSet is
@@ -33,6 +33,17 @@
 //! - **Decision Support**: The [`Decision`](super::decision::Decision)
 //!   references Evidence to justify committing or rejecting changes.
 //!   Reviewers can inspect Evidence to understand why a verdict was made.
+//!
+//! # How Libra should use this object
+//!
+//! - Create one `Evidence` object per validation tool execution or
+//!   report.
+//! - Attach `patchset_id` when the validation targets a specific
+//!   candidate diff.
+//! - Use `summary`, `exit_code`, and `report_artifacts` for the durable
+//!   audit record.
+//! - Derive pass/fail dashboards and gating status in Libra; do not
+//!   rewrite `PatchSet` or `Run` snapshots with validation summaries.
 
 use std::fmt;
 
@@ -99,8 +110,9 @@ impl From<&str> for EvidenceKind {
 ///
 /// One Evidence per tool invocation. Multiple Evidence objects may
 /// exist for the same PatchSet (one per validation tool). See module
-/// documentation for lifecycle position.
+/// documentation for lifecycle position and Libra calling guidance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Evidence {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -157,6 +169,8 @@ pub struct Evidence {
 }
 
 impl Evidence {
+    /// Create a new validation evidence record for the given run and
+    /// validation category.
     pub fn new(
         created_by: ActorRef,
         run_id: Uuid,
@@ -176,58 +190,72 @@ impl Evidence {
         })
     }
 
+    /// Return the immutable header for this evidence object.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
+    /// Return the owning run id.
     pub fn run_id(&self) -> Uuid {
         self.run_id
     }
 
+    /// Return the validated patchset id, if present.
     pub fn patchset_id(&self) -> Option<Uuid> {
         self.patchset_id
     }
 
+    /// Return the validation category.
     pub fn kind(&self) -> &EvidenceKind {
         &self.kind
     }
 
+    /// Return the tool name that produced this evidence.
     pub fn tool(&self) -> &str {
         &self.tool
     }
 
+    /// Return the executed command line, if present.
     pub fn command(&self) -> Option<&str> {
         self.command.as_deref()
     }
 
+    /// Return the process exit code, if present.
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code
     }
 
+    /// Return the short human-readable summary, if present.
     pub fn summary(&self) -> Option<&str> {
         self.summary.as_deref()
     }
 
+    /// Return the persistent report artifacts.
     pub fn report_artifacts(&self) -> &[ArtifactRef] {
         &self.report_artifacts
     }
 
+    /// Set or clear the validated patchset id.
     pub fn set_patchset_id(&mut self, patchset_id: Option<Uuid>) {
         self.patchset_id = patchset_id;
     }
 
+    /// Set or clear the executed command line.
     pub fn set_command(&mut self, command: Option<String>) {
         self.command = command;
     }
 
+    /// Set or clear the process exit code.
     pub fn set_exit_code(&mut self, exit_code: Option<i32>) {
         self.exit_code = exit_code;
     }
 
+    /// Set or clear the short human-readable summary.
     pub fn set_summary(&mut self, summary: Option<String>) {
         self.summary = summary;
     }
 
+    /// Append one persistent validation report artifact.
     pub fn add_report_artifact(&mut self, artifact: ArtifactRef) {
         self.report_artifacts.push(artifact);
     }
@@ -268,6 +296,11 @@ impl ObjectTrait for Evidence {
 
 #[cfg(test)]
 mod tests {
+    // Coverage:
+    // - evidence field access
+    // - optional patchset association
+    // - command, exit-code, summary, and report artifact storage
+
     use super::*;
 
     #[test]

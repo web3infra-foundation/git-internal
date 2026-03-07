@@ -2,27 +2,42 @@
 //!
 //! A [`ContextSnapshot`] is an optional static capture of the codebase
 //! and external resources that an agent observed when a
-//! [`Run`](super::run::Run) began. Unlike the dynamic
-//! [`ContextPipeline`](super::pipeline::ContextPipeline) (which
-//! accumulates frames during execution), a ContextSnapshot is a
-//! **point-in-time** record that does not change after creation.
+//! [`Run`](super::run::Run) began. Unlike the incremental
+//! [`ContextFrame`](super::context_frame::ContextFrame) event stream,
+//! a ContextSnapshot is a **point-in-time** record that does not
+//! change after creation.
+//!
+//! # How Libra should use this object
+//!
+//! - Create a `ContextSnapshot` only when a stable, reproducible
+//!   baseline is worth preserving for a run.
+//! - Populate its items completely before persistence.
+//! - Keep the live, moving context window in Libra and express
+//!   incremental changes through `ContextFrame`.
 //!
 //! # Position in Lifecycle
 //!
 //! ```text
-//!  ⑤  Run ──snapshot──▶ ContextSnapshot (optional, static)
+//!  ②  Intent (Active)
 //!       │
-//!       ├──▶ ContextPipeline (dynamic, via Plan.pipeline)
-//!       │
-//!       ▼
-//!  ⑥  ToolInvocations ...
+//!       └─ ③ Plan references ContextFrame IDs used for planning
+//!            │
+//!            │  incremental ContextFrame events may continue later
+//!            ▼
+//!       ⑤  Run created
+//!            │
+//!            └─ context snapshot captured ──▶ ContextSnapshot (optional, static)
+//!                     │
+//!                     ▼
+//!                 Reproducible execution baseline
 //! ```
 //!
 //! A ContextSnapshot is created at step ⑤ when the Run is initialized.
-//! It complements the ContextPipeline: the snapshot captures the
+//! It complements incremental ContextFrame events: the snapshot captures the
 //! **initial** state (what files, URLs, snippets the agent sees at
-//! start), while the pipeline tracks **incremental** context changes
-//! during execution.
+//! start), while ContextFrame events record **incremental** context
+//! changes during execution. Libra may additionally maintain a live
+//! runtime context window as a projection over those immutable frames.
 //!
 //! # Items
 //!
@@ -140,6 +155,7 @@ pub enum ContextItemKind {
 /// module documentation for the three-layer design (`path` / `blob` /
 /// `preview`) and blob retention strategies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextItem {
     /// The kind of content this item represents. Determines how
     /// `path` and `blob` should be interpreted.
@@ -170,6 +186,7 @@ pub struct ContextItem {
 }
 
 impl ContextItem {
+    /// Create a new draft context item with the given kind and locator.
     pub fn new(kind: ContextItemKind, path: impl Into<String>) -> Result<Self, String> {
         let path = path.into();
         if path.trim().is_empty() {
@@ -183,6 +200,7 @@ impl ContextItem {
         })
     }
 
+    /// Set or clear the blob hash referencing the full captured content.
     pub fn set_blob(&mut self, blob: Option<ObjectHash>) {
         self.blob = blob;
     }
@@ -192,8 +210,10 @@ impl ContextItem {
 ///
 /// Created once per Run (optional). Records which files, URLs,
 /// snippets, etc. the agent had access to. See module documentation
-/// for lifecycle position, item design, and blob retention.
+/// for lifecycle position, item design, blob retention, and Libra
+/// calling guidance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextSnapshot {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -219,6 +239,8 @@ pub struct ContextSnapshot {
 }
 
 impl ContextSnapshot {
+    /// Create a new empty context snapshot with the given selection
+    /// strategy.
     pub fn new(
         created_by: ActorRef,
         selection_strategy: SelectionStrategy,

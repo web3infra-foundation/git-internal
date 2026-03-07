@@ -1,69 +1,28 @@
-//! AI PatchSet Definition
+//! AI PatchSet snapshot.
 //!
-//! A `PatchSet` represents a proposed set of code changes (diffs) generated
-//! by an agent during a [`Run`](super::run::Run). It is the atomic unit of
-//! code modification in the AI workflow — every change the agent wants to
-//! make to the repository is packaged as a PatchSet.
+//! `PatchSet` stores one immutable candidate diff produced during a
+//! `Run`.
 //!
-//! # Relationships
+//! # How to use this object
 //!
-//! ```text
-//! Run ──patchsets──▶ [PatchSet₀, PatchSet₁, ...]
-//!                        │
-//!                        └──run──▶ Run  (back-reference)
-//! ```
+//! - Create one `PatchSet` per candidate diff worth retaining.
+//! - Use `sequence` to preserve ordering between multiple candidates in
+//!   the same run.
+//! - Attach diff artifacts, touched files, and rationale before
+//!   persistence.
 //!
-//! - **Run** (bidirectional): `Run.patchsets` holds the forward reference
-//!   (chronological generation history), `PatchSet.run` is the back-reference.
+//! # How it works with other objects
 //!
-//! # Lifecycle
+//! - `Run` is the canonical owner through `PatchSet.run`.
+//! - `Evidence` may validate a specific patchset via `patchset_id`.
+//! - `Decision` selects the chosen patchset, if any.
 //!
-//! ```text
-//!   ┌──────────┐   agent produces diff   ┌──────────┐
-//!   │ (created)│ ───────────────────────▶ │ Proposed │
-//!   └──────────┘                          └────┬─────┘
-//!                                              │
-//!                          ┌───────────────────┼───────────────────┐
-//!                          │ validation/review  │                   │
-//!                          ▼ passes             ▼ fails             │
-//!                     ┌─────────┐          ┌──────────┐            │
-//!                     │ Applied │          │ Rejected │            │
-//!                     └─────────┘          └────┬─────┘            │
-//!                                               │                  │
-//!                                               ▼                  │
-//!                                  agent generates new PatchSet     │
-//!                                  appended to Run.patchsets        │
-//! ```
+//! # How Libra should call it
 //!
-//! 1. **Creation**: The orchestrator calls `PatchSet::new()`, which sets
-//!    `apply_status` to `Proposed`. At this point `artifact` is `None`
-//!    and `touched` is empty.
-//! 2. **Diff generation**: The agent produces a diff against `commit`
-//!    (the baseline Git commit). It sets `artifact` to point to the
-//!    stored diff content, populates `touched` with a file-level
-//!    summary, writes a `rationale`, and records the `format`.
-//! 3. **Review / validation**: The orchestrator or a human reviewer
-//!    inspects the PatchSet. Automated checks (tests, linting) may run.
-//! 4. **Applied**: If the diff passes, the orchestrator commits it to
-//!    the repository and transitions `apply_status` to `Applied`.
-//! 5. **Rejected**: If the diff fails validation or is rejected by a
-//!    reviewer, `apply_status` becomes `Rejected`. The agent may then
-//!    generate a new PatchSet appended to `Run.patchsets`.
-//!
-//! # Ordering
-//!
-//! PatchSet ordering is determined by position in `Run.patchsets`. If a
-//! PatchSet is rejected, the agent generates a new PatchSet and appends
-//! it to the Vec. The last entry is always the most recent attempt.
-//!
-//! # Content
-//!
-//! The actual diff content is stored as an [`ArtifactRef`] (via the
-//! `artifact` field), while [`TouchedFile`] (via the `touched` field)
-//! provides a lightweight file-level summary for UI and indexing.
-//! The `format` field indicates how to parse the artifact content
-//! (unified diff or git diff). The `rationale` field carries the
-//! agent's explanation of what was changed and why.
+//! Libra should use `PatchSet` as immutable staging history. Acceptance,
+//! rejection, or promotion to repository commit should be represented by
+//! `Decision` and Libra projections rather than by mutating the
+//! `PatchSet`.
 
 use std::fmt;
 
@@ -80,45 +39,13 @@ use crate::{
     },
 };
 
-/// Patch application status.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ApplyStatus {
-    /// Patch is generated but not yet applied to the repo.
-    Proposed,
-    /// Patch has been applied (committed) to the repo.
-    Applied,
-    /// Patch was rejected by validation or user.
-    Rejected,
-}
-
-impl ApplyStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ApplyStatus::Proposed => "proposed",
-            ApplyStatus::Applied => "applied",
-            ApplyStatus::Rejected => "rejected",
-        }
-    }
-}
-
-impl fmt::Display for ApplyStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-/// Diff format for patch content.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffFormat {
-    /// Standard unified diff format.
     UnifiedDiff,
-    /// Git-specific diff format (with binary support etc).
     GitDiff,
 }
 
-/// Type of change for a file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeType {
@@ -129,18 +56,21 @@ pub enum ChangeType {
     Copy,
 }
 
-/// Touched file summary in a patchset.
-///
-/// Provides a quick overview of what files are modified without parsing the full diff.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TouchedFile {
+    /// Repository-relative path affected by the candidate diff.
     pub path: String,
+    /// Coarse change category for the touched file.
     pub change_type: ChangeType,
+    /// Number of added lines attributed to this file in the patch.
     pub lines_added: u32,
+    /// Number of deleted lines attributed to this file in the patch.
     pub lines_deleted: u32,
 }
 
 impl TouchedFile {
+    /// Create one touched-file summary entry for a patchset.
     pub fn new(
         path: impl Into<String>,
         change_type: ChangeType,
@@ -160,153 +90,114 @@ impl TouchedFile {
     }
 }
 
-/// PatchSet object containing a candidate diff.
+/// Immutable candidate diff snapshot for one `Run`.
 ///
-/// Ordering between PatchSets is determined by their position in
-/// [`Run.patchsets`](super::run::Run). The PatchSet itself does not
-/// carry a generation number or supersession list.
+/// A `PatchSet` stores the proposed change and its metadata, while the
+/// higher-level verdict about whether that change is accepted lives
+/// elsewhere.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchSet {
-    /// Common header (object ID, type, timestamps, creator, etc.).
+    /// Common object header carrying the immutable object id, type,
+    /// creator, and timestamps.
     #[serde(flatten)]
     header: Header,
-    /// The [`Run`](super::run::Run) that generated this PatchSet.
-    /// `Run.patchsets` holds the forward reference and ordering.
+    /// Canonical owning run for this candidate diff.
     run: Uuid,
-    /// Git commit hash the diff is based on.
+    /// Ordering of this candidate among patchsets produced by the same
+    /// run.
+    sequence: u32,
+    /// Repository integrity hash representing the diff baseline or
+    /// associated commit context.
     commit: IntegrityHash,
-    /// Diff format used for the patch content (e.g. unified diff, git diff).
-    ///
-    /// Determines how the diff stored in `artifact` should be parsed.
-    /// `UnifiedDiff` is the standard format produced by `diff -u`;
-    /// `GitDiff` extends it with binary file support, rename detection,
-    /// and mode-change headers. The orchestrator sets this at creation
-    /// time based on the tool that generated the diff.
-    #[serde(alias = "diff_format")]
+    /// Diff serialization format used for the stored patch candidate.
     format: DiffFormat,
-    /// Reference to the actual diff content in object storage.
-    ///
-    /// Points to an [`ArtifactRef`] whose payload contains the full
-    /// diff text (or binary patch) in the encoding described by `format`.
-    /// `None` while the diff is still being generated; set once the
-    /// agent finishes producing the patch. Consumers fetch the artifact,
-    /// then interpret it according to `format`.
-    #[serde(alias = "diff_artifact")]
+    /// Optional artifact pointer to the full diff payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     artifact: Option<ArtifactRef>,
-    /// Lightweight summary of files modified in this PatchSet.
-    ///
-    /// Each [`TouchedFile`] records a path, change type (add/modify/
-    /// delete/rename/copy), and line-count deltas. This allows UIs and
-    /// indexing pipelines to display a file-level overview without
-    /// downloading or parsing the full diff artifact. The list is
-    /// populated incrementally as the agent produces changes and should
-    /// be consistent with the actual diff content.
-    #[serde(default, alias = "touched_files")]
+    /// File-level summary of paths touched by the candidate diff.
+    #[serde(default)]
     touched: Vec<TouchedFile>,
-    /// Human-readable explanation of the changes in this PatchSet.
-    ///
-    /// Serves a role analogous to a commit message or PR description,
-    /// bridging the gap between the high-level goal (Task/Plan) and
-    /// the raw diff (artifact).
-    ///
-    /// **Primary author**: the agent executing the Run. After producing
-    /// the diff, the agent summarises **what was changed and why** and
-    /// writes it here. A human reviewer may later overwrite or refine
-    /// the text via `set_rationale()` if the agent's explanation is
-    /// insufficient.
-    ///
-    /// When a Run produces multiple PatchSets (successive attempts),
-    /// each rationale captures the reasoning behind that specific
-    /// attempt, e.g.:
-    ///
-    /// - PatchSet₀: "Replaced session auth with JWT — breaks backward compat"
-    /// - PatchSet₁: "Gradual migration: accept both auth schemes"
-    ///
-    /// `None` only when the PatchSet is still being generated or the
-    /// agent did not provide an explanation. Reviewers should treat a
-    /// missing rationale as a signal to inspect the diff more carefully.
+    /// Optional human-readable rationale for why this candidate was
+    /// generated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     rationale: Option<String>,
-    /// Current application status of this PatchSet.
-    ///
-    /// Tracks whether the diff has been applied to the repository:
-    ///
-    /// - **`Proposed`** (initial): The diff has been generated but not
-    ///   yet committed. The orchestrator or a human reviewer can inspect
-    ///   the artifact, run validation, and decide whether to apply.
-    /// - **`Applied`**: The diff has been committed to the repository.
-    ///   Once applied, the PatchSet is immutable — further changes
-    ///   require a new PatchSet in the same Run.
-    /// - **`Rejected`**: The diff was rejected by automated validation
-    ///   (e.g. tests failed) or by a human reviewer. The agent may
-    ///   generate a new PatchSet appended to `Run.patchsets` to retry.
-    ///
-    /// Transitions: `Proposed → Applied` or `Proposed → Rejected`.
-    /// No other transitions are valid.
-    apply_status: ApplyStatus,
 }
 
 impl PatchSet {
-    /// Create a new patchset object.
+    /// Create a new patchset candidate for the given run.
     pub fn new(created_by: ActorRef, run: Uuid, commit: impl AsRef<str>) -> Result<Self, String> {
         let commit = commit.as_ref().parse()?;
         Ok(Self {
             header: Header::new(ObjectType::PatchSet, created_by)?,
             run,
+            sequence: 0,
             commit,
             format: DiffFormat::UnifiedDiff,
             artifact: None,
             touched: Vec::new(),
             rationale: None,
-            apply_status: ApplyStatus::Proposed,
         })
     }
 
+    /// Return the immutable header for this patchset.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
+    /// Return the canonical owning run id.
     pub fn run(&self) -> Uuid {
         self.run
     }
 
+    /// Return the patchset ordering number within the run.
+    pub fn sequence(&self) -> u32 {
+        self.sequence
+    }
+
+    /// Set the patchset ordering number before persistence.
+    pub fn set_sequence(&mut self, sequence: u32) {
+        self.sequence = sequence;
+    }
+
+    /// Return the associated integrity hash.
     pub fn commit(&self) -> &IntegrityHash {
         &self.commit
     }
 
+    /// Return the diff serialization format.
     pub fn format(&self) -> &DiffFormat {
         &self.format
     }
 
+    /// Return the diff artifact pointer, if present.
     pub fn artifact(&self) -> Option<&ArtifactRef> {
         self.artifact.as_ref()
     }
 
+    /// Return the touched-file summary entries.
     pub fn touched(&self) -> &[TouchedFile] {
         &self.touched
     }
 
+    /// Return the human-readable patch rationale, if present.
     pub fn rationale(&self) -> Option<&str> {
         self.rationale.as_deref()
     }
 
-    pub fn apply_status(&self) -> &ApplyStatus {
-        &self.apply_status
-    }
-
+    /// Set or clear the diff artifact pointer.
     pub fn set_artifact(&mut self, artifact: Option<ArtifactRef>) {
         self.artifact = artifact;
     }
 
+    /// Append one touched-file summary entry.
     pub fn add_touched(&mut self, file: TouchedFile) {
         self.touched.push(file);
     }
 
+    /// Set or clear the human-readable rationale.
     pub fn set_rationale(&mut self, rationale: Option<String>) {
         self.rationale = rationale;
-    }
-
-    pub fn set_apply_status(&mut self, apply_status: ApplyStatus) {
-        self.apply_status = apply_status;
     }
 }
 
@@ -347,6 +238,10 @@ impl ObjectTrait for PatchSet {
 mod tests {
     use super::*;
 
+    // Coverage:
+    // - patchset creation defaults
+    // - canonical run link, ordering default, and diff-format default
+
     fn test_hash_hex() -> String {
         IntegrityHash::compute(b"ai-process-test").to_hex()
     }
@@ -361,8 +256,8 @@ mod tests {
 
         assert_eq!(patchset.header().object_type(), &ObjectType::PatchSet);
         assert_eq!(patchset.run(), run);
+        assert_eq!(patchset.sequence(), 0);
         assert_eq!(patchset.format(), &DiffFormat::UnifiedDiff);
-        assert_eq!(patchset.apply_status(), &ApplyStatus::Proposed);
         assert!(patchset.touched().is_empty());
     }
 }

@@ -1,157 +1,180 @@
 //! Object model definitions for Git blobs, trees, commits, tags, and
-//! supporting traits that let the pack/zlib layers create strongly typed
-//! values from raw bytes.
+//! AI workflow objects.
 //!
-//! AI objects are also defined here, as they are a fundamental part of
-//! the system and need to be accessible across multiple modules without
-//! circular dependencies.
+//! This module is the storage-layer contract for `git-internal`.
+//! Git-native objects (`Blob`, `Tree`, `Commit`, `Tag`) model repository
+//! content, while the AI objects model immutable workflow history that
+//! Libra orchestrates on top.
 //!
-//! # AI Object End-to-End Flow
+//! # How Libra should use this module
+//!
+//! Libra should treat every AI object here as an immutable record:
+//!
+//! - construct the object in memory,
+//! - populate optional fields before persistence,
+//! - persist it once,
+//! - derive current state later from object history plus Libra
+//!   projections.
+//!
+//! Libra should not store scheduler state, selected heads, active UI
+//! focus, or query caches in these objects. Those belong to Libra's own
+//! runtime and index layer.
+//!
+//! AI workflow objects are split into three layers:
+//!
+//! - **Snapshot objects** in `git-internal` answer "what was the stored
+//!   fact at this revision?"
+//! - **Event objects** in `git-internal` answer "what happened later?"
+//! - **Libra projections** answer "what is the system's current view?"
+//!
+//! # Relationship Design Standard
+//!
+//! Relationship fields follow a simple storage rule:
+//!
+//! - Store the canonical ownership edge on the child object when the
+//!   relationship is a historical fact.
+//! - Low-frequency, strongly aggregated relationships that benefit
+//!   from fast parent-to-children traversal may additionally keep a
+//!   reverse convenience link.
+//! - High-frequency, high-cardinality, event-stream relationships
+//!   should remain single-directional to avoid turning parent objects
+//!   into rewrite hotspots.
+//!
+//! # Three-Layer Design
 //!
 //! ```text
-//!  ①  User input
-//!       │
-//!       ▼
-//!  ②  Intent (Draft → Active)
-//!       │
-//!       ├──▶ ContextPipeline  ← seeded with IntentAnalysis frame
-//!       │
-//!       ▼
-//!  ③  Plan (pipeline, fwindow, steps)
-//!       │
-//!       ├─ PlanStep₀ (inline)
-//!       ├─ PlanStep₁ ──task──▶ sub-Task (recursive)
-//!       └─ PlanStep₂ (inline)
-//!       │
-//!       ▼
-//!  ④  Task (Draft → Running)
-//!       │
-//!       ▼
-//!  ⑤  Run (Created → Patching → Validating → Completed/Failed)
-//!       │
-//!       ├──▶ Provenance (1:1, LLM config + token usage)
-//!       ├──▶ ContextSnapshot (optional, static context at start)
-//!       │
-//!       │  ┌─── agent execution loop ───┐
-//!       │  │                            │
-//!       │  │  ⑥ ToolInvocation (1:N)    │  ← action log
-//!       │  │       │                    │
-//!       │  │       ▼                    │
-//!       │  │  ⑦ PatchSet (Proposed)     │  ← candidate diff
-//!       │  │       │                    │
-//!       │  │       ▼                    │
-//!       │  │  ⑧ Evidence (1:N)          │  ← test/lint/build
-//!       │  │       │                    │
-//!       │  │       ├─ pass ──────────────┘
-//!       │  │       └─ fail → new PatchSet (retry within Run)
-//!       │  └─────────────────────────────┘
-//!       │
-//!       ▼
-//!  ⑨  Decision (terminal verdict)
-//!       │
-//!       ├─ Commit    → apply PatchSet, record result_commit
-//!       ├─ Retry     → create new Run ⑤ for same Task
-//!       ├─ Abandon   → mark Task as Failed
-//!       ├─ Checkpoint → save state, resume later
-//!       └─ Rollback  → revert applied PatchSet
-//!       │
-//!       ▼
-//!  ⑩  Intent (Completed) ← commit recorded
+//! +------------------------------------------------------------------+
+//! | Libra projection / runtime                                       |
+//! |------------------------------------------------------------------|
+//! | thread heads / selected_plan_id / active_run / scheduler state   |
+//! | live context window / UI focus / query indexes                   |
+//! +--------------------------------+---------------------------------+
+//!                                  |
+//!                                  v
+//! +------------------------------------------------------------------+
+//! | git-internal event objects                                        |
+//! |------------------------------------------------------------------|
+//! | IntentEvent / TaskEvent / RunEvent / PlanStepEvent / RunUsage    |
+//! | ToolInvocation / Evidence / Decision / ContextFrame              |
+//! +--------------------------------+---------------------------------+
+//!                                  |
+//!                                  v
+//! +------------------------------------------------------------------+
+//! | git-internal snapshot objects                                     |
+//! |------------------------------------------------------------------|
+//! | Intent / Plan / Task / Run / PatchSet / ContextSnapshot          |
+//! | Provenance                                                       |
+//! +------------------------------------------------------------------+
 //! ```
 //!
-//! ## Steps
+//! # Main Object Relationships
 //!
-//! 1. **User input** — the user provides a natural-language request.
+//! ```text
+//! Snapshot layer
+//! ==============
 //!
-//! 2. **[`Intent`](intent::Intent)** — captures the raw prompt and the
-//!    AI's structured interpretation. Status transitions from `Draft`
-//!    (prompt only) to `Active` (analysis complete). Supports
-//!    conversational refinement via `parent` chain.
+//! Intent --parents----------------------------> Intent
+//! Intent --analysis_context_frames-----------> ContextFrame
+//! Plan   --intent-----------------------------> Intent
+//! Plan   --context_frames---------------------> ContextFrame
+//! Plan   --parents----------------------------> Plan
+//! Task   --intent?----------------------------> Intent
+//! Task   --parent?----------------------------> Task
+//! Task   --origin_step_id?-------------------> PlanStep.step_id
+//! Run    --task-------------------------------> Task
+//! Run    --plan?------------------------------> Plan
+//! Run    --snapshot?--------------------------> ContextSnapshot
+//! PatchSet   --run----------------------------> Run
+//! Provenance --run_id-------------------------> Run
 //!
-//! 3. **[`Plan`](plan::Plan)** — a sequence of
-//!    [`PlanStep`](plan::PlanStep)s derived from the Intent. References
-//!    a [`ContextPipeline`](pipeline::ContextPipeline) and records the
-//!    visible frame range (`fwindow`). Steps track consumed/produced
-//!    frames by stable ID (`iframes`/`oframes`). A step may spawn a sub-Task for
-//!    recursive decomposition. Plans form a revision chain via
-//!    `previous`.
+//! Event layer
+//! ===========
 //!
-//! 4. **[`Task`](task::Task)** — a unit of work with title, constraints,
-//!    and acceptance criteria. May link back to its originating Intent.
-//!    Accumulates Runs in `runs` (chronological execution history).
+//! IntentEvent   --intent_id-------------------> Intent
+//! IntentEvent   --next_intent_id?-------------> Intent
+//! ContextFrame  --intent_id?------------------> Intent
+//! TaskEvent     --task_id---------------------> Task
+//! RunEvent      --run_id----------------------> Run
+//! RunUsage      --run_id----------------------> Run
+//! PlanStepEvent --plan_id + step_id + run_id-> Plan / Run / PlanStep
+//! ToolInvocation--run_id----------------------> Run
+//! Evidence      --run_id / patchset_id?-------> Run / PatchSet
+//! Decision      --run_id / chosen_patchset_id?> Run / PatchSet
+//! ContextFrame  --run_id? / plan_id? / step_id?> Run / Plan / PlanStep
+//! ```
 //!
-//! 5. **[`Run`](run::Run)** — a single execution attempt of a Task.
-//!    Records the baseline `commit`, the Plan version being executed
-//!    (snapshot reference), and the host `environment`. A
-//!    [`Provenance`](provenance::Provenance) (1:1) captures the LLM
-//!    configuration and token usage.
+//! # Libra read / write pattern
 //!
-//! 6. **[`ToolInvocation`](tool::ToolInvocation)** — the finest-grained
-//!    record: one per tool call (read file, run command, etc.). Forms
-//!    a chronological action log for the Run. Tracks file I/O via
-//!    `io_footprint`.
+//! A typical Libra call flow looks like this:
 //!
-//! 7. **[`PatchSet`](patchset::PatchSet)** — a candidate diff generated
-//!    by the agent. Contains the diff `artifact`, file-level `touched`
-//!    summary, and `rationale`. Starts as `Proposed`; transitions to
-//!    `Applied` or `Rejected`. Ordering is by position in
-//!    `Run.patchsets`.
-//!
-//! 8. **[`Evidence`](evidence::Evidence)** — output of a validation tool
-//!    (test, lint, build) run against a PatchSet. One per tool
-//!    invocation. Carries `exit_code`, `summary`, and
-//!    `report_artifacts`. Feeds into the Decision.
-//!
-//! 9. **[`Decision`](decision::Decision)** — the terminal verdict of a
-//!    Run. Selects a PatchSet to apply (`Commit`), retries the Task
-//!    (`Retry`), gives up (`Abandon`), saves progress (`Checkpoint`),
-//!    or reverts (`Rollback`). Records `rationale` and
-//!    `result_commit_sha`.
-//!
-//! 10. **Intent completed** — the orchestrator records the final git
-//!     commit in `Intent.commit` and transitions status to `Completed`.
+//! 1. write snapshot objects when a new immutable revision is defined
+//!    (`Intent`, `Plan`, `Task`, `Run`, `PatchSet`, `ContextSnapshot`,
+//!    `Provenance`);
+//! 2. append event objects as execution progresses
+//!    (`IntentEvent`, `TaskEvent`, `RunEvent`, `PlanStepEvent`,
+//!    `RunUsage`, `ToolInvocation`, `Evidence`, `Decision`,
+//!    `ContextFrame`);
+//! 3. rebuild current state in Libra from those immutable objects plus
+//!    its own `Thread`, `Scheduler`, `UI`, and `Query Index`
+//!    projections.
 //!
 //! ## Object Relationship Summary
 //!
 //! | From | Field | To | Cardinality |
 //! |------|-------|----|-------------|
-//! | Intent | `parent` | Intent | 0..1 |
-//! | Intent | `plan` | Plan | 0..1 |
-//! | Plan | `previous` | Plan | 0..1 |
-//! | Plan | `pipeline` | ContextPipeline | 0..1 |
-//! | PlanStep | `task` | Task | 0..1 |
+//! | Intent | `parents` | Intent | 0..N |
+//! | Intent | `analysis_context_frames` | ContextFrame | 0..N |
+//! | Plan | `intent` | Intent | 1 canonical |
+//! | Plan | `parents` | Plan | 0..N |
+//! | Plan | `context_frames` | ContextFrame | 0..N |
 //! | Task | `parent` | Task | 0..1 |
 //! | Task | `intent` | Intent | 0..1 |
-//! | Task | `runs` | Run | 0..N |
+//! | Task | `origin_step_id` | PlanStep.step_id | 0..1 |
 //! | Task | `dependencies` | Task | 0..N |
 //! | Run | `task` | Task | 1 |
 //! | Run | `plan` | Plan | 0..1 |
 //! | Run | `snapshot` | ContextSnapshot | 0..1 |
-//! | Run | `patchsets` | PatchSet | 0..N |
 //! | PatchSet | `run` | Run | 1 |
+//! | Provenance | `run_id` | Run | 1 |
+//! | IntentEvent | `intent_id` | Intent | 1 |
+//! | IntentEvent | `next_intent_id` | Intent | 0..1 recommended follow-up |
+//! | ContextFrame | `intent_id` | Intent | 0..1 |
+//! | TaskEvent | `task_id` | Task | 1 |
+//! | RunEvent | `run_id` | Run | 1 |
+//! | RunUsage | `run_id` | Run | 1 |
+//! | PlanStepEvent | `plan_id` | Plan | 1 |
+//! | PlanStepEvent | `step_id` | PlanStep.step_id | 1 |
+//! | PlanStepEvent | `run_id` | Run | 1 |
+//! | ToolInvocation | `run_id` | Run | 1 |
 //! | Evidence | `run_id` | Run | 1 |
 //! | Evidence | `patchset_id` | PatchSet | 0..1 |
 //! | Decision | `run_id` | Run | 1 |
 //! | Decision | `chosen_patchset_id` | PatchSet | 0..1 |
-//! | Provenance | `run_id` | Run | 1 |
-//! | ToolInvocation | `run_id` | Run | 1 |
+//! | ContextFrame | `run_id` | Run | 0..1 |
+//! | ContextFrame | `plan_id` | Plan | 0..1 |
+//! | ContextFrame | `step_id` | PlanStep.step_id | 0..1 |
 //!
 pub mod blob;
 pub mod commit;
 pub mod context;
+pub mod context_frame;
 pub mod decision;
 pub mod evidence;
 pub mod integrity;
 pub mod intent;
+pub mod intent_event;
 pub mod note;
 pub mod patchset;
-pub mod pipeline;
 pub mod plan;
+pub mod plan_step_event;
 pub mod provenance;
 pub mod run;
+pub mod run_event;
+pub mod run_usage;
 pub mod signature;
 pub mod tag;
 pub mod task;
+pub mod task_event;
 pub mod tool;
 pub mod tree;
 pub mod types;
@@ -197,10 +220,6 @@ pub trait ObjectTrait: Send + Sync + Display {
 
     fn to_data(&self) -> Result<Vec<u8>, GitError>;
 
-    /// Computes the object hash from serialized data.
-    ///
-    /// Default implementation serializes the object and computes the hash from that data.
-    /// Override only if you need custom hash computation or caching.
     fn object_hash(&self) -> Result<ObjectHash, GitError> {
         let data = self.to_data()?;
         Ok(ObjectHash::from_type_and_data(self.get_type(), &data))
