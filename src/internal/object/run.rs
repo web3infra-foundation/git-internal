@@ -1,77 +1,27 @@
-//! AI Run Definition
+//! AI Run snapshot.
 //!
-//! A [`Run`] is a single execution attempt of a
-//! [`Task`](super::task::Task). It captures the execution context
-//! (baseline commit, environment, Plan version) and accumulates
-//! artifacts ([`PatchSet`](super::patchset::PatchSet)s,
-//! [`Evidence`](super::evidence::Evidence),
-//! [`ToolInvocation`](super::tool::ToolInvocation)s) during execution.
-//! The Run is step ⑤ in the end-to-end flow described in
-//! [`mod.rs`](super).
+//! `Run` stores one immutable execution attempt for a `Task`.
 //!
-//! # Position in Lifecycle
+//! # How to use this object
 //!
-//! ```text
-//!  ④  Task ──runs──▶ [Run₀, Run₁, ...]
-//!                        │
-//!                        ▼
-//!  ⑤  Run (Created → Patching → Validating → Completed/Failed)
-//!       │
-//!       ├──task──▶ Task          (mandatory, 1:1)
-//!       ├──plan──▶ Plan          (snapshot reference)
-//!       ├──snapshot──▶ ContextSnapshot  (optional)
-//!       │
-//!       │  ┌─── agent execution loop ───┐
-//!       │  │                            │
-//!       │  │  ⑥ ToolInvocation (1:N)    │
-//!       │  │       │                    │
-//!       │  │       ▼                    │
-//!       │  │  ⑦ PatchSet (Proposed)     │
-//!       │  │       │                    │
-//!       │  │       ▼                    │
-//!       │  │  ⑧ Evidence (1:N)          │
-//!       │  │       │                    │
-//!       │  │       ├─ pass ─────────────┘
-//!       │  │       └─ fail → new PatchSet
-//!       │  └────────────────────────────┘
-//!       │
-//!       ▼
-//!  ⑨  Decision (terminal verdict)
-//! ```
+//! - Create a `Run` when Libra starts a new execution attempt.
+//! - Set the selected `Plan`, optional `ContextSnapshot`, and runtime
+//!   `Environment` before persistence.
+//! - Create a fresh `Run` for retries instead of mutating a prior run.
 //!
-//! # Status Transitions
+//! # How it works with other objects
 //!
-//! ```text
-//! Created ──▶ Patching ──▶ Validating ──▶ Completed
-//!                │              │
-//!                └──────────────┴──▶ Failed
-//! ```
+//! - `Provenance` records model/provider configuration for the run.
+//! - `ToolInvocation`, `RunEvent`, `PlanStepEvent`, `Evidence`,
+//!   `PatchSet`, `Decision`, and `RunUsage` all attach to `Run`.
+//! - `Decision` is the terminal verdict for a run.
 //!
-//! # Relationships
+//! # How Libra should call it
 //!
-//! | Field | Target | Cardinality | Notes |
-//! |-------|--------|-------------|-------|
-//! | `task` | Task | 1 | Mandatory owning Task |
-//! | `plan` | Plan | 0..1 | Snapshot reference (frozen at Run start) |
-//! | `snapshot` | ContextSnapshot | 0..1 | Static context at Run start |
-//! | `patchsets` | PatchSet | 0..N | Candidate diffs, chronological |
-//!
-//! Reverse references (by `run_id`):
-//! - `Provenance.run_id` → this Run (1:1, LLM config)
-//! - `ToolInvocation.run_id` → this Run (1:N, action log)
-//! - `Evidence.run_id` → this Run (1:N, validation results)
-//! - `Decision.run_id` → this Run (1:1, terminal verdict)
-//!
-//! # Purpose
-//!
-//! - **Execution Context**: Records the baseline `commit`, host
-//!   `environment`, and Plan version so that results can be
-//!   reproduced.
-//! - **Artifact Collection**: Accumulates PatchSets (candidate diffs)
-//!   during the agent execution loop.
-//! - **Isolation**: Each Run is independent — a retry creates a new
-//!   Run with potentially different parameters, without mutating the
-//!   previous Run's state.
+//! Libra should treat `Run` as the execution envelope and keep "active
+//! run", retries, and scheduling state in Libra. Execution progress,
+//! metrics, and failures must be appended as event objects rather than
+//! written back onto the run snapshot.
 
 use std::{collections::HashMap, fmt};
 
@@ -88,72 +38,28 @@ use crate::{
     },
 };
 
-/// Lifecycle status of a [`Run`].
+/// Best-effort runtime environment capture for one `Run`.
 ///
-/// See module docs for the status transition diagram.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RunStatus {
-    /// Run has been created but the agent has not started execution.
-    /// Environment and baseline commit are captured at this point.
-    Created,
-    /// Agent is actively generating code changes. One or more
-    /// [`ToolInvocation`](super::tool::ToolInvocation)s are being
-    /// produced.
-    Patching,
-    /// Agent has produced a candidate
-    /// [`PatchSet`](super::patchset::PatchSet) and is running
-    /// validation tools (tests, lint, build). One or more
-    /// [`Evidence`](super::evidence::Evidence) objects are being
-    /// produced.
-    Validating,
-    /// Agent has finished successfully. A
-    /// [`Decision`](super::decision::Decision) has been created.
-    Completed,
-    /// Agent encountered an unrecoverable error. `Run.error` should
-    /// contain the error message.
-    Failed,
-}
-
-impl RunStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RunStatus::Created => "created",
-            RunStatus::Patching => "patching",
-            RunStatus::Validating => "validating",
-            RunStatus::Completed => "completed",
-            RunStatus::Failed => "failed",
-        }
-    }
-}
-
-impl fmt::Display for RunStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-/// Host environment snapshot captured at Run creation time.
-///
-/// Records the OS, CPU architecture, and working directory so that
-/// results can be correlated with the execution environment. The
-/// `extra` map allows capturing additional environment details
-/// (e.g. tool versions, environment variables) without schema changes.
+/// This is a lightweight reproducibility aid. Libra may augment or
+/// normalize these values before persistence if it needs stricter
+/// environment tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Environment {
-    /// Operating system identifier (e.g. "macos", "linux", "windows").
+    /// Operating system identifier captured for the run environment.
     pub os: String,
-    /// CPU architecture (e.g. "aarch64", "x86_64").
+    /// CPU architecture identifier captured for the run environment.
     pub arch: String,
-    /// Current working directory at Run creation time.
+    /// Working directory from which the run was started.
     pub cwd: String,
-    /// Additional environment details (tool versions, etc.).
+    /// Additional application-defined environment metadata.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl Environment {
-    /// Create a new environment object from the current system environment
+    /// Capture a best-effort environment snapshot from the current
+    /// process.
     pub fn capture() -> Self {
         Self {
             os: std::env::consts::OS.to_string(),
@@ -169,101 +75,36 @@ impl Environment {
     }
 }
 
-/// A single execution attempt of a [`Task`](super::task::Task).
+/// Immutable execution-attempt envelope.
 ///
-/// A Run captures the execution context and accumulates artifacts
-/// during the agent's work. It is step ⑤ in the end-to-end flow.
-/// See module documentation for lifecycle, relationships, and
-/// status transitions.
+/// A stored `Run` says "this attempt existed against this task / plan /
+/// commit baseline". It does not itself accumulate logs or status
+/// transitions after persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Run {
-    /// Common header (object ID, type, timestamps, creator, etc.).
+    /// Common object header carrying the immutable object id, type,
+    /// creator, and timestamps.
     #[serde(flatten)]
     header: Header,
-    /// The [`Task`](super::task::Task) this Run belongs to.
-    ///
-    /// Mandatory — every Run is an execution attempt of exactly one
-    /// Task. `Task.runs` holds the reverse reference. This field is
-    /// set at creation and never changes.
+    /// Canonical owning task for this execution attempt.
     task: Uuid,
-    /// The [`Plan`](super::plan::Plan) this Run is executing.
-    ///
-    /// This is a **snapshot reference**: it records the specific Plan
-    /// version that was active when this Run started. After
-    /// replanning, existing Runs keep their original `plan` unchanged
-    /// — only new Runs reference the revised Plan.
-    /// `Intent.plan` always points to the latest revision, but a Run
-    /// may be executing an older version. `None` when no Plan was
-    /// associated (e.g. ad-hoc execution without formal planning).
+    /// Optional selected plan revision used by this attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     plan: Option<Uuid>,
-    /// Git commit hash of the working tree when this Run started.
-    ///
-    /// Serves as the baseline for all code changes: the agent reads
-    /// files at this commit, and the resulting
-    /// [`PatchSet`](super::patchset::PatchSet) diffs are relative to
-    /// it. If the Run fails and a new Run is created, the new Run
-    /// may start from a different commit (e.g. after upstream changes
-    /// are pulled).
+    /// Baseline repository integrity hash from which execution started.
     commit: IntegrityHash,
-    /// Current lifecycle status.
-    ///
-    /// Transitions follow the sequence:
-    /// `Created → Patching → Validating → Completed` (happy path),
-    /// or `→ Failed` from any active state. The orchestrator advances
-    /// the status as the agent progresses through execution phases.
-    status: RunStatus,
-    /// Optional [`ContextSnapshot`](super::context::ContextSnapshot)
-    /// captured at Run creation time.
-    ///
-    /// Records the file tree, documentation fragments, and other
-    /// static context the agent observed when the Run began. Used
-    /// for reproducibility: given the same snapshot and Plan, the
-    /// agent should produce equivalent results. `None` when no
-    /// snapshot was captured.
+    /// Optional static context snapshot captured at run start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     snapshot: Option<Uuid>,
-    /// Chronological list of [`PatchSet`](super::patchset::PatchSet)
-    /// IDs generated during this Run.
-    ///
-    /// Append-only — each new PatchSet is pushed to the end. The
-    /// last entry is the most recent candidate. A Run may produce
-    /// multiple PatchSets when the agent iterates on validation
-    /// failures (step ⑦ → ⑧ retry loop). Empty when no PatchSet
-    /// has been generated yet.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    patchsets: Vec<Uuid>,
-    /// Execution metrics (token usage, timing, etc.).
-    ///
-    /// Free-form JSON for metrics not captured by
-    /// [`Provenance`](super::provenance::Provenance). For example,
-    /// wall-clock duration, number of tool calls, or retry count.
-    /// `None` when no metrics are available.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    metrics: Option<serde_json::Value>,
-    /// Error message if the Run failed.
-    ///
-    /// Set when `status` transitions to `Failed`. Contains a
-    /// human-readable description of what went wrong. `None` while
-    /// the Run is in progress or completed successfully.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    /// Host [`Environment`] snapshot captured at Run creation time.
-    ///
-    /// Automatically populated by [`Run::new`] via
-    /// [`Environment::capture`]. Records OS, architecture, and
-    /// working directory for reproducibility.
+    /// Optional execution environment metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     environment: Option<Environment>,
 }
 
 impl Run {
-    /// Create a new Run.
-    ///
-    /// # Arguments
-    /// * `created_by` - Actor (usually the Orchestrator)
-    /// * `task` - The Task this run belongs to
-    /// * `commit` - The Git commit hash of the checkout
+    /// Create a new execution attempt for the given task and commit
+    /// baseline.
     pub fn new(created_by: ActorRef, task: Uuid, commit: impl AsRef<str>) -> Result<Self, String> {
         let commit = commit.as_ref().parse()?;
         Ok(Self {
@@ -271,81 +112,50 @@ impl Run {
             task,
             plan: None,
             commit,
-            status: RunStatus::Created,
             snapshot: None,
-            patchsets: Vec::new(),
-            metrics: None,
-            error: None,
             environment: Some(Environment::capture()),
         })
     }
 
+    /// Return the immutable header for this run.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
+    /// Return the canonical owning task id.
     pub fn task(&self) -> Uuid {
         self.task
     }
 
-    /// Returns the Plan this Run is executing, if set.
+    /// Return the selected plan revision, if one was stored.
     pub fn plan(&self) -> Option<Uuid> {
         self.plan
     }
 
-    /// Sets the Plan this Run will execute.
+    /// Set or clear the selected plan revision for this in-memory run.
     pub fn set_plan(&mut self, plan: Option<Uuid>) {
         self.plan = plan;
     }
 
+    /// Return the baseline repository integrity hash.
     pub fn commit(&self) -> &IntegrityHash {
         &self.commit
     }
 
-    pub fn status(&self) -> &RunStatus {
-        &self.status
-    }
-
+    /// Return the static context snapshot id, if present.
     pub fn snapshot(&self) -> Option<Uuid> {
         self.snapshot
     }
 
-    /// Returns the chronological list of PatchSet IDs generated during this Run.
-    pub fn patchsets(&self) -> &[Uuid] {
-        &self.patchsets
-    }
-
-    pub fn metrics(&self) -> Option<&serde_json::Value> {
-        self.metrics.as_ref()
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
-    pub fn environment(&self) -> Option<&Environment> {
-        self.environment.as_ref()
-    }
-
-    pub fn set_status(&mut self, status: RunStatus) {
-        self.status = status;
-    }
-
+    /// Set or clear the static context snapshot link for this in-memory
+    /// run.
     pub fn set_snapshot(&mut self, snapshot: Option<Uuid>) {
         self.snapshot = snapshot;
     }
 
-    /// Appends a PatchSet ID to this Run's generation history.
-    pub fn add_patchset(&mut self, patchset_id: Uuid) {
-        self.patchsets.push(patchset_id);
-    }
-
-    pub fn set_metrics(&mut self, metrics: Option<serde_json::Value>) {
-        self.metrics = metrics;
-    }
-
-    pub fn set_error(&mut self, error: Option<String>) {
-        self.error = error;
+    /// Return the captured execution environment, if present.
+    pub fn environment(&self) -> Option<&Environment> {
+        self.environment.as_ref()
     }
 }
 
@@ -386,6 +196,10 @@ impl ObjectTrait for Run {
 mod tests {
     use super::*;
 
+    // Coverage:
+    // - new run creation captures a non-empty environment snapshot
+    // - plan and context snapshot links can be assigned before storage
+
     fn test_hash_hex() -> String {
         IntegrityHash::compute(b"ai-process-test").to_hex()
     }
@@ -394,14 +208,26 @@ mod tests {
     fn test_new_objects_creation() {
         let actor = ActorRef::agent("test-agent").expect("actor");
         let base_hash = test_hash_hex();
+        let run = Run::new(actor, Uuid::from_u128(0x1), &base_hash).expect("run");
 
-        // Run with environment (auto captured)
-        let run = Run::new(actor.clone(), Uuid::from_u128(0x1), &base_hash).expect("run");
-
-        let env = run.environment().unwrap();
-        // Check if it captured real values (assuming we are running on some OS)
+        let env = run.environment().expect("environment");
         assert!(!env.os.is_empty());
         assert!(!env.arch.is_empty());
         assert!(!env.cwd.is_empty());
+    }
+
+    #[test]
+    fn test_run_plan_and_snapshot() {
+        let actor = ActorRef::agent("test-agent").expect("actor");
+        let base_hash = test_hash_hex();
+        let mut run = Run::new(actor, Uuid::from_u128(0x1), &base_hash).expect("run");
+        let plan_id = Uuid::from_u128(0x10);
+        let snapshot_id = Uuid::from_u128(0x20);
+
+        run.set_plan(Some(plan_id));
+        run.set_snapshot(Some(snapshot_id));
+
+        assert_eq!(run.plan(), Some(plan_id));
+        assert_eq!(run.snapshot(), Some(snapshot_id));
     }
 }

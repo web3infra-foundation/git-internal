@@ -8,11 +8,18 @@
 //! # Position in Lifecycle
 //!
 //! ```text
-//! Task ──runs──▶ Run ──patchsets──▶ [PatchSet₀, PatchSet₁, ...]
-//!                  │
-//!                  └──(terminal)──▶ Decision
-//!                                     ├── chosen_patchset ──▶ PatchSet
-//!                                     └── evidence (via Evidence.decision)
+//! ⑤ Run
+//!    ├─ PatchSet*     (⑦)
+//!    ├─ Evidence*     (⑧)
+//!    └─▶ ⑨ Decision (terminal for this Run)
+//!                      │
+//!                      ├─ Commit   → applied patch recorded in Intent/Task context
+//!                      ├─ Checkpoint→ saved progress
+//!                      ├─ Retry    → new Run for same Task
+//!                      └─ Abandon/Rollback → stop or revert
+//!                               │
+//!                               ▼
+//!                           ⑩ Intent terminalization
 //! ```
 //!
 //! A Decision is created **once per Run**, at the end of execution.
@@ -50,6 +57,16 @@
 //!        ├─ Retry ──▶ create new Run for same Task
 //!        └─ Rollback ──▶ revert applied PatchSet
 //! ```
+//!
+//! # How Libra should use this object
+//!
+//! - Create one terminal `Decision` per `Run`.
+//! - Fill `chosen_patchset_id`, `result_commit_sha`, `checkpoint_id`,
+//!   and `rationale` before persistence as appropriate for the verdict.
+//! - Use the decision to advance thread heads, selected plan, release
+//!   status, and UI state in Libra projections.
+//! - Do not encode those mutable current-state choices back onto
+//!   `Intent`, `Task`, `Run`, or `PatchSet`.
 
 use std::fmt;
 
@@ -126,8 +143,10 @@ impl From<&str> for DecisionType {
 /// Terminal verdict of a [`Run`](super::run::Run).
 ///
 /// Created once per Run at the end of execution. See module
-/// documentation for lifecycle position and decision type semantics.
+/// documentation for lifecycle position, decision type semantics, and
+/// Libra calling guidance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Decision {
     /// Common header (object ID, type, timestamps, creator, etc.).
     #[serde(flatten)]
@@ -147,7 +166,9 @@ pub struct Decision {
     /// application.
     ///
     /// Set when `decision_type` is `Commit` — identifies which
-    /// PatchSet from `Run.patchsets` was chosen. `None` for
+    /// PatchSet in the same Run scope was chosen. Ordering between
+    /// multiple candidates is expressed by `PatchSet.sequence`, not by
+    /// a mutable `Run.patchsets` list. `None` for
     /// `Abandon`, `Retry`, `Rollback`, or when no suitable PatchSet
     /// exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,7 +200,7 @@ pub struct Decision {
 }
 
 impl Decision {
-    /// Create a new decision object
+    /// Create a new terminal decision for the given run.
     pub fn new(
         created_by: ActorRef,
         run_id: Uuid,
@@ -196,46 +217,57 @@ impl Decision {
         })
     }
 
+    /// Return the immutable header for this decision.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
+    /// Return the owning run id.
     pub fn run_id(&self) -> Uuid {
         self.run_id
     }
 
+    /// Return the decision type.
     pub fn decision_type(&self) -> &DecisionType {
         &self.decision_type
     }
 
+    /// Return the chosen patchset id, if any.
     pub fn chosen_patchset_id(&self) -> Option<Uuid> {
         self.chosen_patchset_id
     }
 
+    /// Return the resulting repository commit hash, if any.
     pub fn result_commit_sha(&self) -> Option<&IntegrityHash> {
         self.result_commit_sha.as_ref()
     }
 
+    /// Return the checkpoint id, if any.
     pub fn checkpoint_id(&self) -> Option<&str> {
         self.checkpoint_id.as_deref()
     }
 
+    /// Return the human-readable rationale, if present.
     pub fn rationale(&self) -> Option<&str> {
         self.rationale.as_deref()
     }
 
+    /// Set or clear the chosen patchset id.
     pub fn set_chosen_patchset_id(&mut self, chosen_patchset_id: Option<Uuid>) {
         self.chosen_patchset_id = chosen_patchset_id;
     }
 
+    /// Set or clear the resulting repository commit hash.
     pub fn set_result_commit_sha(&mut self, result_commit_sha: Option<IntegrityHash>) {
         self.result_commit_sha = result_commit_sha;
     }
 
+    /// Set or clear the checkpoint id.
     pub fn set_checkpoint_id(&mut self, checkpoint_id: Option<String>) {
         self.checkpoint_id = checkpoint_id;
     }
 
+    /// Set or clear the human-readable rationale.
     pub fn set_rationale(&mut self, rationale: Option<String>) {
         self.rationale = rationale;
     }
@@ -276,6 +308,11 @@ impl ObjectTrait for Decision {
 
 #[cfg(test)]
 mod tests {
+    // Coverage:
+    // - terminal decision field access
+    // - chosen patchset / result commit attachment
+    // - checkpoint and rationale mutation
+
     use super::*;
 
     #[test]

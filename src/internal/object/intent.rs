@@ -1,81 +1,37 @@
-//! AI Intent Definition
+//! AI Intent snapshot.
 //!
-//! An [`Intent`] is the **entry point** of every AI-assisted workflow — it
-//! captures the raw user request (`prompt`) and the AI's structured
-//! interpretation of that request (`content`). The Intent is the first
-//! object created (step ① → ②) and the last one completed (step ⑩) in
-//! the end-to-end flow described in [`mod.rs`](super).
+//! `Intent` is the immutable entry point of the agent workflow. It
+//! captures one revision of the user's request plus the optional
+//! analyzed `IntentSpec`.
 //!
-//! # Position in Lifecycle
+//! # How to use this object
 //!
-//! ```text
-//!  ①  User input (natural-language request)
-//!       │
-//!       ▼
-//!  ②  Intent (Draft)        ← prompt recorded, content = None
-//!       │  AI analysis
-//!       ▼
-//!      Intent (Active)       ← content filled, plan linked
-//!       │
-//!       ├──▶ ContextPipeline ← seeded with IntentAnalysis frame
-//!       │
-//!       ▼
-//!  ③  Plan (derived from content)
-//!       │
-//!       ▼
-//!  ④–⑨ Task → Run → PatchSet → Evidence → Decision
-//!       │
-//!       ▼
-//!  ⑩  Intent (Completed)    ← commit recorded
-//! ```
+//! - Create a root `Intent` when Libra accepts a new user request.
+//! - Create a new `Intent` revision when the request is refined,
+//!   branched, or merged; link earlier revisions through `parents`.
+//! - Fill `spec` before persistence if analysis has already produced a
+//!   structured request.
+//! - Freeze analysis-time context through `analysis_context_frames`
+//!   when `ContextFrame`s were used to derive the `IntentSpec`.
 //!
-//! ## Conversational Refinement
+//! # How it works with other objects
 //!
-//! ```text
-//!  Intent₀ ("Add pagination")
-//!     ▲
-//!     │ parent
-//!  Intent₁ ("Also add cursor-based pagination")
-//!     ▲
-//!     │ parent
-//!  Intent₂ ("Use opaque cursors, not offsets")
-//! ```
+//! - `Plan.intent` points back to the `Intent` that the plan belongs to.
+//! - `Task.intent` may point back to the originating `Intent`.
+//! - `analysis_context_frames` freezes the context used to derive the
+//!   stored `IntentSpec`.
+//! - `IntentEvent` records lifecycle facts such as analyzed /
+//!   completed / cancelled.
 //!
-//! Each follow-up Intent links to its predecessor via `parent`,
-//! forming a singly-linked list from newest to oldest. This
-//! preserves the full conversational history without mutating
-//! earlier Intents.
+//! # How Libra should call it
 //!
-//! ## Status Transitions
-//!
-//! ```text
-//!  Draft ──▶ Active ──▶ Completed
-//!    │          │
-//!    └──────────┴──▶ Cancelled
-//! ```
-//!
-//! Status changes are **append-only**: each transition pushes a
-//! [`StatusEntry`] onto the `statuses` vector. The current status
-//! is always the last entry. This design preserves the full
-//! transition history with timestamps and optional reasons.
-//!
-//! # Purpose
-//!
-//! - **Traceability**: Links the original human request to all
-//!   downstream artifacts (Plan, Tasks, Runs, PatchSets). Reviewers
-//!   can trace any code change back to the Intent that motivated it.
-//! - **Reproducibility**: Stores both the verbatim prompt and the
-//!   AI's interpretation, allowing re-analysis with different models
-//!   or parameters.
-//! - **Conversational Context**: The `parent` chain captures iterative
-//!   refinement, so the agent can understand how the user's request
-//!   evolved over multiple exchanges.
-//! - **Completion Tracking**: The `commit` field closes the loop by
-//!   recording which git commit satisfied the Intent.
+//! Libra should persist a new `Intent` for every semantic revision of
+//! the request, then keep "current thread head", "selected plan", and
+//! other mutable session state in Libra projections rather than on the
+//! `Intent` object itself.
 
 use std::fmt;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -84,276 +40,155 @@ use crate::{
     hash::ObjectHash,
     internal::object::{
         ObjectTrait,
-        integrity::IntegrityHash,
         types::{ActorRef, Header, ObjectType},
     },
 };
 
-/// Status of an Intent through its lifecycle.
+/// Structured request payload derived from the free-form prompt.
 ///
-/// Valid transitions (see module docs for diagram):
-///
-/// - `Draft` → `Active`: AI has analyzed the prompt and filled `content`.
-/// - `Active` → `Completed`: All downstream Tasks finished successfully
-///   and the result commit has been recorded in `Intent.commit`.
-/// - `Draft` → `Cancelled`: User abandoned the request before AI analysis.
-/// - `Active` → `Cancelled`: User or orchestrator cancelled during
-///   planning/execution (e.g. timeout, user interrupt, budget exceeded).
-///
-/// Reverse transitions (e.g. `Active` → `Draft`) are not expected.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum IntentStatus {
-    /// Initial state. The `prompt` has been captured but the AI has not
-    /// yet analyzed it — `Intent.content` is `None`.
-    Draft,
-    /// AI interpretation is available in `Intent.content`. Downstream
-    /// objects (Plan, Tasks, Runs) may be in progress.
-    Active,
-    /// The Intent has been fully satisfied. `Intent.commit` should
-    /// contain the SHA of the git commit that fulfils the request.
-    Completed,
-    /// The Intent was abandoned before completion. A reason should be
-    /// recorded in the [`StatusEntry`] that carries this status.
-    Cancelled,
-}
+/// `IntentSpec` remains intentionally schema-agnostic at the storage
+/// layer. Libra can impose additional application-level conventions on
+/// top of the raw JSON payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[serde(transparent)]
+pub struct IntentSpec(pub serde_json::Value);
 
-impl IntentStatus {
-    /// Returns the snake_case string representation.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            IntentStatus::Draft => "draft",
-            IntentStatus::Active => "active",
-            IntentStatus::Completed => "completed",
-            IntentStatus::Cancelled => "cancelled",
-        }
+impl From<String> for IntentSpec {
+    fn from(value: String) -> Self {
+        Self(serde_json::Value::String(value))
     }
 }
 
-impl fmt::Display for IntentStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
+impl From<&str> for IntentSpec {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_string())
     }
 }
 
-/// A single entry in the Intent's status history.
+/// Immutable request/spec revision.
 ///
-/// Each status transition appends a new `StatusEntry` to
-/// `Intent.statuses`. The entries are never removed or mutated,
-/// forming an append-only audit log. The current status is always
-/// `statuses.last().status`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StatusEntry {
-    /// The [`IntentStatus`] that was entered by this transition.
-    status: IntentStatus,
-    /// UTC timestamp of when this transition occurred.
-    ///
-    /// Automatically set to `Utc::now()` by [`StatusEntry::new`].
-    /// Timestamps across entries in the same Intent are monotonically
-    /// non-decreasing.
-    changed_at: DateTime<Utc>,
-    /// Optional human-readable reason for the transition.
-    ///
-    /// Recommended for `Cancelled` (why the request was abandoned) and
-    /// `Completed` (summary of what was achieved). May be `None` for
-    /// routine transitions like `Draft` → `Active`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-}
-
-impl StatusEntry {
-    /// Creates a new status entry timestamped to now.
-    pub fn new(status: IntentStatus, reason: Option<String>) -> Self {
-        Self {
-            status,
-            changed_at: Utc::now(),
-            reason,
-        }
-    }
-
-    /// The status that was entered.
-    pub fn status(&self) -> &IntentStatus {
-        &self.status
-    }
-
-    /// When the transition occurred.
-    pub fn changed_at(&self) -> DateTime<Utc> {
-        self.changed_at
-    }
-
-    /// Optional reason for the transition.
-    pub fn reason(&self) -> Option<&str> {
-        self.reason.as_deref()
-    }
-}
-
-/// The entry point of every AI-assisted workflow.
-///
-/// An `Intent` captures both the verbatim user input (`prompt`) and the
-/// AI's structured understanding of that input (`content`). It is
-/// created at step ② and completed at step ⑩ of the end-to-end flow.
-/// See module documentation for lifecycle position, status transitions,
-/// and conversational refinement.
+/// One stored `Intent` answers "what request revision existed here?".
+/// It does not answer "what is the current thread head?" or "which plan
+/// is currently selected?" because those are Libra projection concerns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Intent {
-    /// Common header (object ID, type, timestamps, creator, etc.).
+    /// Common object header carrying the immutable object id, type,
+    /// creator, and timestamps.
     #[serde(flatten)]
     header: Header,
-    /// Verbatim natural-language request from the user.
+    /// Parent intent revisions that this revision directly derives from.
     ///
-    /// This is the unmodified input exactly as the user typed it (e.g.
-    /// "Add pagination to the user list API"). It is set once at
-    /// creation and never changed, preserving the original request for
-    /// auditing and potential re-analysis with a different model.
+    /// Multiple parents allow merge-style intent history similar to a
+    /// commit DAG.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parents: Vec<Uuid>,
+    /// Original free-form user request captured for this revision.
     prompt: String,
-    /// AI-analyzed structured interpretation of `prompt`.
-    ///
-    /// `None` while the Intent is in `Draft` status — the AI has not
-    /// yet processed the prompt. Set to `Some(...)` when the AI
-    /// completes its analysis, at which point the status should
-    /// transition to `Active`. The content typically includes:
-    /// - Disambiguated requirements
-    /// - Identified scope (which files, modules, APIs are affected)
-    /// - Inferred constraints or acceptance criteria
-    ///
-    /// Unlike `prompt`, `content` is the AI's output and may be
-    /// regenerated if the analysis is re-run.
+    /// Structured interpretation of `prompt`, when Libra or an agent has
+    /// already produced one at persistence time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
-    /// Link to a predecessor Intent for conversational refinement.
+    spec: Option<IntentSpec>,
+    /// Immutable context-frame snapshot used while deriving `spec`.
     ///
-    /// Forms a singly-linked list from newest to oldest: each
-    /// follow-up Intent points to the Intent it refines. `None` for
-    /// the first Intent in a conversation. The orchestrator can walk
-    /// the `parent` chain to reconstruct the full conversational
-    /// history and provide prior context to the AI.
-    ///
-    /// Example chain: Intent₂ → Intent₁ → Intent₀ (root, parent=None).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    parent: Option<Uuid>,
-    /// Git commit hash recorded when this Intent is fulfilled.
-    ///
-    /// Set by the orchestrator at step ⑩ after the
-    /// [`Decision`](super::decision::Decision) applies the final
-    /// PatchSet. `None` while the Intent is in progress (`Draft` or
-    /// `Active`) or if it was `Cancelled`. When set, the Intent's
-    /// status should be `Completed`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    commit: Option<IntegrityHash>,
-    /// Link to the [`Plan`](super::plan::Plan) derived from this
-    /// Intent.
-    ///
-    /// Set after the AI analyzes `content` and produces a Plan at
-    /// step ③. Always points to the **latest** Plan revision — if
-    /// the Plan is revised (via `Plan.previous` chain), this field
-    /// is updated to the newest version. `None` while no Plan has
-    /// been created yet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    plan: Option<Uuid>,
-    /// Append-only chronological history of status transitions.
-    ///
-    /// Initialized with a single `Draft` entry at creation. Each call
-    /// to [`set_status`](Intent::set_status) or
-    /// [`set_status_with_reason`](Intent::set_status_with_reason)
-    /// pushes a new [`StatusEntry`]. The current status is always
-    /// `statuses.last().status`. Entries are never removed or mutated.
-    ///
-    /// This design preserves the full transition timeline with
-    /// timestamps and optional reasons, enabling audit and duration
-    /// analysis (e.g. time spent in `Active` before `Completed`).
-    statuses: Vec<StatusEntry>,
+    /// This is distinct from `Plan.context_frames`: these frames belong
+    /// to the prompt-analysis / intent-spec phase rather than the
+    /// plan-generation phase.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    analysis_context_frames: Vec<Uuid>,
 }
 
 impl Intent {
-    /// Create a new intent in `Draft` status from a raw user prompt.
-    ///
-    /// The `content` field is initially `None` — call [`set_content`](Intent::set_content)
-    /// after the AI has analyzed the prompt.
+    /// Create a new root intent revision from a free-form user prompt.
     pub fn new(created_by: ActorRef, prompt: impl Into<String>) -> Result<Self, String> {
         Ok(Self {
             header: Header::new(ObjectType::Intent, created_by)?,
+            parents: Vec::new(),
             prompt: prompt.into(),
-            content: None,
-            parent: None,
-            commit: None,
-            plan: None,
-            statuses: vec![StatusEntry::new(IntentStatus::Draft, None)],
+            spec: None,
+            analysis_context_frames: Vec::new(),
         })
     }
 
-    /// Returns a reference to the common header.
+    /// Create a new intent revision from a single parent intent.
+    ///
+    /// This is the common helper for linear refinement.
+    pub fn new_revision_from(
+        created_by: ActorRef,
+        prompt: impl Into<String>,
+        parent: &Self,
+    ) -> Result<Self, String> {
+        Self::new_revision_chain(created_by, prompt, &[parent.header.object_id()])
+    }
+
+    /// Create a new intent revision from multiple parent intents.
+    ///
+    /// Use this when Libra merges several prior intent branches into a
+    /// new request/spec revision.
+    pub fn new_revision_chain(
+        created_by: ActorRef,
+        prompt: impl Into<String>,
+        parent_ids: &[Uuid],
+    ) -> Result<Self, String> {
+        let mut intent = Self::new(created_by, prompt)?;
+        for id in parent_ids {
+            intent.add_parent(*id);
+        }
+        Ok(intent)
+    }
+
+    /// Return the immutable header for this intent revision.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
-    /// Returns the raw user prompt.
+    /// Return the direct parent intent ids of this revision.
+    pub fn parents(&self) -> &[Uuid] {
+        &self.parents
+    }
+
+    /// Return the original user prompt stored on this revision.
     pub fn prompt(&self) -> &str {
         &self.prompt
     }
 
-    /// Returns the AI-analyzed content, if available.
-    pub fn content(&self) -> Option<&str> {
-        self.content.as_deref()
+    /// Return the structured request payload, if one was stored.
+    pub fn spec(&self) -> Option<&IntentSpec> {
+        self.spec.as_ref()
     }
 
-    /// Sets the AI-analyzed content.
-    pub fn set_content(&mut self, content: Option<String>) {
-        self.content = content;
+    /// Return the analysis-time context frame ids frozen onto this
+    /// revision.
+    pub fn analysis_context_frames(&self) -> &[Uuid] {
+        &self.analysis_context_frames
     }
 
-    /// Returns the parent intent ID, if this is part of a refinement chain.
-    pub fn parent(&self) -> Option<Uuid> {
-        self.parent
+    /// Add one parent link if it is not already present and is not self.
+    pub fn add_parent(&mut self, parent_id: Uuid) {
+        if parent_id == self.header.object_id() {
+            return;
+        }
+        if !self.parents.contains(&parent_id) {
+            self.parents.push(parent_id);
+        }
     }
 
-    /// Returns the result commit SHA, if the intent has been fulfilled.
-    pub fn commit(&self) -> Option<&IntegrityHash> {
-        self.commit.as_ref()
+    /// Replace the parent set for this in-memory revision before
+    /// persistence.
+    pub fn set_parents(&mut self, parents: Vec<Uuid>) {
+        self.parents = parents;
     }
 
-    /// Returns the current lifecycle status (the last entry in the history).
-    ///
-    /// Returns `None` only if `statuses` is empty, which should not
-    /// happen for objects created via [`Intent::new`] (seeds with
-    /// `Draft`), but may occur for malformed deserialized data.
-    pub fn status(&self) -> Option<&IntentStatus> {
-        self.statuses.last().map(|e| &e.status)
+    /// Set or clear the structured spec for this in-memory revision.
+    pub fn set_spec(&mut self, spec: Option<IntentSpec>) {
+        self.spec = spec;
     }
 
-    /// Returns the full chronological status history.
-    pub fn statuses(&self) -> &[StatusEntry] {
-        &self.statuses
-    }
-
-    /// Links this intent to a parent intent for conversational refinement.
-    pub fn set_parent(&mut self, parent: Option<Uuid>) {
-        self.parent = parent;
-    }
-
-    /// Records the git commit SHA that fulfilled this intent.
-    pub fn set_commit(&mut self, sha: Option<IntegrityHash>) {
-        self.commit = sha;
-    }
-
-    /// Returns the associated Plan ID, if a Plan has been derived from this intent.
-    pub fn plan(&self) -> Option<Uuid> {
-        self.plan
-    }
-
-    /// Associates this intent with a [`Plan`](super::plan::Plan).
-    pub fn set_plan(&mut self, plan: Option<Uuid>) {
-        self.plan = plan;
-    }
-
-    /// Transitions the intent to a new lifecycle status, appending to the history.
-    pub fn set_status(&mut self, status: IntentStatus) {
-        self.statuses.push(StatusEntry::new(status, None));
-    }
-
-    /// Transitions the intent to a new lifecycle status with a reason.
-    pub fn set_status_with_reason(&mut self, status: IntentStatus, reason: impl Into<String>) {
-        self.statuses
-            .push(StatusEntry::new(status, Some(reason.into())));
+    /// Replace the analysis-time context frame set for this in-memory
+    /// revision before persistence.
+    pub fn set_analysis_context_frames(&mut self, analysis_context_frames: Vec<Uuid>) {
+        self.analysis_context_frames = analysis_context_frames;
     }
 }
 
@@ -394,60 +229,59 @@ impl ObjectTrait for Intent {
 mod tests {
     use super::*;
 
+    // Coverage:
+    // - root intent construction defaults
+    // - revision graph creation for single-parent and multi-parent flows
+    // - structured spec assignment before persistence
+    // - frozen analysis-time context-frame references
+
     #[test]
     fn test_intent_creation() {
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut intent = Intent::new(actor, "Refactor login flow").expect("intent");
+        let intent = Intent::new(actor, "Add pagination").expect("intent");
 
-        assert_eq!(intent.header().object_type(), &ObjectType::Intent);
-        assert_eq!(intent.prompt(), "Refactor login flow");
-        assert!(intent.content().is_none());
-        assert_eq!(intent.status(), Some(&IntentStatus::Draft));
-        assert!(intent.parent().is_none());
-        assert!(intent.plan().is_none());
-
-        intent.set_content(Some("Restructure the authentication module".to_string()));
-        assert_eq!(
-            intent.content(),
-            Some("Restructure the authentication module")
-        );
-
-        // After content is analyzed, a Plan can be linked
-        let plan_id = Uuid::from_u128(0x42);
-        intent.set_plan(Some(plan_id));
-        assert_eq!(intent.plan(), Some(plan_id));
+        assert_eq!(intent.prompt(), "Add pagination");
+        assert!(intent.parents().is_empty());
+        assert!(intent.spec().is_none());
+        assert!(intent.analysis_context_frames().is_empty());
     }
 
     #[test]
-    fn test_statuses() {
+    fn test_intent_revision_graph() {
         let actor = ActorRef::human("jackie").expect("actor");
-        let mut intent = Intent::new(actor, "Fix bug").expect("intent");
+        let root = Intent::new(actor.clone(), "A").expect("intent");
+        let branch_a = Intent::new_revision_from(actor.clone(), "B", &root).expect("intent");
+        let branch_b = Intent::new_revision_chain(
+            actor,
+            "C",
+            &[root.header().object_id(), branch_a.header().object_id()],
+        )
+        .expect("intent");
 
-        // Initial state: one Draft entry
-        assert_eq!(intent.statuses().len(), 1);
-        assert_eq!(intent.status(), Some(&IntentStatus::Draft));
+        assert_eq!(branch_a.parents(), &[root.header().object_id()]);
+        assert_eq!(
+            branch_b.parents(),
+            &[root.header().object_id(), branch_a.header().object_id()]
+        );
+    }
 
-        // Transition to Active
-        intent.set_status(IntentStatus::Active);
-        assert_eq!(intent.status(), Some(&IntentStatus::Active));
-        assert_eq!(intent.statuses().len(), 2);
+    #[test]
+    fn test_spec_assignment() {
+        let actor = ActorRef::human("jackie").expect("actor");
+        let mut intent = Intent::new(actor, "A").expect("intent");
+        intent.set_spec(Some("structured spec".into()));
+        assert_eq!(intent.spec(), Some(&IntentSpec::from("structured spec")));
+    }
 
-        // Transition to Completed with reason
-        intent.set_status_with_reason(IntentStatus::Completed, "All tasks done");
-        assert_eq!(intent.status(), Some(&IntentStatus::Completed));
-        assert_eq!(intent.statuses().len(), 3);
+    #[test]
+    fn test_analysis_context_frames() {
+        let actor = ActorRef::human("jackie").expect("actor");
+        let mut intent = Intent::new(actor, "A").expect("intent");
+        let frame_a = Uuid::from_u128(0x10);
+        let frame_b = Uuid::from_u128(0x11);
 
-        // Verify full history
-        let history = intent.statuses();
-        assert_eq!(history[0].status(), &IntentStatus::Draft);
-        assert!(history[0].reason().is_none());
-        assert_eq!(history[1].status(), &IntentStatus::Active);
-        assert!(history[1].reason().is_none());
-        assert_eq!(history[2].status(), &IntentStatus::Completed);
-        assert_eq!(history[2].reason(), Some("All tasks done"));
+        intent.set_analysis_context_frames(vec![frame_a, frame_b]);
 
-        // Timestamps are ordered
-        assert!(history[1].changed_at() >= history[0].changed_at());
-        assert!(history[2].changed_at() >= history[1].changed_at());
+        assert_eq!(intent.analysis_context_frames(), &[frame_a, frame_b]);
     }
 }

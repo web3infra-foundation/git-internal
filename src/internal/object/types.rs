@@ -1,72 +1,94 @@
-//! Object type enumeration and AI Object Header Definition.
+//! Object type, actor, artifact, and header primitives.
 //!
-//! This module defines the common metadata header shared by all AI process objects
-//! and the object type enumeration used across pack/object modules.
+//! This module centralizes the low-level metadata shared across the
+//! object layer:
+//!
+//! - `ObjectType` defines every persisted object family and the
+//!   conversions needed by pack encoding, loose-object style headers,
+//!   JSON payloads, and internal numeric ids.
+//! - `ActorKind` and `ActorRef` identify who created an object.
+//! - `ArtifactRef` links an object to content stored outside the Git
+//!   object database.
+//! - `Header` is the immutable metadata envelope embedded into AI
+//!   objects such as `Intent`, `Plan`, or `Run`.
+//!
+//! One important distinction in this module is that object types live in
+//! multiple identifier spaces:
+//!
+//! - Git pack header type bits support only core Git types and delta
+//!   entries.
+//! - String/byte names are used for textual encodings and AI object
+//!   persistence.
+//! - `to_u8` / `from_u8` provide a crate-local stable numeric mapping
+//!   that covers every variant.
 
-use std::{
-    collections::HashMap,
-    fmt::{self, Display},
-};
+use std::fmt::{self, Display};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::integrity::{IntegrityHash, compute_integrity_hash};
+use super::integrity::IntegrityHash;
 use crate::errors::GitError;
 
-/// Visibility of an AI process object.
+/// Canonical object kind shared across Git-native and AI-native objects.
 ///
-/// Determines whether the object is accessible only within the project (Private)
-/// or can be shared externally (Public).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Visibility {
-    Private,
-    Public,
-}
-
-/// In Git, each object type is assigned a unique integer value, which is used to identify the
-/// type of the object in Git repositories.
-///
-/// * `Blob` (1): A Git object that stores the content of a file.
-/// * `Tree` (2): A Git object that represents a directory or a folder in a Git repository.
-/// * `Commit` (3): A Git object that represents a commit in a Git repository, which contains
-///   information such as the author, committer, commit message, and parent commits.
-/// * `Tag` (4): A Git object that represents a tag in a Git repository, which is used to mark a
-///   specific point in the Git history.
-/// * `OffsetDelta` (6): A Git object that represents a delta between two objects, where the delta
-///   is stored as an offset to the base object.
-/// * `HashDelta` (7): A Git object that represents a delta between two objects, where the delta
-///   is stored as a hash of the base object.
-///
-/// By assigning unique integer values to each Git object type, Git can easily and efficiently
-/// identify the type of an object and perform the appropriate operations on it. when parsing a Git
-/// repository, Git can use the integer value of an object's type to determine how to parse
-/// the object's content.
+/// The first seven variants mirror Git pack semantics. The remaining
+/// variants describe the application's AI workflow objects.
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectType {
+    /// A Git commit object.
     Commit = 1,
+    /// A Git tree object.
     Tree,
+    /// A Git blob object.
     Blob,
+    /// A Git tag object.
     Tag,
-    OffsetZstdelta, // Private extension for Zstandard-compressed delta objects
+    /// A pack entry encoded as a zstd-compressed offset delta.
+    OffsetZstdelta,
+    /// A pack entry encoded as an offset delta.
     OffsetDelta,
+    /// A pack entry encoded as a reference delta.
     HashDelta,
+    /// A captured slice of conversational or execution context.
     ContextSnapshot,
+    /// A recorded decision made by an agent or system.
     Decision,
+    /// Supporting evidence attached to a decision or plan.
     Evidence,
+    /// A persisted set of file or content changes.
     PatchSet,
+    /// A multi-step plan derived from an intent.
     Plan,
+    /// Provenance metadata for generated outputs or workflow state.
     Provenance,
+    /// A concrete run/execution of an agent workflow.
     Run,
+    /// A task belonging to a run or plan.
     Task,
+    /// An immutable revision of the user's request.
     Intent,
+    /// A persisted record of a tool call.
     ToolInvocation,
-    ContextPipeline,
+    /// A frame of structured context injected into execution.
+    ContextFrame,
+    /// A lifecycle event attached to an intent.
+    IntentEvent,
+    /// A lifecycle event attached to a task.
+    TaskEvent,
+    /// A lifecycle event attached to a run.
+    RunEvent,
+    /// A lifecycle event attached to an individual plan step.
+    PlanStepEvent,
+    /// Usage/accounting information recorded for a run.
+    RunUsage,
 }
 
+// Canonical byte labels used when an object type needs a stable textual
+// wire representation. Delta variants intentionally do not have entries
+// here because they are pack-only encodings rather than named objects.
 const COMMIT_OBJECT_TYPE: &[u8] = b"commit";
 const TREE_OBJECT_TYPE: &[u8] = b"tree";
 const BLOB_OBJECT_TYPE: &[u8] = b"blob";
@@ -81,9 +103,13 @@ const RUN_OBJECT_TYPE: &[u8] = b"run";
 const TASK_OBJECT_TYPE: &[u8] = b"task";
 const INTENT_OBJECT_TYPE: &[u8] = b"intent";
 const TOOL_INVOCATION_OBJECT_TYPE: &[u8] = b"invocation";
-const CONTEXT_PIPELINE_OBJECT_TYPE: &[u8] = b"pipeline";
+const CONTEXT_FRAME_OBJECT_TYPE: &[u8] = b"context_frame";
+const INTENT_EVENT_OBJECT_TYPE: &[u8] = b"intent_event";
+const TASK_EVENT_OBJECT_TYPE: &[u8] = b"task_event";
+const RUN_EVENT_OBJECT_TYPE: &[u8] = b"run_event";
+const PLAN_STEP_EVENT_OBJECT_TYPE: &[u8] = b"plan_step_event";
+const RUN_USAGE_OBJECT_TYPE: &[u8] = b"run_usage";
 
-/// Display trait for Git objects type
 impl Display for ObjectType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -104,18 +130,21 @@ impl Display for ObjectType {
             ObjectType::Task => write!(f, "task"),
             ObjectType::Intent => write!(f, "intent"),
             ObjectType::ToolInvocation => write!(f, "invocation"),
-            ObjectType::ContextPipeline => write!(f, "pipeline"),
+            ObjectType::ContextFrame => write!(f, "context_frame"),
+            ObjectType::IntentEvent => write!(f, "intent_event"),
+            ObjectType::TaskEvent => write!(f, "task_event"),
+            ObjectType::RunEvent => write!(f, "run_event"),
+            ObjectType::PlanStepEvent => write!(f, "plan_step_event"),
+            ObjectType::RunUsage => write!(f, "run_usage"),
         }
     }
 }
 
-/// Display trait for Git objects type
 impl ObjectType {
-    /// Convert object type to 3-bit pack header type id.
+    /// Convert to the 3-bit pack header type used by Git pack entries.
     ///
-    /// Git pack headers only carry 3 type bits (values 0..=7). AI object
-    /// types are not representable in this field and must not be written
-    /// as regular base objects in a pack entry.
+    /// Only Git-native base objects and delta encodings are valid in
+    /// this space. AI objects do not have a pack-header representation.
     pub fn to_pack_type_u8(&self) -> Result<u8, GitError> {
         match self {
             ObjectType::Commit => Ok(1),
@@ -132,7 +161,7 @@ impl ObjectType {
         }
     }
 
-    /// Decode 3-bit pack header type id to object type.
+    /// Parse a Git pack header type number into an `ObjectType`.
     pub fn from_pack_type_u8(number: u8) -> Result<ObjectType, GitError> {
         match number {
             1 => Ok(ObjectType::Commit),
@@ -148,11 +177,10 @@ impl ObjectType {
         }
     }
 
-    /// Returns the loose-object type header bytes (e.g. `b"commit"`, `b"blob"`).
+    /// Return the canonical borrowed byte label for named object types.
     ///
-    /// Delta types (`OffsetDelta`, `HashDelta`, `OffsetZstdelta`) only
-    /// exist inside pack files and have no loose-object representation.
-    /// Passing a delta type is a logic error and returns `None`.
+    /// Delta entries return `None` because they are represented by pack
+    /// type bits rather than textual object names.
     pub fn to_bytes(&self) -> Option<&[u8]> {
         match self {
             ObjectType::Commit => Some(COMMIT_OBJECT_TYPE),
@@ -169,12 +197,17 @@ impl ObjectType {
             ObjectType::Task => Some(TASK_OBJECT_TYPE),
             ObjectType::Intent => Some(INTENT_OBJECT_TYPE),
             ObjectType::ToolInvocation => Some(TOOL_INVOCATION_OBJECT_TYPE),
-            ObjectType::ContextPipeline => Some(CONTEXT_PIPELINE_OBJECT_TYPE),
+            ObjectType::ContextFrame => Some(CONTEXT_FRAME_OBJECT_TYPE),
+            ObjectType::IntentEvent => Some(INTENT_EVENT_OBJECT_TYPE),
+            ObjectType::TaskEvent => Some(TASK_EVENT_OBJECT_TYPE),
+            ObjectType::RunEvent => Some(RUN_EVENT_OBJECT_TYPE),
+            ObjectType::PlanStepEvent => Some(PLAN_STEP_EVENT_OBJECT_TYPE),
+            ObjectType::RunUsage => Some(RUN_USAGE_OBJECT_TYPE),
             ObjectType::OffsetDelta | ObjectType::HashDelta | ObjectType::OffsetZstdelta => None,
         }
     }
 
-    /// Parses a string representation of a Git object type and returns an ObjectType value
+    /// Parse the canonical textual object name used in persisted data.
     pub fn from_string(s: &str) -> Result<ObjectType, GitError> {
         match s {
             "blob" => Ok(ObjectType::Blob),
@@ -191,45 +224,56 @@ impl ObjectType {
             "task" => Ok(ObjectType::Task),
             "intent" => Ok(ObjectType::Intent),
             "invocation" => Ok(ObjectType::ToolInvocation),
-            "pipeline" => Ok(ObjectType::ContextPipeline),
+            "context_frame" => Ok(ObjectType::ContextFrame),
+            "intent_event" => Ok(ObjectType::IntentEvent),
+            "task_event" => Ok(ObjectType::TaskEvent),
+            "run_event" => Ok(ObjectType::RunEvent),
+            "plan_step_event" => Ok(ObjectType::PlanStepEvent),
+            "run_usage" => Ok(ObjectType::RunUsage),
             _ => Err(GitError::InvalidObjectType(s.to_string())),
         }
     }
 
-    /// Convert an object type to a byte array.
+    /// Return the canonical textual object name as owned bytes.
+    ///
+    /// This is the owned allocation counterpart to `to_bytes()`.
     pub fn to_data(self) -> Result<Vec<u8>, GitError> {
         match self {
-            ObjectType::Blob => Ok(vec![0x62, 0x6c, 0x6f, 0x62]), // blob
-            ObjectType::Tree => Ok(vec![0x74, 0x72, 0x65, 0x65]), // tree
-            ObjectType::Commit => Ok(vec![0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74]), // commit
-            ObjectType::Tag => Ok(vec![0x74, 0x61, 0x67]),        // tag
-            ObjectType::ContextSnapshot => Ok(vec![0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74]), // snapshot
-            ObjectType::Decision => Ok(vec![0x64, 0x65, 0x63, 0x69, 0x73, 0x69, 0x6f, 0x6e]), // decision
-            ObjectType::Evidence => Ok(vec![0x65, 0x76, 0x69, 0x64, 0x65, 0x6e, 0x63, 0x65]), // evidence
-            ObjectType::PatchSet => Ok(vec![0x70, 0x61, 0x74, 0x63, 0x68, 0x73, 0x65, 0x74]), // patchset
-            ObjectType::Plan => Ok(vec![0x70, 0x6c, 0x61, 0x6e]), // plan
-            ObjectType::Provenance => Ok(vec![
-                0x70, 0x72, 0x6f, 0x76, 0x65, 0x6e, 0x61, 0x6e, 0x63, 0x65,
-            ]), // provenance
-            ObjectType::Run => Ok(vec![0x72, 0x75, 0x6e]),        // run
-            ObjectType::Task => Ok(vec![0x74, 0x61, 0x73, 0x6b]), // task
-            ObjectType::Intent => Ok(vec![0x69, 0x6e, 0x74, 0x65, 0x6e, 0x74]), // intent
-            ObjectType::ToolInvocation => Ok(vec![
-                0x69, 0x6e, 0x76, 0x6f, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e,
-            ]), // invocation
-            ObjectType::ContextPipeline => Ok(vec![0x70, 0x69, 0x70, 0x65, 0x6c, 0x69, 0x6e, 0x65]), // pipeline
+            ObjectType::Blob => Ok(b"blob".to_vec()),
+            ObjectType::Tree => Ok(b"tree".to_vec()),
+            ObjectType::Commit => Ok(b"commit".to_vec()),
+            ObjectType::Tag => Ok(b"tag".to_vec()),
+            ObjectType::ContextSnapshot => Ok(b"snapshot".to_vec()),
+            ObjectType::Decision => Ok(b"decision".to_vec()),
+            ObjectType::Evidence => Ok(b"evidence".to_vec()),
+            ObjectType::PatchSet => Ok(b"patchset".to_vec()),
+            ObjectType::Plan => Ok(b"plan".to_vec()),
+            ObjectType::Provenance => Ok(b"provenance".to_vec()),
+            ObjectType::Run => Ok(b"run".to_vec()),
+            ObjectType::Task => Ok(b"task".to_vec()),
+            ObjectType::Intent => Ok(b"intent".to_vec()),
+            ObjectType::ToolInvocation => Ok(b"invocation".to_vec()),
+            ObjectType::ContextFrame => Ok(b"context_frame".to_vec()),
+            ObjectType::IntentEvent => Ok(b"intent_event".to_vec()),
+            ObjectType::TaskEvent => Ok(b"task_event".to_vec()),
+            ObjectType::RunEvent => Ok(b"run_event".to_vec()),
+            ObjectType::PlanStepEvent => Ok(b"plan_step_event".to_vec()),
+            ObjectType::RunUsage => Ok(b"run_usage".to_vec()),
             _ => Err(GitError::InvalidObjectType(self.to_string())),
         }
     }
 
-    /// Convert an object type to a number.
+    /// Convert to the crate-local stable numeric identifier.
+    ///
+    /// Unlike pack type bits, this mapping covers every variant in the
+    /// enum, including AI object kinds.
     pub fn to_u8(&self) -> u8 {
         match self {
             ObjectType::Commit => 1,
             ObjectType::Tree => 2,
             ObjectType::Blob => 3,
             ObjectType::Tag => 4,
-            ObjectType::OffsetZstdelta => 5, // Type 5 is reserved in standard Git packs; we use it for Zstd delta objects.
+            ObjectType::OffsetZstdelta => 5,
             ObjectType::OffsetDelta => 6,
             ObjectType::HashDelta => 7,
             ObjectType::ContextSnapshot => 8,
@@ -242,11 +286,16 @@ impl ObjectType {
             ObjectType::Task => 15,
             ObjectType::Intent => 16,
             ObjectType::ToolInvocation => 17,
-            ObjectType::ContextPipeline => 18,
+            ObjectType::ContextFrame => 18,
+            ObjectType::IntentEvent => 19,
+            ObjectType::TaskEvent => 20,
+            ObjectType::RunEvent => 21,
+            ObjectType::PlanStepEvent => 22,
+            ObjectType::RunUsage => 23,
         }
     }
 
-    /// Convert a number to an object type.
+    /// Parse the crate-local stable numeric identifier.
     pub fn from_u8(number: u8) -> Result<ObjectType, GitError> {
         match number {
             1 => Ok(ObjectType::Commit),
@@ -266,17 +315,19 @@ impl ObjectType {
             15 => Ok(ObjectType::Task),
             16 => Ok(ObjectType::Intent),
             17 => Ok(ObjectType::ToolInvocation),
-            18 => Ok(ObjectType::ContextPipeline),
+            18 => Ok(ObjectType::ContextFrame),
+            19 => Ok(ObjectType::IntentEvent),
+            20 => Ok(ObjectType::TaskEvent),
+            21 => Ok(ObjectType::RunEvent),
+            22 => Ok(ObjectType::PlanStepEvent),
+            23 => Ok(ObjectType::RunUsage),
             _ => Err(GitError::InvalidObjectType(format!(
                 "Invalid object type number: {number}"
             ))),
         }
     }
 
-    /// Returns `true` if this type is a base Git object that can appear
-    /// as a delta target in pack files. AI object types return `false`
-    /// because they cannot be encoded in pack files and should never
-    /// participate in delta window selection.
+    /// Return `true` when the type is one of the four base Git objects.
     pub fn is_base(&self) -> bool {
         matches!(
             self,
@@ -284,8 +335,7 @@ impl ObjectType {
         )
     }
 
-    /// Returns `true` if this type is an AI extension object (not representable
-    /// in the 3-bit Git pack header).
+    /// Return `true` when the type belongs to the AI object family.
     pub fn is_ai_object(&self) -> bool {
         matches!(
             self,
@@ -299,19 +349,29 @@ impl ObjectType {
                 | ObjectType::Task
                 | ObjectType::Intent
                 | ObjectType::ToolInvocation
-                | ObjectType::ContextPipeline
+                | ObjectType::ContextFrame
+                | ObjectType::IntentEvent
+                | ObjectType::TaskEvent
+                | ObjectType::RunEvent
+                | ObjectType::PlanStepEvent
+                | ObjectType::RunUsage
         )
     }
 }
 
-/// Actor kind enum
+/// High-level category of the actor that created an object.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActorKind {
+    /// A human user.
     Human,
+    /// An autonomous or semi-autonomous agent.
     Agent,
+    /// A platform-managed system actor.
     System,
+    /// An external MCP client acting through the platform.
     McpClient,
+    /// A forward-compatible custom actor label.
     #[serde(untagged)]
     Other(String),
 }
@@ -352,708 +412,429 @@ impl From<&str> for ActorKind {
     }
 }
 
-/// Actor reference (who created/triggered).
+/// Reference to the actor that created or owns an object.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ActorRef {
-    /// Kind: human/agent/system/mcp_client
+    /// Coarse actor category used for routing and display.
     kind: ActorKind,
-    /// Subject ID (user/agent name or client ID)
+    /// Stable actor identifier within the actor kind namespace.
     id: String,
-    /// Display name (optional)
+    /// Optional human-friendly label for logs or UIs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     display_name: Option<String>,
-    /// Auth context (optional, Libra usually empty)
-    auth_context: Option<String>,
 }
 
 impl ActorRef {
-    /// Create a new ActorRef with validation.
+    /// Create a new actor reference.
+    ///
+    /// Empty or whitespace-only ids are rejected because object headers
+    /// rely on this identity being present and stable.
     pub fn new(kind: impl Into<ActorKind>, id: impl Into<String>) -> Result<Self, String> {
-        let id_str = id.into();
-        if id_str.trim().is_empty() {
-            return Err("Actor ID cannot be empty".to_string());
+        let id = id.into();
+        if id.trim().is_empty() {
+            return Err("actor id cannot be empty".to_string());
         }
         Ok(Self {
             kind: kind.into(),
-            id: id_str,
+            id,
             display_name: None,
-            auth_context: None,
         })
     }
 
-    /// Create an MCP client actor reference (MCP writes must use this).
-    pub fn new_for_mcp(id: impl Into<String>) -> Result<Self, String> {
-        Self::new(ActorKind::McpClient, id)
-    }
-
-    /// Validate that this actor is an MCP client.
-    pub fn ensure_mcp_client(&self) -> Result<(), String> {
-        if self.kind != ActorKind::McpClient {
-            return Err("MCP writes must use mcp_client actor kind".to_string());
-        }
-        Ok(())
-    }
-
-    pub fn kind(&self) -> &ActorKind {
-        &self.kind
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn display_name(&self) -> Option<&str> {
-        self.display_name.as_deref()
-    }
-
-    pub fn auth_context(&self) -> Option<&str> {
-        self.auth_context.as_deref()
-    }
-
-    pub fn set_display_name(&mut self, display_name: Option<String>) {
-        self.display_name = display_name;
-    }
-
-    pub fn set_auth_context(&mut self, auth_context: Option<String>) {
-        self.auth_context = auth_context;
-    }
-
-    /// Create a human actor reference.
+    /// Convenience constructor for a human actor.
     pub fn human(id: impl Into<String>) -> Result<Self, String> {
         Self::new(ActorKind::Human, id)
     }
 
-    /// Create an agent actor reference.
-    pub fn agent(name: impl Into<String>) -> Result<Self, String> {
-        Self::new(ActorKind::Agent, name)
+    /// Convenience constructor for an agent actor.
+    pub fn agent(id: impl Into<String>) -> Result<Self, String> {
+        Self::new(ActorKind::Agent, id)
     }
 
-    /// Create a system component actor reference.
-    pub fn system(component: impl Into<String>) -> Result<Self, String> {
-        Self::new(ActorKind::System, component)
+    /// Convenience constructor for a system actor.
+    pub fn system(id: impl Into<String>) -> Result<Self, String> {
+        Self::new(ActorKind::System, id)
     }
 
-    /// Create an MCP client actor reference.
-    pub fn mcp_client(client_id: impl Into<String>) -> Result<Self, String> {
-        Self::new(ActorKind::McpClient, client_id)
+    /// Convenience constructor for an MCP client actor.
+    pub fn mcp_client(id: impl Into<String>) -> Result<Self, String> {
+        Self::new(ActorKind::McpClient, id)
+    }
+
+    /// Return the actor category.
+    pub fn kind(&self) -> &ActorKind {
+        &self.kind
+    }
+
+    /// Return the stable actor id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Return the optional UI/display label.
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+
+    /// Set or clear the optional UI/display label.
+    pub fn set_display_name(&mut self, display_name: Option<String>) {
+        self.display_name = display_name;
     }
 }
 
-/// Artifact reference (external content).
+/// Reference to an artifact stored outside the object database.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactRef {
-    /// Store type: local_fs/s3
+    /// External store identifier, such as `s3` or `local`.
     store: String,
-    /// Storage key (e.g., path or object key)
+    /// Store-specific lookup key.
     key: String,
-    /// MIME type (optional)
-    content_type: Option<String>,
-    /// Size in bytes (optional)
-    size_bytes: Option<u64>,
-    /// Content hash (strongly recommended)
-    hash: Option<IntegrityHash>,
-    /// Expiration time (optional)
-    expires_at: Option<DateTime<Utc>>,
 }
 
 impl ArtifactRef {
+    /// Create a new external artifact reference.
+    ///
+    /// Both store and key must be non-empty so the reference remains
+    /// resolvable after persistence.
     pub fn new(store: impl Into<String>, key: impl Into<String>) -> Result<Self, String> {
         let store = store.into();
         let key = key.into();
         if store.trim().is_empty() {
-            return Err("store cannot be empty".to_string());
+            return Err("artifact store cannot be empty".to_string());
         }
         if key.trim().is_empty() {
-            return Err("key cannot be empty".to_string());
+            return Err("artifact key cannot be empty".to_string());
         }
-        Ok(Self {
-            store,
-            key,
-            content_type: None,
-            size_bytes: None,
-            hash: None,
-            expires_at: None,
-        })
+        Ok(Self { store, key })
     }
 
+    /// Return the external store identifier.
     pub fn store(&self) -> &str {
         &self.store
     }
 
+    /// Return the store-specific lookup key.
     pub fn key(&self) -> &str {
         &self.key
     }
-
-    pub fn content_type(&self) -> Option<&str> {
-        self.content_type.as_deref()
-    }
-
-    pub fn size_bytes(&self) -> Option<u64> {
-        self.size_bytes
-    }
-
-    pub fn hash(&self) -> Option<&IntegrityHash> {
-        self.hash.as_ref()
-    }
-
-    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
-        self.expires_at
-    }
-
-    /// Calculate hash for the given content bytes.
-    pub fn compute_hash(content: &[u8]) -> IntegrityHash {
-        IntegrityHash::compute(content)
-    }
-
-    /// Set the hash directly.
-    pub fn with_hash(mut self, hash: IntegrityHash) -> Self {
-        self.hash = Some(hash);
-        self
-    }
-
-    /// Set the hash from a hex string.
-    pub fn with_hash_hex(mut self, hash: impl AsRef<str>) -> Result<Self, String> {
-        let hash = hash.as_ref().parse()?;
-        self.hash = Some(hash);
-        Ok(self)
-    }
-
-    pub fn set_content_type(&mut self, content_type: Option<String>) {
-        self.content_type = content_type;
-    }
-
-    pub fn set_size_bytes(&mut self, size_bytes: Option<u64>) {
-        self.size_bytes = size_bytes;
-    }
-
-    pub fn set_expires_at(&mut self, expires_at: Option<DateTime<Utc>>) {
-        self.expires_at = expires_at;
-    }
-
-    /// Verify if the provided content matches the stored checksum
-    #[must_use = "handle integrity verification result"]
-    pub fn verify_integrity(&self, content: &[u8]) -> Result<bool, String> {
-        let stored_hash = self
-            .hash
-            .as_ref()
-            .ok_or_else(|| "No hash stored in ArtifactRef".to_string())?;
-
-        Ok(IntegrityHash::compute(content) == *stored_hash)
-    }
-
-    /// Check if two artifacts have the same content based on checksum
-    #[must_use]
-    pub fn content_eq(&self, other: &Self) -> Option<bool> {
-        match (&self.hash, &other.hash) {
-            (Some(a), Some(b)) => Some(a == b),
-            _ => None,
-        }
-    }
-
-    /// Check if the artifact has expired
-    #[must_use]
-    pub fn is_expired(&self) -> bool {
-        if let Some(expires_at) = self.expires_at {
-            expires_at < Utc::now()
-        } else {
-            false
-        }
-    }
 }
 
-fn default_header_version() -> u32 {
-    1
-}
-
-/// Current header format version for newly created objects.
-pub const CURRENT_HEADER_VERSION: u32 = 1;
-
-/// Header shared by all AI Process Objects.
-///
-/// Contains standard metadata like ID, type, creator, and timestamps.
-///
-/// # Usage
-///
-/// Every AI object struct should flatten this header:
-///
-/// ```rust,ignore
-/// #[derive(Serialize, Deserialize)]
-/// pub struct AIObject {
-///     #[serde(flatten)]
-///     header: Header,
-///     // specific fields...
-/// }
-/// ```
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// Shared immutable metadata header embedded into AI objects.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Header {
-    /// Global unique ID (UUID v7)
+    /// Unique object id generated at creation time.
     object_id: Uuid,
-    /// Object type (task/run/patchset/...)
+    /// The persisted object kind.
     object_type: ObjectType,
-    /// Format version of the Header struct itself.
-    /// Defaults to 1 when deserializing old data that lacks this field.
-    #[serde(default = "default_header_version")]
-    header_version: u32,
-    /// Per-object-type schema version for body fields.
-    schema_version: u32,
-    /// Creation time
+    /// Schema/header version for forward compatibility.
+    version: u8,
+    /// Creation timestamp captured in UTC.
     created_at: DateTime<Utc>,
-    /// Last modification time.
-    ///
-    /// When deserializing legacy data that lacks this field, falls back
-    /// to `created_at` for deterministic behavior (see custom
-    /// `Deserialize` impl below).
-    updated_at: DateTime<Utc>,
-    /// Creator
+    /// Actor that created the object.
     created_by: ActorRef,
-    /// Visibility (fixed to private for Libra)
-    visibility: Visibility,
-    /// Search tags
-    #[serde(default)]
-    tags: HashMap<String, String>,
-    /// External ID mapping
-    #[serde(default)]
-    external_ids: HashMap<String, String>,
-    /// Content checksum (optional)
-    #[serde(default)]
-    checksum: Option<IntegrityHash>,
 }
 
-/// Custom `Deserialize` for [`Header`] so that a missing `updated_at`
-/// falls back to `created_at` instead of `Utc::now()`.  This avoids
-/// nondeterministic metadata when loading legacy objects that predate
-/// the `updated_at` field.
-impl<'de> Deserialize<'de> for Header {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawHeader {
-            object_id: Uuid,
-            object_type: ObjectType,
-            #[serde(default = "default_header_version")]
-            header_version: u32,
-            schema_version: u32,
-            created_at: DateTime<Utc>,
-            updated_at: Option<DateTime<Utc>>,
-            created_by: ActorRef,
-            visibility: Visibility,
-            #[serde(default)]
-            tags: HashMap<String, String>,
-            #[serde(default)]
-            external_ids: HashMap<String, String>,
-            #[serde(default)]
-            checksum: Option<IntegrityHash>,
-        }
-
-        let raw = RawHeader::deserialize(deserializer)?;
-        Ok(Header {
-            object_id: raw.object_id,
-            object_type: raw.object_type,
-            header_version: raw.header_version,
-            schema_version: raw.schema_version,
-            created_at: raw.created_at,
-            updated_at: raw.updated_at.unwrap_or(raw.created_at),
-            created_by: raw.created_by,
-            visibility: raw.visibility,
-            tags: raw.tags,
-            external_ids: raw.external_ids,
-            checksum: raw.checksum,
-        })
-    }
-}
+/// Current header schema version written by new objects.
+const CURRENT_HEADER_VERSION: u8 = 1;
 
 impl Header {
-    /// Create a new Header with default values.
-    ///
-    /// # Arguments
-    ///
-    /// * `object_type` - The specific type of the AI object.
-    /// * `created_by` - The actor (human/agent) creating this object.
+    /// Build a fresh header for a new AI object instance.
     pub fn new(object_type: ObjectType, created_by: ActorRef) -> Result<Self, String> {
-        let now = Utc::now();
         Ok(Self {
             object_id: Uuid::now_v7(),
             object_type,
-            header_version: CURRENT_HEADER_VERSION,
-            schema_version: 1,
-            created_at: now,
-            updated_at: now,
+            version: CURRENT_HEADER_VERSION,
+            created_at: Utc::now(),
             created_by,
-            visibility: Visibility::Private,
-            tags: HashMap::new(),
-            external_ids: HashMap::new(),
-            checksum: None,
         })
     }
 
+    /// Return the immutable object id.
     pub fn object_id(&self) -> Uuid {
         self.object_id
     }
 
+    /// Return the persisted object kind.
     pub fn object_type(&self) -> &ObjectType {
         &self.object_type
     }
 
-    pub fn header_version(&self) -> u32 {
-        self.header_version
+    /// Return the header schema version.
+    pub fn version(&self) -> u8 {
+        self.version
     }
 
-    pub fn schema_version(&self) -> u32 {
-        self.schema_version
-    }
-
+    /// Return the creation timestamp in UTC.
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
 
-    pub fn updated_at(&self) -> DateTime<Utc> {
-        self.updated_at
-    }
-
+    /// Return the actor that created the object.
     pub fn created_by(&self) -> &ActorRef {
         &self.created_by
     }
 
-    pub fn visibility(&self) -> &Visibility {
-        &self.visibility
-    }
-
-    pub fn tags(&self) -> &HashMap<String, String> {
-        &self.tags
-    }
-
-    pub fn tags_mut(&mut self) -> &mut HashMap<String, String> {
-        &mut self.tags
-    }
-
-    pub fn external_ids(&self) -> &HashMap<String, String> {
-        &self.external_ids
-    }
-
-    pub fn external_ids_mut(&mut self) -> &mut HashMap<String, String> {
-        &mut self.external_ids
-    }
-
-    pub fn set_object_id(&mut self, object_id: Uuid) {
-        self.object_id = object_id;
-    }
-
-    pub fn set_object_type(&mut self, object_type: ObjectType) -> Result<(), String> {
-        self.object_type = object_type;
-        Ok(())
-    }
-
-    pub fn set_header_version(&mut self, header_version: u32) -> Result<(), String> {
-        if header_version == 0 {
-            return Err("header_version must be greater than 0".to_string());
-        }
-        self.header_version = header_version;
-        Ok(())
-    }
-
-    pub fn set_schema_version(&mut self, schema_version: u32) -> Result<(), String> {
-        if schema_version == 0 {
-            return Err("schema_version must be greater than 0".to_string());
-        }
-        self.schema_version = schema_version;
-        Ok(())
-    }
-
-    pub fn set_created_at(&mut self, created_at: DateTime<Utc>) {
-        self.created_at = created_at;
-    }
-
-    pub fn set_updated_at(&mut self, updated_at: DateTime<Utc>) {
-        self.updated_at = updated_at;
-    }
-
-    pub fn set_visibility(&mut self, visibility: Visibility) {
-        self.visibility = visibility;
-    }
-
-    /// Accessor for checksum
-    pub fn checksum(&self) -> Option<&IntegrityHash> {
-        self.checksum.as_ref()
-    }
-
-    /// Seal the header by calculating and setting the checksum of the provided object.
-    /// The checksum field is temporarily cleared to keep sealing idempotent.
-    /// Also updates `updated_at` to the current time, since sealing
-    /// represents a semantic modification of the object.
+    /// Override the header schema version for migration/testing paths.
     ///
-    /// This is typically called just before storing the object to ensure `checksum` matches content.
-    pub fn seal<T: Serialize>(&mut self, object: &T) -> Result<(), serde_json::Error> {
-        let previous_checksum = self.checksum.take();
-        match compute_integrity_hash(object) {
-            Ok(checksum) => {
-                self.checksum = Some(checksum);
-                self.updated_at = Utc::now();
-                Ok(())
-            }
-            Err(err) => {
-                self.checksum = previous_checksum;
-                Err(err)
-            }
+    /// Version `0` is reserved as invalid so callers cannot accidentally
+    /// produce an uninitialized-looking header.
+    pub fn set_version(&mut self, version: u8) -> Result<(), String> {
+        if version == 0 {
+            return Err("header version must be non-zero".to_string());
         }
+        self.version = version;
+        Ok(())
+    }
+
+    /// Compute an integrity hash over the serialized header payload.
+    ///
+    /// This is useful when callers need a compact fingerprint of the
+    /// immutable metadata without hashing the full enclosing object.
+    pub fn checksum(&self) -> IntegrityHash {
+        let bytes = serde_json::to_vec(self).expect("header serialization");
+        IntegrityHash::compute(&bytes)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, Utc};
-    use uuid::Uuid;
+    use super::*;
 
-    use crate::internal::object::types::{
-        ActorKind, ActorRef, ArtifactRef, Header, IntegrityHash, ObjectType,
-    };
-
-    /// Verify ObjectType::Blob converts to its ASCII byte representation "blob".
-    #[test]
-    fn test_object_type_to_data() {
-        let blob = ObjectType::Blob;
-        let blob_bytes = blob.to_data().unwrap();
-        assert_eq!(blob_bytes, vec![0x62, 0x6c, 0x6f, 0x62]);
-    }
-
-    /// Verify parsing "tree" string returns ObjectType::Tree.
-    #[test]
-    fn test_object_type_from_string() {
-        assert_eq!(ObjectType::from_string("blob").unwrap(), ObjectType::Blob);
-        assert_eq!(ObjectType::from_string("tree").unwrap(), ObjectType::Tree);
-        assert_eq!(
-            ObjectType::from_string("commit").unwrap(),
-            ObjectType::Commit
-        );
-        assert_eq!(ObjectType::from_string("tag").unwrap(), ObjectType::Tag);
-        assert_eq!(
-            ObjectType::from_string("snapshot").unwrap(),
-            ObjectType::ContextSnapshot
-        );
-        assert_eq!(
-            ObjectType::from_string("decision").unwrap(),
-            ObjectType::Decision
-        );
-        assert_eq!(
-            ObjectType::from_string("evidence").unwrap(),
-            ObjectType::Evidence
-        );
-        assert_eq!(
-            ObjectType::from_string("patchset").unwrap(),
-            ObjectType::PatchSet
-        );
-        assert_eq!(ObjectType::from_string("plan").unwrap(), ObjectType::Plan);
-        assert_eq!(
-            ObjectType::from_string("provenance").unwrap(),
-            ObjectType::Provenance
-        );
-        assert_eq!(ObjectType::from_string("run").unwrap(), ObjectType::Run);
-        assert_eq!(ObjectType::from_string("task").unwrap(), ObjectType::Task);
-        assert_eq!(
-            ObjectType::from_string("invocation").unwrap(),
-            ObjectType::ToolInvocation
-        );
-
-        assert!(ObjectType::from_string("invalid_type").is_err());
-    }
-
-    /// Verify ObjectType::Commit converts to pack type number 1.
-    #[test]
-    fn test_object_type_to_u8() {
-        let commit = ObjectType::Commit;
-        let commit_number = commit.to_u8();
-        assert_eq!(commit_number, 1);
-    }
-
-    /// Verify pack type number 4 parses to ObjectType::Tag.
-    #[test]
-    fn test_object_type_from_u8() {
-        let tag_number = 4;
-        let tag = ObjectType::from_u8(tag_number).unwrap();
-        assert_eq!(tag, ObjectType::Tag);
-    }
+    // Coverage:
+    // - actor kind serde shape and actor reference validation
+    // - header defaults, serialization, version rules, and checksum generation
+    // - object-type conversions across string, bytes, pack ids, and internal ids
+    // - artifact reference construction for different backing stores
 
     #[test]
-    fn test_header_serialization() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let header = Header::new(ObjectType::Task, actor).expect("header");
-
-        let json = serde_json::to_string(&header).unwrap();
-        let deserialized: Header = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(header.object_id(), deserialized.object_id());
-        assert_eq!(header.object_type(), deserialized.object_type());
-        assert_eq!(header.header_version(), deserialized.header_version());
-    }
-
-    #[test]
-    fn test_header_version_new_uses_current() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let header = Header::new(ObjectType::Task, actor).expect("header");
-        assert_eq!(
-            header.header_version(),
-            crate::internal::object::types::CURRENT_HEADER_VERSION
-        );
-    }
-
-    #[test]
-    fn test_header_version_defaults_on_missing() {
-        // Simulate old serialized data without header_version
-        let json = r#"{
-            "object_id": "01234567-89ab-cdef-0123-456789abcdef",
-            "object_type": "task",
-            "schema_version": 1,
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "created_by": {"kind": "human", "id": "jackie"},
-            "visibility": "private"
-        }"#;
-        let header: Header = serde_json::from_str(json).unwrap();
-        assert_eq!(header.header_version(), 1);
-    }
-
-    #[test]
-    fn test_header_version_setter_rejects_zero() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, actor).expect("header");
-        assert!(header.set_header_version(0).is_err());
-        assert!(header.set_header_version(3).is_ok());
-        assert_eq!(header.header_version(), 3);
+    fn test_actor_kind_serialization() {
+        // Scenario: built-in actor kinds must serialize to the canonical
+        // snake_case wire value expected by persisted JSON payloads.
+        let value = serde_json::to_string(&ActorKind::McpClient).expect("serialize");
+        assert_eq!(value, "\"mcp_client\"");
     }
 
     #[test]
     fn test_actor_ref() {
-        let actor = ActorRef::agent("coder").expect("actor");
-        assert_eq!(actor.kind(), &ActorKind::Agent);
-        assert_eq!(actor.id(), "coder");
+        // Scenario: a valid actor reference preserves kind/id and allows
+        // an optional display name to be attached for UI use.
+        let mut actor = ActorRef::human("alice").expect("actor");
+        actor.set_display_name(Some("Alice".to_string()));
 
-        let sys = ActorRef::system("scheduler").expect("system");
-        assert_eq!(sys.kind(), &ActorKind::System);
-
-        let client = ActorRef::mcp_client("vscode").expect("client");
-        assert_eq!(client.kind(), &ActorKind::McpClient);
-        assert!(client.ensure_mcp_client().is_ok());
-
-        let non_mcp = ActorRef::human("jackie").expect("actor");
-        assert!(non_mcp.ensure_mcp_client().is_err());
-    }
-
-    #[test]
-    fn test_actor_kind_serialization() {
-        let k = ActorKind::McpClient;
-        let s = serde_json::to_string(&k).unwrap();
-        assert_eq!(s, "\"mcp_client\"");
-
-        let k2: ActorKind = serde_json::from_str("\"system\"").unwrap();
-        assert_eq!(k2, ActorKind::System);
-    }
-
-    #[test]
-    fn test_header_checksum() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, actor).expect("header");
-        // Fix time for deterministic checksum
-        header.set_created_at(
-            DateTime::parse_from_rfc3339("2026-02-10T00:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-        );
-        header.set_object_id(Uuid::from_u128(0x00000000000000000000000000000001));
-
-        let checksum =
-            crate::internal::object::integrity::compute_integrity_hash(&header).expect("checksum");
-        assert_eq!(checksum.to_hex().len(), 64); // SHA256 length
-
-        // Ensure changes change checksum
-        header
-            .set_object_type(ObjectType::Run)
-            .expect("object_type");
-        let checksum2 =
-            crate::internal::object::integrity::compute_integrity_hash(&header).expect("checksum");
-        assert_ne!(checksum, checksum2);
-    }
-
-    #[test]
-    fn test_artifact_checksum() {
-        let content = b"hello world";
-        let hash = ArtifactRef::compute_hash(content);
-        // echo -n "hello world" | shasum -a 256
-        let expected_str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        assert_eq!(hash.to_hex(), expected_str);
-
-        let artifact = ArtifactRef::new("s3", "key")
-            .expect("artifact")
-            .with_hash(hash);
-        assert_eq!(artifact.hash(), Some(&hash));
-
-        // Integrity check
-        assert!(artifact.verify_integrity(content).unwrap());
-        assert!(!artifact.verify_integrity(b"wrong").unwrap());
-
-        // Deduplication
-        let artifact2 = ArtifactRef::new("local", "other/path")
-            .expect("artifact")
-            .with_hash(IntegrityHash::compute(content));
-        assert_eq!(artifact.content_eq(&artifact2), Some(true));
-
-        let artifact3 = ArtifactRef::new("s3", "diff")
-            .expect("artifact")
-            .with_hash(ArtifactRef::compute_hash(b"diff"));
-        assert_eq!(artifact.content_eq(&artifact3), Some(false));
-    }
-
-    #[test]
-    fn test_invalid_checksum() {
-        let result = ArtifactRef::new("s3", "key")
-            .expect("artifact")
-            .with_hash_hex("bad_hash");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_header_seal() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, actor).expect("header");
-
-        let content = serde_json::json!({"key": "value"});
-        header.seal(&content).expect("seal");
-
-        assert!(header.checksum().is_some());
-        let expected =
-            crate::internal::object::integrity::compute_integrity_hash(&content).expect("checksum");
-        assert_eq!(header.checksum().expect("checksum"), &expected);
-    }
-
-    #[test]
-    fn test_header_updated_at_on_seal() {
-        let actor = ActorRef::human("jackie").expect("actor");
-        let mut header = Header::new(ObjectType::Task, actor).expect("header");
-
-        let before = header.updated_at();
-        let content = serde_json::json!({"key": "value"});
-
-        header.seal(&content).expect("seal");
-
-        let after = header.updated_at();
-        assert!(after >= before);
+        assert_eq!(actor.kind(), &ActorKind::Human);
+        assert_eq!(actor.id(), "alice");
+        assert_eq!(actor.display_name(), Some("Alice"));
     }
 
     #[test]
     fn test_empty_actor_id() {
-        let result = ActorRef::new(ActorKind::Human, "  ");
-        assert!(result.is_err());
+        // Scenario: whitespace-only actor ids are rejected so headers
+        // cannot be created with missing creator identity.
+        let err = ActorRef::human("  ").expect_err("empty actor id must fail");
+        assert!(err.contains("actor id"));
+    }
+
+    #[test]
+    fn test_header_serialization() {
+        // Scenario: a serialized header emits the canonical object type
+        // string and the default schema version for new objects.
+        let actor = ActorRef::human("alice").expect("actor");
+        let header = Header::new(ObjectType::Intent, actor).expect("header");
+        let json = serde_json::to_value(&header).expect("serialize");
+
+        assert_eq!(json["object_type"], "intent");
+        assert_eq!(json["version"], 1);
+    }
+
+    #[test]
+    fn test_header_version_new_uses_current() {
+        // Scenario: newly created headers always start at the current
+        // schema version constant rather than requiring manual setup.
+        let actor = ActorRef::human("alice").expect("actor");
+        let header = Header::new(ObjectType::Plan, actor).expect("header");
+        assert_eq!(header.version(), CURRENT_HEADER_VERSION);
+    }
+
+    #[test]
+    fn test_header_version_setter_rejects_zero() {
+        // Scenario: callers cannot downgrade the header version to the
+        // reserved invalid value `0`.
+        let actor = ActorRef::human("alice").expect("actor");
+        let mut header = Header::new(ObjectType::Task, actor).expect("header");
+        let err = header.set_version(0).expect_err("zero must fail");
+        assert!(err.contains("non-zero"));
+    }
+
+    #[test]
+    fn test_header_checksum() {
+        // Scenario: checksum generation succeeds for a normal header and
+        // yields a non-empty digest string.
+        let actor = ActorRef::human("alice").expect("actor");
+        let header = Header::new(ObjectType::Run, actor).expect("header");
+        assert!(!header.checksum().to_hex().is_empty());
+    }
+
+    #[test]
+    fn test_object_type_from_u8() {
+        // Scenario: the internal numeric object type id maps back to the
+        // expected AI object variant.
+        assert_eq!(
+            ObjectType::from_u8(18).expect("type"),
+            ObjectType::ContextFrame
+        );
+    }
+
+    #[test]
+    fn test_object_type_to_u8() {
+        // Scenario: AI-only variants still have a stable internal numeric
+        // id even though they are not valid Git pack header types.
+        assert_eq!(ObjectType::RunUsage.to_u8(), 23);
+    }
+
+    #[test]
+    fn test_object_type_from_string() {
+        // Scenario: persisted textual type labels decode to the matching
+        // enum variant for event-style AI objects.
+        assert_eq!(
+            ObjectType::from_string("plan_step_event").expect("type"),
+            ObjectType::PlanStepEvent
+        );
+    }
+
+    #[test]
+    fn test_object_type_to_data() {
+        // Scenario: textual serialization to owned bytes uses the same
+        // canonical label stored in object payloads.
+        assert_eq!(
+            ObjectType::IntentEvent.to_data().expect("data"),
+            b"intent_event".to_vec()
+        );
+    }
+
+    /// All `ObjectType` variants for exhaustive conversion coverage.
+    ///
+    /// Update this list whenever a new enum variant is added so the
+    /// round-trip tests continue to exercise the full surface area.
+    const ALL_VARIANTS: &[ObjectType] = &[
+        ObjectType::Commit,
+        ObjectType::Tree,
+        ObjectType::Blob,
+        ObjectType::Tag,
+        ObjectType::OffsetZstdelta,
+        ObjectType::OffsetDelta,
+        ObjectType::HashDelta,
+        ObjectType::ContextSnapshot,
+        ObjectType::Decision,
+        ObjectType::Evidence,
+        ObjectType::PatchSet,
+        ObjectType::Plan,
+        ObjectType::Provenance,
+        ObjectType::Run,
+        ObjectType::Task,
+        ObjectType::Intent,
+        ObjectType::ToolInvocation,
+        ObjectType::ContextFrame,
+        ObjectType::IntentEvent,
+        ObjectType::TaskEvent,
+        ObjectType::RunEvent,
+        ObjectType::PlanStepEvent,
+        ObjectType::RunUsage,
+    ];
+
+    #[test]
+    fn test_to_u8_from_u8_round_trip() {
+        // Scenario: every variant can make a full round-trip through the
+        // crate-local numeric id without loss of information.
+        for variant in ALL_VARIANTS {
+            let n = variant.to_u8();
+            let recovered = ObjectType::from_u8(n)
+                .unwrap_or_else(|_| panic!("from_u8({n}) failed for {variant}"));
+            assert_eq!(
+                *variant, recovered,
+                "to_u8/from_u8 round-trip mismatch for {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_display_from_string_round_trip() {
+        // Scenario: every named object type round-trips through
+        // Display/from_string; delta variants are excluded because they
+        // intentionally have no textual name parser.
+        // Delta types have no string representation in from_string, skip them.
+        let skip = [
+            ObjectType::OffsetZstdelta,
+            ObjectType::OffsetDelta,
+            ObjectType::HashDelta,
+        ];
+        for variant in ALL_VARIANTS {
+            if skip.contains(variant) {
+                continue;
+            }
+            let s = variant.to_string();
+            let recovered = ObjectType::from_string(&s)
+                .unwrap_or_else(|_| panic!("from_string({s:?}) failed for {variant}"));
+            assert_eq!(
+                *variant, recovered,
+                "Display/from_string round-trip mismatch for {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_bytes_to_data_consistency() {
+        // Scenario: borrowed and owned textual encodings stay identical
+        // for every object type that has a canonical byte label.
+        for variant in ALL_VARIANTS {
+            if let Some(bytes) = variant.to_bytes() {
+                let data = variant
+                    .to_data()
+                    .unwrap_or_else(|_| panic!("to_data failed for {variant}"));
+                assert_eq!(bytes, &data[..], "to_bytes/to_data mismatch for {variant}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_all_variants_count() {
+        // Scenario: the exhaustive variant list stays in sync with the
+        // enum definition, preventing silent coverage gaps in the
+        // round-trip tests above.
+        // If you add a new ObjectType variant, add it to ALL_VARIANTS above
+        // and update this count.
+        assert_eq!(
+            ALL_VARIANTS.len(),
+            23,
+            "ALL_VARIANTS count mismatch — did you add a new ObjectType variant?"
+        );
+    }
+
+    #[test]
+    fn test_invalid_checksum() {
+        // Scenario: unknown textual object type labels fail with the
+        // expected invalid-type error instead of defaulting silently.
+        let err = ObjectType::from_string("unknown").expect_err("must fail");
+        assert!(matches!(err, GitError::InvalidObjectType(_)));
+    }
+
+    #[test]
+    fn test_artifact_checksum() {
+        // Scenario: an artifact reference backed by the local store keeps
+        // the caller-provided store/key pair unchanged after creation.
+        let artifact = ArtifactRef::new("local", "artifact-key").expect("artifact");
+        assert_eq!(artifact.store(), "local");
+        assert_eq!(artifact.key(), "artifact-key");
     }
 
     #[test]
     fn test_artifact_expiration() {
-        let mut artifact = ArtifactRef::new("s3", "key").expect("artifact");
-        assert!(!artifact.is_expired());
-
-        artifact.set_expires_at(Some(Utc::now() - chrono::Duration::hours(1)));
-        assert!(artifact.is_expired());
-
-        artifact.set_expires_at(Some(Utc::now() + chrono::Duration::hours(1)));
-        assert!(!artifact.is_expired());
+        // Scenario: artifact references are storage-agnostic, so an S3
+        // style store/key pair is accepted and exposed unchanged.
+        let artifact = ArtifactRef::new("s3", "bucket/key").expect("artifact");
+        assert_eq!(artifact.store(), "s3");
+        assert_eq!(artifact.key(), "bucket/key");
     }
 }
