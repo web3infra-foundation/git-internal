@@ -165,7 +165,10 @@ impl Plan {
         let mut plan = Self::new(created_by, first_parent.intent)?;
         for parent in parents {
             if parent.intent != first_parent.intent {
-                return Err("plan parents must belong to the same intent".to_string());
+                return Err(format!(
+                    "plan parents must belong to the same intent: expected {}, got {}",
+                    first_parent.intent, parent.intent
+                ));
             }
             plan.add_parent(parent.header.object_id());
         }

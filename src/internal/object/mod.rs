@@ -178,11 +178,9 @@ use std::{
     io::{BufRead, Read},
 };
 
-use sha1::Digest;
-
 use crate::{
     errors::GitError,
-    hash::{ObjectHash, get_hash_kind},
+    hash::ObjectHash,
     internal::{object::types::ObjectType, zlib::stream::inflate::ReadBoxed},
 };
 
@@ -217,35 +215,6 @@ pub trait ObjectTrait: Send + Sync + Display {
 
     fn object_hash(&self) -> Result<ObjectHash, GitError> {
         let data = self.to_data()?;
-        let object_type = self.get_type();
-        let type_bytes = object_type.to_bytes().ok_or_else(|| {
-            GitError::InvalidObjectType(format!(
-                "object type `{}` cannot be hashed as a loose object",
-                object_type
-            ))
-        })?;
-
-        Ok(match get_hash_kind() {
-            crate::hash::HashKind::Sha1 => {
-                let mut hash = sha1::Sha1::new();
-                hash.update(type_bytes);
-                hash.update(b" ");
-                hash.update(data.len().to_string());
-                hash.update(b"\0");
-                hash.update(&data);
-                let result: [u8; 20] = hash.finalize().into();
-                ObjectHash::Sha1(result)
-            }
-            crate::hash::HashKind::Sha256 => {
-                let mut hash = sha2::Sha256::new();
-                hash.update(type_bytes);
-                hash.update(b" ");
-                hash.update(data.len().to_string());
-                hash.update(b"\0");
-                hash.update(&data);
-                let result: [u8; 32] = hash.finalize().into();
-                ObjectHash::Sha256(result)
-            }
-        })
+        Ok(ObjectHash::from_type_and_data(self.get_type(), &data))
     }
 }

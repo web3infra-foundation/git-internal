@@ -164,7 +164,7 @@ mod tests {
             .expect("event");
         let hash = IntegrityHash::compute(b"commit");
         event.set_reason(Some("done".to_string()));
-        event.set_result_commit(Some(hash.clone()));
+        event.set_result_commit(Some(hash));
 
         assert_eq!(event.kind(), &IntentEventKind::Completed);
         assert_eq!(event.reason(), Some("done"));

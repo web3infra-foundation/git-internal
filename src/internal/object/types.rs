@@ -569,6 +569,92 @@ mod tests {
         );
     }
 
+    /// All ObjectType variants for exhaustive testing.
+    /// Update this list whenever a new variant is added to ObjectType.
+    const ALL_VARIANTS: &[ObjectType] = &[
+        ObjectType::Commit,
+        ObjectType::Tree,
+        ObjectType::Blob,
+        ObjectType::Tag,
+        ObjectType::OffsetZstdelta,
+        ObjectType::OffsetDelta,
+        ObjectType::HashDelta,
+        ObjectType::ContextSnapshot,
+        ObjectType::Decision,
+        ObjectType::Evidence,
+        ObjectType::PatchSet,
+        ObjectType::Plan,
+        ObjectType::Provenance,
+        ObjectType::Run,
+        ObjectType::Task,
+        ObjectType::Intent,
+        ObjectType::ToolInvocation,
+        ObjectType::ContextFrame,
+        ObjectType::IntentEvent,
+        ObjectType::TaskEvent,
+        ObjectType::RunEvent,
+        ObjectType::PlanStepEvent,
+        ObjectType::RunUsage,
+    ];
+
+    #[test]
+    fn test_to_u8_from_u8_round_trip() {
+        for variant in ALL_VARIANTS {
+            let n = variant.to_u8();
+            let recovered = ObjectType::from_u8(n)
+                .unwrap_or_else(|_| panic!("from_u8({n}) failed for {variant}"));
+            assert_eq!(
+                *variant, recovered,
+                "to_u8/from_u8 round-trip mismatch for {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_display_from_string_round_trip() {
+        // Delta types have no string representation in from_string, skip them.
+        let skip = [
+            ObjectType::OffsetZstdelta,
+            ObjectType::OffsetDelta,
+            ObjectType::HashDelta,
+        ];
+        for variant in ALL_VARIANTS {
+            if skip.contains(variant) {
+                continue;
+            }
+            let s = variant.to_string();
+            let recovered = ObjectType::from_string(&s)
+                .unwrap_or_else(|_| panic!("from_string({s:?}) failed for {variant}"));
+            assert_eq!(
+                *variant, recovered,
+                "Display/from_string round-trip mismatch for {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_bytes_to_data_consistency() {
+        for variant in ALL_VARIANTS {
+            if let Some(bytes) = variant.to_bytes() {
+                let data = variant
+                    .to_data()
+                    .unwrap_or_else(|_| panic!("to_data failed for {variant}"));
+                assert_eq!(bytes, &data[..], "to_bytes/to_data mismatch for {variant}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_all_variants_count() {
+        // If you add a new ObjectType variant, add it to ALL_VARIANTS above
+        // and update this count.
+        assert_eq!(
+            ALL_VARIANTS.len(),
+            23,
+            "ALL_VARIANTS count mismatch — did you add a new ObjectType variant?"
+        );
+    }
+
     #[test]
     fn test_invalid_checksum() {
         let err = ObjectType::from_string("unknown").expect_err("must fail");

@@ -62,34 +62,6 @@ impl From<&str> for IntentSpec {
     }
 }
 
-pub trait ParentLike {
-    fn parent_id(&self) -> Uuid;
-}
-
-impl ParentLike for Uuid {
-    fn parent_id(&self) -> Uuid {
-        *self
-    }
-}
-
-impl ParentLike for &Uuid {
-    fn parent_id(&self) -> Uuid {
-        **self
-    }
-}
-
-impl ParentLike for Intent {
-    fn parent_id(&self) -> Uuid {
-        self.header.object_id()
-    }
-}
-
-impl ParentLike for &Intent {
-    fn parent_id(&self) -> Uuid {
-        self.header.object_id()
-    }
-}
-
 /// Immutable request/spec revision.
 ///
 /// One stored `Intent` answers "what request revision existed here?".
@@ -135,22 +107,21 @@ impl Intent {
         prompt: impl Into<String>,
         parent: &Self,
     ) -> Result<Self, String> {
-        Self::new_revision_chain(created_by, prompt, &[parent])
+        Self::new_revision_chain(created_by, prompt, &[parent.header.object_id()])
     }
 
     /// Create a new intent revision from multiple parent intents.
     ///
     /// Use this when Libra merges several prior intent branches into a
     /// new request/spec revision.
-    #[allow(private_bounds)]
-    pub fn new_revision_chain<P: ParentLike>(
+    pub fn new_revision_chain(
         created_by: ActorRef,
         prompt: impl Into<String>,
-        parents: &[P],
+        parent_ids: &[Uuid],
     ) -> Result<Self, String> {
         let mut intent = Self::new(created_by, prompt)?;
-        for parent in parents {
-            intent.add_parent(parent.parent_id());
+        for id in parent_ids {
+            intent.add_parent(*id);
         }
         Ok(intent)
     }
@@ -254,7 +225,12 @@ mod tests {
         let actor = ActorRef::human("jackie").expect("actor");
         let root = Intent::new(actor.clone(), "A").expect("intent");
         let branch_a = Intent::new_revision_from(actor.clone(), "B", &root).expect("intent");
-        let branch_b = Intent::new_revision_chain(actor, "C", &[&root, &branch_a]).expect("intent");
+        let branch_b = Intent::new_revision_chain(
+            actor,
+            "C",
+            &[root.header().object_id(), branch_a.header().object_id()],
+        )
+        .expect("intent");
 
         assert_eq!(branch_a.parents(), &[root.header().object_id()]);
         assert_eq!(
