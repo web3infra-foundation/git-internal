@@ -1,39 +1,26 @@
-//! AI Provenance Definition
+//! AI Provenance snapshot.
 //!
-//! A `Provenance` records **how** a [`Run`](super::run::Run) was executed:
-//! which LLM provider, model, and parameters were used, and how many
-//! tokens were consumed. It is the "lab notebook" for AI execution —
-//! capturing the exact configuration so results can be reproduced,
-//! compared, and accounted for.
+//! `Provenance` records the immutable model/provider configuration used
+//! for a `Run`.
 //!
-//! # Position in Lifecycle
+//! # How to use this object
 //!
-//! ```text
-//! ⑤ Run
-//!    ├─ (1:1)──▶ Provenance (LLM config + token usage)
-//!    ├─ patchsets ──▶ [PatchSet₀, ...]
-//!    ├─ evidence  ──▶ [Evidence₀, ...]
-//!    └─ decision  ──▶ Decision
-//!                     │
-//!                     └─ ties execution trace back to Intent / Task outcomes
-//! ```
+//! - Create `Provenance` when Libra has chosen the provider, model, and
+//!   generation parameters for a run.
+//! - Populate optional sampling and parameter fields before
+//!   persistence.
+//! - Keep it immutable after writing; usage and cost belong elsewhere.
 //!
-//! A Provenance is created **once per Run**, typically at run start
-//! when the orchestrator selects the model and provider. Token usage
-//! (`token_usage`) is populated after the Run completes. The
-//! Provenance is a sibling of PatchSet, Evidence, and Decision —
-//! all attached to the same Run but serving different purposes.
+//! # How it works with other objects
 //!
-//! # Purpose
+//! - `Run` is the canonical owner via `run_id`.
+//! - `RunUsage` stores tokens and cost for the same run.
 //!
-//! - **Reproducibility**: Given the same model, parameters, and
-//!   [`ContextSnapshot`](super::context::ContextSnapshot), the agent
-//!   should produce equivalent results.
-//! - **Cost Accounting**: `token_usage.cost_usd` enables per-Run and
-//!   per-Task cost tracking and budgeting.
-//! - **Optimization**: Comparing Provenance across Runs of the same
-//!   Task reveals which model/parameter combinations yield better
-//!   results or lower cost.
+//! # How Libra should call it
+//!
+//! Libra should write `Provenance` once near run start, then later write
+//! `RunUsage` when consumption totals are known. Do not backfill usage
+//! onto the provenance snapshot.
 
 use std::fmt;
 
@@ -49,99 +36,33 @@ use crate::{
     },
 };
 
-/// Normalized token usage across providers.
-///
-/// All fields use a provider-neutral representation so that usage
-/// from different LLM providers (OpenAI, Anthropic, etc.) can be
-/// compared directly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct TokenUsage {
-    /// Number of tokens in the prompt / input.
-    pub input_tokens: u64,
-    /// Number of tokens in the completion / output.
-    pub output_tokens: u64,
-    /// `input_tokens + output_tokens`. Stored explicitly for quick
-    /// aggregation; [`is_consistent`](TokenUsage::is_consistent)
-    /// verifies the invariant.
-    pub total_tokens: u64,
-    /// Estimated cost in USD for this usage, if the provider reports
-    /// pricing. `None` when pricing data is unavailable.
-    pub cost_usd: Option<f64>,
-}
-
-impl TokenUsage {
-    pub fn is_consistent(&self) -> bool {
-        self.total_tokens == self.input_tokens + self.output_tokens
-    }
-
-    pub fn cost_per_token(&self) -> Option<f64> {
-        if self.total_tokens == 0 {
-            return None;
-        }
-        self.cost_usd.map(|cost| cost / self.total_tokens as f64)
-    }
-}
-
-/// LLM provider/model configuration and usage for a single Run.
-///
-/// Created once per Run. See module documentation for lifecycle
-/// position and purpose.
+/// Immutable provider/model configuration for one execution attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provenance {
-    /// Common header (object ID, type, timestamps, creator, etc.).
+    /// Common object header carrying the immutable object id, type,
+    /// creator, and timestamps.
     #[serde(flatten)]
     header: Header,
-    /// The [`Run`](super::run::Run) this Provenance describes.
-    ///
-    /// Every Provenance belongs to exactly one Run. The Run does not
-    /// store a back-reference; lookup is done by scanning or indexing.
+    /// Canonical owning run for this provider/model configuration.
     run_id: Uuid,
-    /// LLM provider identifier (e.g. "openai", "anthropic", "local").
-    ///
-    /// Used together with `model` to fully identify the AI backend.
-    /// The value is a free-form string; no enum is imposed because
-    /// new providers appear frequently.
+    /// Provider identifier, such as `openai`.
     provider: String,
-    /// Model identifier as returned by the provider (e.g.
-    /// "gpt-4", "claude-opus-4-20250514", "llama-3-70b").
-    ///
-    /// Should match the provider's official model ID so that results
-    /// can be correlated with the provider's documentation and pricing.
+    /// Model identifier, such as `gpt-5`.
     model: String,
-    /// Provider-specific raw parameters payload.
-    ///
-    /// A catch-all JSON object for parameters that don't have
-    /// dedicated fields (e.g. `top_p`, `frequency_penalty`, custom
-    /// system prompts). `None` when no extra parameters were set.
-    /// `temperature` and `max_tokens` are extracted into dedicated
-    /// fields for convenience but may also appear here.
+    /// Provider-specific structured parameters captured as raw JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parameters: Option<serde_json::Value>,
-    /// Sampling temperature used for generation.
-    ///
-    /// `0.0` = deterministic, higher = more creative. `None` if the
-    /// provider default was used. The getter falls back to
-    /// `parameters.temperature` when this field is not set.
+    /// Optional top-level temperature convenience field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     temperature: Option<f64>,
-    /// Maximum number of tokens the model was allowed to generate.
-    ///
-    /// `None` if the provider default was used. The getter falls back
-    /// to `parameters.max_tokens` when this field is not set.
+    /// Optional top-level max token convenience field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u64>,
-    /// Token consumption and cost for this Run.
-    ///
-    /// Populated after the Run completes. `None` while the Run is
-    /// still in progress or if the provider does not report usage.
-    /// See [`TokenUsage`] for field details.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    token_usage: Option<TokenUsage>,
 }
 
 impl Provenance {
+    /// Create a new provider/model configuration record for one run.
     pub fn new(
         created_by: ActorRef,
         run_id: Uuid,
@@ -156,32 +77,36 @@ impl Provenance {
             parameters: None,
             temperature: None,
             max_tokens: None,
-            token_usage: None,
         })
     }
 
+    /// Return the immutable header for this provenance record.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
+    /// Return the canonical owning run id.
     pub fn run_id(&self) -> Uuid {
         self.run_id
     }
 
+    /// Return the provider identifier.
     pub fn provider(&self) -> &str {
         &self.provider
     }
 
+    /// Return the model identifier.
     pub fn model(&self) -> &str {
         &self.model
     }
 
-    /// Provider-specific raw parameters payload.
+    /// Return the raw structured parameters, if present.
     pub fn parameters(&self) -> Option<&serde_json::Value> {
         self.parameters.as_ref()
     }
 
-    /// Normalized temperature if available.
+    /// Return the effective temperature, checking the explicit field
+    /// first and the raw parameters second.
     pub fn temperature(&self) -> Option<f64> {
         self.temperature.or_else(|| {
             self.parameters
@@ -191,7 +116,8 @@ impl Provenance {
         })
     }
 
-    /// Normalized max_tokens if available.
+    /// Return the effective max token limit, checking the explicit field
+    /// first and the raw parameters second.
     pub fn max_tokens(&self) -> Option<u64> {
         self.max_tokens.or_else(|| {
             self.parameters
@@ -201,24 +127,19 @@ impl Provenance {
         })
     }
 
-    pub fn token_usage(&self) -> Option<&TokenUsage> {
-        self.token_usage.as_ref()
-    }
-
+    /// Set or clear the raw structured provider parameters.
     pub fn set_parameters(&mut self, parameters: Option<serde_json::Value>) {
         self.parameters = parameters;
     }
 
+    /// Set or clear the top-level temperature field.
     pub fn set_temperature(&mut self, temperature: Option<f64>) {
         self.temperature = temperature;
     }
 
+    /// Set or clear the top-level max token field.
     pub fn set_max_tokens(&mut self, max_tokens: Option<u64>) {
         self.max_tokens = max_tokens;
-    }
-
-    pub fn set_token_usage(&mut self, token_usage: Option<TokenUsage>) {
-        self.token_usage = token_usage;
     }
 }
 
@@ -259,31 +180,24 @@ impl ObjectTrait for Provenance {
 mod tests {
     use super::*;
 
+    // Coverage:
+    // - canonical run/provider/model storage
+    // - fallback lookup of temperature and max_tokens from parameters
+
     #[test]
     fn test_provenance_fields() {
-        let actor = ActorRef::agent("test-agent").expect("actor");
-        let run_id = Uuid::from_u128(0x1);
+        let actor = ActorRef::agent("planner").expect("actor");
+        let run_id = Uuid::from_u128(0x42);
+        let mut provenance = Provenance::new(actor, run_id, "openai", "gpt-5").expect("prov");
 
-        let mut provenance = Provenance::new(actor, run_id, "openai", "gpt-4").expect("provenance");
         provenance.set_parameters(Some(
-            serde_json::json!({"temperature": 0.2, "max_tokens": 128}),
+            serde_json::json!({"temperature": 0.2, "max_tokens": 2048}),
         ));
-        provenance.set_temperature(Some(0.2));
-        provenance.set_max_tokens(Some(128));
-        provenance.set_token_usage(Some(TokenUsage {
-            input_tokens: 10,
-            output_tokens: 5,
-            total_tokens: 15,
-            cost_usd: Some(0.001),
-        }));
 
-        assert!(provenance.parameters().is_some());
+        assert_eq!(provenance.run_id(), run_id);
+        assert_eq!(provenance.provider(), "openai");
+        assert_eq!(provenance.model(), "gpt-5");
         assert_eq!(provenance.temperature(), Some(0.2));
-        assert_eq!(provenance.max_tokens(), Some(128));
-        let usage = provenance.token_usage().expect("token usage");
-        assert_eq!(usage.input_tokens, 10);
-        assert_eq!(usage.output_tokens, 5);
-        assert_eq!(usage.total_tokens, 15);
-        assert_eq!(usage.cost_usd, Some(0.001));
+        assert_eq!(provenance.max_tokens(), Some(2048));
     }
 }

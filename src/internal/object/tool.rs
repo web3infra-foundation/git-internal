@@ -23,6 +23,17 @@
 //! Decision (which concludes a Run), ToolInvocations are low-level
 //! operational records.
 //!
+//! # How Libra should use this object
+//!
+//! - Create one `ToolInvocation` per tool call.
+//! - Populate arguments, I/O footprint, status, summaries, and
+//!   artifacts before persistence.
+//! - Reconstruct the per-run action log by querying all tool
+//!   invocations for the same `run_id`, typically ordered by
+//!   `header.created_at`.
+//! - Keep current orchestration state such as "next tool to run" in
+//!   Libra rather than in this object.
+//!
 //! # Purpose
 //!
 //! - **Audit Trail**: Allows reconstructing exactly what the agent did
@@ -58,6 +69,8 @@ pub enum ToolStatus {
 }
 
 impl ToolStatus {
+    /// Return the canonical snake_case storage/display form for the tool
+    /// status.
     pub fn as_str(&self) -> &'static str {
         match self {
             ToolStatus::Ok => "ok",
@@ -94,7 +107,8 @@ pub struct IoFootprint {
 ///
 /// One ToolInvocation per tool call. The chronological sequence of
 /// ToolInvocations within a Run forms the agent's action log. See
-/// module documentation for lifecycle position.
+/// module documentation for lifecycle position and Libra calling
+/// guidance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolInvocation {
@@ -152,6 +166,7 @@ pub struct ToolInvocation {
 }
 
 impl ToolInvocation {
+    /// Create a new tool invocation record for one run-local tool call.
     pub fn new(
         created_by: ActorRef,
         run_id: Uuid,
@@ -169,54 +184,67 @@ impl ToolInvocation {
         })
     }
 
+    /// Return the immutable header for this tool invocation.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
+    /// Return the owning run id.
     pub fn run_id(&self) -> Uuid {
         self.run_id
     }
 
+    /// Return the registered tool name.
     pub fn tool_name(&self) -> &str {
         &self.tool_name
     }
 
+    /// Return the file I/O footprint, if captured.
     pub fn io_footprint(&self) -> Option<&IoFootprint> {
         self.io_footprint.as_ref()
     }
 
+    /// Return the raw JSON arguments passed to the tool.
     pub fn args(&self) -> &serde_json::Value {
         &self.args
     }
 
+    /// Return the tool execution status.
     pub fn status(&self) -> &ToolStatus {
         &self.status
     }
 
+    /// Return the short human-readable output summary, if present.
     pub fn result_summary(&self) -> Option<&str> {
         self.result_summary.as_deref()
     }
 
+    /// Return artifact references produced by the tool call.
     pub fn artifacts(&self) -> &[ArtifactRef] {
         &self.artifacts
     }
 
+    /// Set or clear the file I/O footprint.
     pub fn set_io_footprint(&mut self, io_footprint: Option<IoFootprint>) {
         self.io_footprint = io_footprint;
     }
 
+    /// Replace the raw JSON arguments.
     pub fn set_args(&mut self, args: serde_json::Value) {
         self.args = args;
     }
 
+    /// Set the tool execution status.
     pub fn set_status(&mut self, status: ToolStatus) {
         self.status = status;
     }
 
+    /// Set or clear the short human-readable output summary.
     pub fn set_result_summary(&mut self, result_summary: Option<String>) {
         self.result_summary = result_summary;
     }
 
+    /// Append one persistent artifact reference.
     pub fn add_artifact(&mut self, artifact: ArtifactRef) {
         self.artifacts.push(artifact);
     }
@@ -257,6 +285,11 @@ impl ObjectTrait for ToolInvocation {
 
 #[cfg(test)]
 mod tests {
+    // Coverage:
+    // - tool invocation field access
+    // - I/O footprint persistence
+    // - artifact attachment and status mutation
+
     use super::*;
 
     #[test]
