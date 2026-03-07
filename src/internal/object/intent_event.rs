@@ -8,11 +8,16 @@
 //!   cancelled.
 //! - Include `result_commit` only when the lifecycle transition produced
 //!   a repository commit.
+//! - Include `next_intent_id` on a completed event when completion
+//!   recommends that Libra continue with a follow-up `Intent`.
 //! - Keep the `Intent` snapshot immutable; lifecycle belongs here.
 //!
 //! # How it works with other objects
 //!
 //! - `IntentEvent.intent_id` attaches the event to an `Intent`.
+//! - `IntentEvent.next_intent_id` can point at a recommended follow-up
+//!   `Intent`, but it does not replace `Intent.parents` revision
+//!   history.
 //! - `Decision` and final repository actions may feed data such as
 //!   `result_commit`.
 //!
@@ -39,9 +44,16 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IntentEventKind {
+    /// The intent has been analyzed into a structured interpretation.
     Analyzed,
+    /// The intent finished successfully.
     Completed,
+    /// The intent was cancelled before completion.
     Cancelled,
+    /// A forward-compatible lifecycle label that this binary does not
+    /// recognize yet.
+    #[serde(untagged)]
+    Other(String),
 }
 
 /// Append-only lifecycle fact for one `Intent`.
@@ -62,6 +74,14 @@ pub struct IntentEvent {
     /// Optional resulting repository commit associated with the event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     result_commit: Option<IntegrityHash>,
+    /// Optional recommended follow-up intent to work on next.
+    ///
+    /// This is a recommendation edge emitted when the current intent is
+    /// completed and the system wants to suggest the next request to
+    /// process. It does not express revision lineage; semantic revision
+    /// history still belongs in `Intent.parents`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_intent_id: Option<Uuid>,
 }
 
 impl IntentEvent {
@@ -77,6 +97,7 @@ impl IntentEvent {
             kind,
             reason: None,
             result_commit: None,
+            next_intent_id: None,
         })
     }
 
@@ -105,6 +126,11 @@ impl IntentEvent {
         self.result_commit.as_ref()
     }
 
+    /// Return the recommended follow-up intent id, if present.
+    pub fn next_intent_id(&self) -> Option<Uuid> {
+        self.next_intent_id
+    }
+
     /// Set or clear the human-readable explanation.
     pub fn set_reason(&mut self, reason: Option<String>) {
         self.reason = reason;
@@ -113,6 +139,11 @@ impl IntentEvent {
     /// Set or clear the resulting repository commit.
     pub fn set_result_commit(&mut self, result_commit: Option<IntegrityHash>) {
         self.result_commit = result_commit;
+    }
+
+    /// Set or clear the recommended follow-up intent id.
+    pub fn set_next_intent_id(&mut self, next_intent_id: Option<Uuid>) {
+        self.next_intent_id = next_intent_id;
     }
 }
 
@@ -155,19 +186,40 @@ mod tests {
 
     // Coverage:
     // - completed intent event construction
-    // - optional rationale and result-commit attachment
+    // - optional rationale, result-commit attachment, and next-intent recommendation
+    // - forward-compatible parsing of unknown lifecycle labels
 
     #[test]
     fn test_intent_event_fields() {
+        // Scenario: a completed event preserves its kind and optional
+        // reason/result-commit metadata and recommended follow-up
+        // intent after in-memory mutation.
         let actor = ActorRef::agent("planner").expect("actor");
         let mut event = IntentEvent::new(actor, Uuid::from_u128(0x1), IntentEventKind::Completed)
             .expect("event");
         let hash = IntegrityHash::compute(b"commit");
+        let next_intent_id = Uuid::from_u128(0x2);
         event.set_reason(Some("done".to_string()));
         event.set_result_commit(Some(hash));
+        event.set_next_intent_id(Some(next_intent_id));
 
         assert_eq!(event.kind(), &IntentEventKind::Completed);
         assert_eq!(event.reason(), Some("done"));
         assert_eq!(event.result_commit(), Some(&hash));
+        assert_eq!(event.next_intent_id(), Some(next_intent_id));
+    }
+
+    #[test]
+    fn test_intent_event_kind_accepts_unknown_string() {
+        // Scenario: deserializing an unrecognized lifecycle label falls
+        // back to `Other(String)` so newer producers remain compatible
+        // with older binaries.
+        let kind: IntentEventKind =
+            serde_json::from_str("\"waiting_for_human_review\"").expect("kind");
+
+        assert_eq!(
+            kind,
+            IntentEventKind::Other("waiting_for_human_review".to_string())
+        );
     }
 }

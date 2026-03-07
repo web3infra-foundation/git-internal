@@ -74,7 +74,9 @@
 //! ==============
 //!
 //! Intent --parents----------------------------> Intent
+//! Intent --analysis_context_frames-----------> ContextFrame
 //! Plan   --intent-----------------------------> Intent
+//! Plan   --context_frames---------------------> ContextFrame
 //! Plan   --parents----------------------------> Plan
 //! Task   --intent?----------------------------> Intent
 //! Task   --parent?----------------------------> Task
@@ -89,6 +91,8 @@
 //! ===========
 //!
 //! IntentEvent   --intent_id-------------------> Intent
+//! IntentEvent   --next_intent_id?-------------> Intent
+//! ContextFrame  --intent_id?------------------> Intent
 //! TaskEvent     --task_id---------------------> Task
 //! RunEvent      --run_id----------------------> Run
 //! RunUsage      --run_id----------------------> Run
@@ -119,6 +123,7 @@
 //! | From | Field | To | Cardinality |
 //! |------|-------|----|-------------|
 //! | Intent | `parents` | Intent | 0..N |
+//! | Intent | `analysis_context_frames` | ContextFrame | 0..N |
 //! | Plan | `intent` | Intent | 1 canonical |
 //! | Plan | `parents` | Plan | 0..N |
 //! | Plan | `context_frames` | ContextFrame | 0..N |
@@ -132,6 +137,8 @@
 //! | PatchSet | `run` | Run | 1 |
 //! | Provenance | `run_id` | Run | 1 |
 //! | IntentEvent | `intent_id` | Intent | 1 |
+//! | IntentEvent | `next_intent_id` | Intent | 0..1 recommended follow-up |
+//! | ContextFrame | `intent_id` | Intent | 0..1 |
 //! | TaskEvent | `task_id` | Task | 1 |
 //! | RunEvent | `run_id` | Run | 1 |
 //! | RunUsage | `run_id` | Run | 1 |

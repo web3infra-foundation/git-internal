@@ -8,13 +8,15 @@
 //! - Create one frame whenever an incremental context fact should
 //!   survive history: intent analysis, step summary, code change,
 //!   checkpoint, tool call, or recovery note.
-//! - Attach `run_id`, `plan_id`, and `step_id` when known so the frame
-//!   can be joined back to execution history.
+//! - Attach `intent_id`, `run_id`, `plan_id`, and `step_id` when known
+//!   so the frame can be joined back to analysis or execution history.
 //! - Persist each frame independently instead of mutating a shared
 //!   pipeline object.
 //!
 //! # How it works with other objects
 //!
+//! - `Intent.analysis_context_frames` freezes the analysis-time context
+//!   set used to derive one `IntentSpec` revision.
 //! - `Plan.context_frames` freezes the planning-time context set.
 //! - `PlanStepEvent.consumed_frames` and `produced_frames` express
 //!   runtime context flow.
@@ -87,6 +89,9 @@ pub struct ContextFrame {
     /// creator, and timestamps.
     #[serde(flatten)]
     header: Header,
+    /// Optional intent revision that emitted or owns this frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intent_id: Option<Uuid>,
     /// Optional run that emitted or owns this frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     run_id: Option<Uuid>,
@@ -118,6 +123,7 @@ impl ContextFrame {
     ) -> Result<Self, String> {
         Ok(Self {
             header: Header::new(ObjectType::ContextFrame, created_by)?,
+            intent_id: None,
             run_id: None,
             plan_id: None,
             step_id: None,
@@ -131,6 +137,11 @@ impl ContextFrame {
     /// Return the immutable header for this context frame.
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// Return the associated intent id, if present.
+    pub fn intent_id(&self) -> Option<Uuid> {
+        self.intent_id
     }
 
     /// Return the associated run id, if present.
@@ -166,6 +177,11 @@ impl ContextFrame {
     /// Return the approximate token footprint, if present.
     pub fn token_estimate(&self) -> Option<u64> {
         self.token_estimate
+    }
+
+    /// Set or clear the associated intent id.
+    pub fn set_intent_id(&mut self, intent_id: Option<Uuid>) {
+        self.intent_id = intent_id;
     }
 
     /// Set or clear the associated run id.
@@ -232,7 +248,7 @@ mod tests {
     use super::*;
 
     // Coverage:
-    // - run/plan/step association links
+    // - intent/run/plan/step association links
     // - frame payload storage
     // - token estimate capture
 
@@ -241,16 +257,19 @@ mod tests {
         let actor = ActorRef::agent("planner").expect("actor");
         let mut frame =
             ContextFrame::new(actor, FrameKind::StepSummary, "Updated API").expect("frame");
+        let intent_id = Uuid::from_u128(0x0f);
         let run_id = Uuid::from_u128(0x10);
         let plan_id = Uuid::from_u128(0x11);
         let step_id = Uuid::from_u128(0x12);
 
+        frame.set_intent_id(Some(intent_id));
         frame.set_run_id(Some(run_id));
         frame.set_plan_id(Some(plan_id));
         frame.set_step_id(Some(step_id));
         frame.set_data(Some(serde_json::json!({"files": ["src/lib.rs"]})));
         frame.set_token_estimate(Some(128));
 
+        assert_eq!(frame.intent_id(), Some(intent_id));
         assert_eq!(frame.run_id(), Some(run_id));
         assert_eq!(frame.plan_id(), Some(plan_id));
         assert_eq!(frame.step_id(), Some(step_id));

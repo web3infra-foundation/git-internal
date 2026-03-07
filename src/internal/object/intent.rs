@@ -11,11 +11,15 @@
 //!   branched, or merged; link earlier revisions through `parents`.
 //! - Fill `spec` before persistence if analysis has already produced a
 //!   structured request.
+//! - Freeze analysis-time context through `analysis_context_frames`
+//!   when `ContextFrame`s were used to derive the `IntentSpec`.
 //!
 //! # How it works with other objects
 //!
 //! - `Plan.intent` points back to the `Intent` that the plan belongs to.
 //! - `Task.intent` may point back to the originating `Intent`.
+//! - `analysis_context_frames` freezes the context used to derive the
+//!   stored `IntentSpec`.
 //! - `IntentEvent` records lifecycle facts such as analyzed /
 //!   completed / cancelled.
 //!
@@ -86,6 +90,13 @@ pub struct Intent {
     /// already produced one at persistence time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spec: Option<IntentSpec>,
+    /// Immutable context-frame snapshot used while deriving `spec`.
+    ///
+    /// This is distinct from `Plan.context_frames`: these frames belong
+    /// to the prompt-analysis / intent-spec phase rather than the
+    /// plan-generation phase.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    analysis_context_frames: Vec<Uuid>,
 }
 
 impl Intent {
@@ -96,6 +107,7 @@ impl Intent {
             parents: Vec::new(),
             prompt: prompt.into(),
             spec: None,
+            analysis_context_frames: Vec::new(),
         })
     }
 
@@ -146,6 +158,12 @@ impl Intent {
         self.spec.as_ref()
     }
 
+    /// Return the analysis-time context frame ids frozen onto this
+    /// revision.
+    pub fn analysis_context_frames(&self) -> &[Uuid] {
+        &self.analysis_context_frames
+    }
+
     /// Add one parent link if it is not already present and is not self.
     pub fn add_parent(&mut self, parent_id: Uuid) {
         if parent_id == self.header.object_id() {
@@ -165,6 +183,12 @@ impl Intent {
     /// Set or clear the structured spec for this in-memory revision.
     pub fn set_spec(&mut self, spec: Option<IntentSpec>) {
         self.spec = spec;
+    }
+
+    /// Replace the analysis-time context frame set for this in-memory
+    /// revision before persistence.
+    pub fn set_analysis_context_frames(&mut self, analysis_context_frames: Vec<Uuid>) {
+        self.analysis_context_frames = analysis_context_frames;
     }
 }
 
@@ -209,6 +233,7 @@ mod tests {
     // - root intent construction defaults
     // - revision graph creation for single-parent and multi-parent flows
     // - structured spec assignment before persistence
+    // - frozen analysis-time context-frame references
 
     #[test]
     fn test_intent_creation() {
@@ -218,6 +243,7 @@ mod tests {
         assert_eq!(intent.prompt(), "Add pagination");
         assert!(intent.parents().is_empty());
         assert!(intent.spec().is_none());
+        assert!(intent.analysis_context_frames().is_empty());
     }
 
     #[test]
@@ -245,5 +271,17 @@ mod tests {
         let mut intent = Intent::new(actor, "A").expect("intent");
         intent.set_spec(Some("structured spec".into()));
         assert_eq!(intent.spec(), Some(&IntentSpec::from("structured spec")));
+    }
+
+    #[test]
+    fn test_analysis_context_frames() {
+        let actor = ActorRef::human("jackie").expect("actor");
+        let mut intent = Intent::new(actor, "A").expect("intent");
+        let frame_a = Uuid::from_u128(0x10);
+        let frame_b = Uuid::from_u128(0x11);
+
+        intent.set_analysis_context_frames(vec![frame_a, frame_b]);
+
+        assert_eq!(intent.analysis_context_frames(), &[frame_a, frame_b]);
     }
 }

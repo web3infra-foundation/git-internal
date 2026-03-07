@@ -10,6 +10,8 @@
 //! - Create a new `Plan` revision when replanning is needed.
 //! - Use multi-parent revisions to represent merged planning branches.
 //! - Freeze planning-time context through `context_frames`.
+//! - Keep analysis-time context on the owning `Intent`; do not reuse
+//!   this field for prompt-analysis inputs.
 //!
 //! # How it works with other objects
 //!
@@ -124,7 +126,12 @@ pub struct Plan {
     /// Parent plan revisions from which this plan directly derives.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     parents: Vec<Uuid>,
-    /// Immutable context-frame snapshot used for plan derivation.
+    /// Immutable planning-time context-frame snapshot used for plan
+    /// derivation.
+    ///
+    /// This is distinct from `Intent.analysis_context_frames`, which
+    /// captures prompt-analysis context used while deriving the
+    /// `IntentSpec`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     context_frames: Vec<Uuid>,
     /// Immutable step structure chosen for this plan revision.

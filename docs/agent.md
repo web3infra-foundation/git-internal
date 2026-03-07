@@ -90,8 +90,8 @@ User-facing presentation layer over the current system view.
 Rebuildable lookup and denormalized access structures used for fast
 queries.
 
-- examples: `intent -> plans`, `task -> runs`, `run -> events`,
-  `run -> patchsets`
+- examples: `intent -> plans`, `intent -> analysis_context_frames`,
+  `task -> runs`, `run -> events`, `run -> patchsets`
 - optimized for retrieval, filtering, and dashboard queries
 - not part of the immutable object graph and can be recomputed
   if needed
@@ -103,7 +103,9 @@ Snapshot layer
 ==============
 
 Intent[S] --parents------------------------> Intent[S]
+Intent[S] --analysis_context_frames-------> ContextFrame[E]
 Plan[S]   --intent_id----------------------> Intent[S]
+Plan[S]   --context_frames-----------------> ContextFrame[E]
 Plan[S]   --parents------------------------> Plan[S]
 Task[S]   --intent_id?---------------------> Intent[S]
 Task[S]   --parent_task_id?----------------> Task[S]
@@ -118,6 +120,8 @@ Event layer
 ===========
 
 IntentEvent[E]   --intent_id---------------> Intent[S]
+IntentEvent[E]   --next_intent_id?---------> Intent[S]
+ContextFrame[E]  --intent_id?--------------> Intent[S]
 TaskEvent[E]     --task_id-----------------> Task[S]
 RunEvent[E]      --run_id------------------> Run[S]
 RunUsage[E]      --run_id------------------> Run[S]
@@ -167,6 +171,10 @@ Thread[L] / Scheduler[L]
 - `Decision`
 - `ContextFrame`
 
+`IntentEvent.next_intent_id` is a recommendation edge for "what
+Intent should be handled next after this one completed". It does not
+replace `Intent.parents`, which remains the semantic revision lineage.
+
 ### Runtime / projection state in Libra
 
 - current selected plan head
@@ -181,15 +189,19 @@ Thread[L] / Scheduler[L]
 
 Snapshot of the user request and optional analyzed spec.
 
-- keep: `parents`, `prompt`, `spec`
+- keep: `parents`, `prompt`, `spec`, `analysis_context_frames`
 - do not keep in snapshot: mutable status log, selected plan pointer, final commit pointer
 - lifecycle belongs to `IntentEvent`
+- `analysis_context_frames` freezes the context used to derive this
+  `IntentSpec` revision
 
 ### Plan
 
 Snapshot of the strategy and step structure.
 
 - keep: `intent`, `parents`, `context_frames`, `steps`
+- `context_frames` is planning-time context used to derive the plan
+  from the `IntentSpec`, not prompt-analysis context
 - `PlanStep.step_id` is the stable logical step identity across Plan revisions
 - execution-time step state belongs to `PlanStepEvent`
 
@@ -228,7 +240,10 @@ Immutable model/provider configuration for one run.
 Immutable incremental context record.
 
 - replaces the old mutable `ContextPipeline` runtime container
-- referenced by `Plan.context_frames` and `PlanStepEvent.consumed_frames` / `produced_frames`
+- referenced by `Intent.analysis_context_frames`,
+  `Plan.context_frames`, and `PlanStepEvent.consumed_frames` /
+  `produced_frames`
+- `intent_id` can attach a frame directly to the intent-analysis phase
 
 ## Summary Rule
 
