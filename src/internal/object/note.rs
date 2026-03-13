@@ -12,9 +12,6 @@
 
 use std::fmt::Display;
 
-use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
-
 use crate::{
     errors::GitError,
     hash::ObjectHash,
@@ -26,7 +23,16 @@ use crate::{
 /// A Note represents additional metadata attached to a Git object (typically a commit).
 /// The Note itself is stored as a Blob object in Git's object database, with the
 /// association managed through Git's reference system.
-#[derive(Eq, Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+#[derive(
+    Eq,
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct Note {
     /// The ObjectHash of this Note object (same as the underlying Blob)
     pub id: ObjectHash,

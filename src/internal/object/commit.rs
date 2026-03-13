@@ -13,9 +13,7 @@
 //! - The contents of the files in the repository at the time the commit was made.
 use std::{fmt::Display, str::FromStr};
 
-use bincode::{Decode, Encode};
 use bstr::ByteSlice;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     errors::GitError,
@@ -33,7 +31,16 @@ use crate::{
 ///   history of a repository with a single commit object at its root.
 /// - The author and committer fields contain the name, email address, timestamp and timezone.
 /// - The message field contains the commit message, which maybe include signed or DCO.
-#[derive(Eq, Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+#[derive(
+    Eq,
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct Commit {
     pub id: ObjectHash,
     pub tree_id: ObjectHash,
