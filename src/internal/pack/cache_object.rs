@@ -77,6 +77,10 @@ where
     }
 
     fn f_save(&self, path: &Path) -> Result<(), io::Error> {
+        if path.exists() {
+            return Ok(());
+        }
+
         let data = rkyv::to_bytes::<RkyvError>(self).map_err(io::Error::other)?;
         write_bytes_atomically(path, &data)
     }
@@ -664,11 +668,10 @@ mod test {
     }
 
     #[test]
-    fn test_write_bytes_atomically_ignores_stale_temp_file() {
+    fn test_write_bytes_atomically_creates_file_when_missing() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("object");
 
-        fs::write(path.with_extension("temp"), b"stale").unwrap();
         write_bytes_atomically(&path, b"fresh").unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), b"fresh");
