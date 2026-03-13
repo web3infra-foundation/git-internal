@@ -3,9 +3,7 @@
 
 use std::{
     borrow::Cow,
-    fs,
-    fs::OpenOptions,
-    io,
+    fs, io,
     io::Write,
     ops::Deref,
     path::{Path, PathBuf},
@@ -25,6 +23,7 @@ use rkyv::{
     ser::allocator::ArenaHandle,
     util::AlignedVec,
 };
+use tempfile::NamedTempFile;
 use threadpool::ThreadPool;
 
 use crate::{
@@ -38,8 +37,6 @@ use crate::{
 
 // static CACHE_OBJS_MEM_SIZE: AtomicUsize = AtomicUsize::new(0);
 
-const MAX_TEMP_ATTEMPTS: u32 = 64;
-
 /// file load&store trait
 pub trait FileLoadStore: Sized {
     fn f_load(path: &Path) -> Result<Self, io::Error>;
@@ -50,54 +47,18 @@ fn write_bytes_atomically(path: &Path, data: &[u8]) -> Result<(), io::Error> {
     if path.exists() {
         return Ok(());
     }
-    let mut attempt = 0u32;
+    let dir = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
 
-    loop {
-        if path.exists() {
-            return Ok(());
-        }
+    let mut temp_file = NamedTempFile::new_in(dir)?;
+    temp_file.write_all(data)?;
 
-        let temp_path = if attempt == 0 {
-            path.with_extension("temp")
-        } else {
-            path.with_extension(format!("temp.{attempt}"))
-        };
-
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-        {
-            Ok(mut file) => {
-                file.write_all(data)?;
-                drop(file);
-
-                match fs::rename(&temp_path, path) {
-                    Ok(()) => return Ok(()),
-                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists && path.exists() => {
-                        let _ = fs::remove_file(&temp_path);
-                        return Ok(());
-                    }
-                    Err(err) => {
-                        let _ = fs::remove_file(&temp_path);
-                        return Err(err);
-                    }
-                }
-            }
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists && path.exists() => {
-                return Ok(());
-            }
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                attempt = attempt.saturating_add(1);
-                if attempt >= MAX_TEMP_ATTEMPTS {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("exhausted temp file attempts for {}", path.display()),
-                    ));
-                }
-            }
-            Err(err) => return Err(err),
-        }
+    match temp_file.persist_noclobber(path) {
+        Ok(_persisted) => Ok(()),
+        Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists && path.exists() => Ok(()),
+        Err(err) => Err(err.error),
     }
 }
 
@@ -699,7 +660,7 @@ mod test {
     }
 
     #[test]
-    fn test_write_bytes_atomically_retries_when_temp_exists() {
+    fn test_write_bytes_atomically_ignores_stale_temp_file() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("object");
 
