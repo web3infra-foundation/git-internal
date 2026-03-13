@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "linux-raw-sys-vendor",
-    urls = ["https://static.crates.io/crates/linux-raw-sys/linux-raw-sys-0.11.0.crate"],
-    sha256 = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039",
+    urls = ["https://static.crates.io/crates/linux-raw-sys/linux-raw-sys-0.12.1.crate"],
+    sha256 = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53",
     type = "tar.gz",
-    strip_prefix = "linux-raw-sys-0.11.0",
+    strip_prefix = "linux-raw-sys-0.12.1",
     out = "vendor",
 )
 

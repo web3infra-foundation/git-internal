@@ -21,7 +21,7 @@ bstr = "1.12.1"
 hex = "0.4.3"
 thiserror = "2.0.18"
 tracing = "0.1.44"
-tracing-subscriber = "0.3.22"
+tracing-subscriber = "0.3.23"
 sha1 = "0.10.6"
 colored = "3.1.1"
 threadpool = "1.8.1"
@@ -36,12 +36,12 @@ encoding_rs = "0.8.35"
 rayon = "1.11.0"
 ahash = "0.8.12"
 diffs = "0.5.1"
-libc = "0.2.181"
+libc = "0.2.183"
 async-trait = "0.1.89"
 futures = "0.3.32"
 tokio-stream = "0.1.18"
 natord = "1.0.9"
-tempfile = "3.25.0"
+tempfile = "3.26.0"
 path-absolutize = "3.1.1"
 similar = "2.7.0"
 sha2 = "0.10.9"
@@ -53,8 +53,8 @@ sea-orm = { version = "1.1.17", features = ["sqlx-sqlite"] }
 flate2 = { version = "1.1.9", features = ["zlib"] }
 serde = { version = "1.0.228", features = ["derive"] }
 chrono = { version = "0.4.43", features = ["serde"] }
-uuid = { version = "1.20.0", features = ["serde", "v4", "v7"] }
-tokio = { version = "1.49.0", features = ["fs", "io-util"] }
+uuid = { version = "1.22.0", features = ["serde", "v4", "v7"] }
+tokio = { version = "1.50.0", features = ["fs", "io-util"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 axum = { version = "0.8.8", features = ["macros", "json"] }
 
