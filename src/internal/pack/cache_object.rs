@@ -48,17 +48,49 @@ fn write_bytes_atomically(path: &Path, data: &[u8]) -> Result<(), io::Error> {
     if path.exists() {
         return Ok(());
     }
-    let path = path.with_extension("temp");
-    {
-        let mut file = OpenOptions::new()
+    let mut attempt = 0u32;
+
+    loop {
+        if path.exists() {
+            return Ok(());
+        }
+
+        let temp_path = if attempt == 0 {
+            path.with_extension("temp")
+        } else {
+            path.with_extension(format!("temp.{attempt}"))
+        };
+
+        match OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(path.clone())?;
-        file.write_all(data)?;
+            .open(&temp_path)
+        {
+            Ok(mut file) => {
+                file.write_all(data)?;
+                drop(file);
+
+                match fs::rename(&temp_path, path) {
+                    Ok(()) => return Ok(()),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists && path.exists() => {
+                        let _ = fs::remove_file(&temp_path);
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        let _ = fs::remove_file(&temp_path);
+                        return Err(err);
+                    }
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists && path.exists() => {
+                return Ok(());
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                attempt = attempt.saturating_add(1);
+            }
+            Err(err) => return Err(err),
+        }
     }
-    let final_path = path.with_extension("");
-    fs::rename(&path, final_path)?;
-    Ok(())
 }
 
 impl<T> FileLoadStore for T
@@ -655,6 +687,25 @@ mod test {
             assert_eq!(a.offset, b.offset);
             assert!(b.mem_recorder.is_none());
         }
+    }
+
+    #[test]
+    fn test_write_bytes_atomically_retries_when_temp_exists() {
+        let path = PathBuf::from(".cache_temp/test_write_bytes_atomically_retries/object");
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+            fs::create_dir_all(parent).unwrap();
+        }
+
+        fs::write(path.with_extension("temp"), b"stale").unwrap();
+        write_bytes_atomically(&path, b"fresh").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"fresh");
+
+        if let Some(parent) = path.parent() {
+            fs::remove_dir_all(parent).unwrap();
+        }
+        let _ = fs::remove_dir(".cache_temp");
     }
 
     #[test]
