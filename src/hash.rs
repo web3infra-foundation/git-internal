@@ -4,9 +4,7 @@
 
 use std::{cell::RefCell, fmt::Display, hash::Hash, io, str::FromStr};
 
-use bincode::{Decode, Encode};
 use colored::Colorize;
-use serde::{Deserialize, Serialize};
 use sha1::Digest;
 
 use crate::internal::object::types::ObjectType;
@@ -24,10 +22,11 @@ use crate::internal::object::types::ObjectType;
     PartialOrd,
     Ord,
     Default,
-    Deserialize,
-    Serialize,
-    Encode,
-    Decode,
+    serde::Deserialize,
+    serde::Serialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
 )]
 pub enum HashKind {
     #[default]
@@ -76,7 +75,19 @@ impl std::str::FromStr for HashKind {
 }
 
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, Encode, Decode,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Deserialize,
+    serde::Serialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
 )]
 /// Concrete object ID value carrying the bytes for the selected algorithm (SHA-1 or SHA-256).
 /// Used for Git object hashes.

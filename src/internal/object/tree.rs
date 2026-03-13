@@ -16,10 +16,8 @@
 //!
 use std::fmt::Display;
 
-use bincode::{Decode, Encode};
 use colored::Colorize;
 use encoding_rs::GBK;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     errors::GitError,
@@ -31,7 +29,19 @@ use crate::{
 /// that entry. The mode is a three-digit octal number that encodes both the permissions and the
 /// type of the object. The first digit specifies the object type, and the remaining two digits
 /// specify the file mode or permissions.
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Serialize, Deserialize, Hash, Encode, Decode)]
+#[derive(
+    PartialEq,
+    Eq,
+    Debug,
+    Clone,
+    Copy,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub enum TreeItemMode {
     Blob,
     BlobExecutable,
@@ -132,7 +142,18 @@ impl TreeItemMode {
 /// 100644 hello-world\0<blob object ID>
 /// 040000 data\0<tree object ID>
 /// ```
-#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash, Encode, Decode)]
+#[derive(
+    PartialEq,
+    Eq,
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct TreeItem {
     pub mode: TreeItemMode,
     pub id: ObjectHash,
@@ -229,7 +250,16 @@ impl TreeItem {
 
 /// A tree object is a Git object that represents a directory. It contains a list of entries, one
 /// for each file or directory in the tree.
-#[derive(Eq, Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Eq,
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct Tree {
     pub id: ObjectHash,
     pub tree_items: Vec<TreeItem>,

@@ -55,7 +55,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 uuid = { version = "1.22.0", features = ["serde", "v4", "v7"] }
 tokio = { version = "1.50.0", features = ["fs", "io-util"] }
-bincode = { version = "2.0.1", features = ["serde"] }
+rkyv = { version = "0.8.15", features = ["bytecheck"] }
 axum = { version = "0.8.8", features = ["macros", "json"] }
 
 [dev-dependencies]

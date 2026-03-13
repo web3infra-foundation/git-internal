@@ -2,9 +2,8 @@
 //! bound memory while still serving delta reconstruction quickly.
 
 use std::{
-    fs,
-    fs::OpenOptions,
-    io,
+    borrow::Cow,
+    fs, io,
     io::Write,
     ops::Deref,
     path::{Path, PathBuf},
@@ -15,7 +14,16 @@ use std::{
 };
 
 use lru_mem::{HeapSize, MemSize};
-use serde::{Deserialize, Serialize};
+use rkyv::{
+    Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize,
+    api::high::{HighSerializer, HighValidator},
+    bytecheck::CheckBytes,
+    de::Pool,
+    rancor::{Error as RkyvError, Strategy},
+    ser::allocator::ArenaHandle,
+    util::AlignedVec,
+};
+use tempfile::NamedTempFile;
 use threadpool::ThreadPool;
 
 use crate::{
@@ -30,42 +38,66 @@ use crate::{
 // static CACHE_OBJS_MEM_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// file load&store trait
-pub trait FileLoadStore: Serialize + for<'a> Deserialize<'a> {
+pub trait FileLoadStore: Sized {
     fn f_load(path: &Path) -> Result<Self, io::Error>;
     fn f_save(&self, path: &Path) -> Result<(), io::Error>;
 }
 
-// trait alias, so that impl FileLoadStore == impl Serialize + Deserialize
-impl<T: Serialize + for<'a> Deserialize<'a>> FileLoadStore for T {
+fn write_bytes_atomically(path: &Path, data: &[u8]) -> Result<(), io::Error> {
+    if path.exists() {
+        return Ok(());
+    }
+    let dir = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+
+    let mut temp_file = NamedTempFile::new_in(dir)?;
+    temp_file.write_all(data)?;
+
+    match temp_file.persist_noclobber(path) {
+        Ok(_persisted) => Ok(()),
+        Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists && path.exists() => Ok(()),
+        Err(err) => Err(err.error),
+    }
+}
+
+impl<T> FileLoadStore for T
+where
+    T: Archive,
+    T: for<'a> RkyvSerialize<HighSerializer<AlignedVec, ArenaHandle<'a>, RkyvError>>,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, RkyvError>>
+        + RkyvDeserialize<T, Strategy<Pool, RkyvError>>,
+{
     /// load object from file
     fn f_load(path: &Path) -> Result<T, io::Error> {
         let data = fs::read(path)?;
-        let obj: T = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-            .map_err(io::Error::other)?
-            .0;
+        let obj = rkyv::from_bytes::<T, RkyvError>(&data).map_err(io::Error::other)?;
         Ok(obj)
     }
+
     fn f_save(&self, path: &Path) -> Result<(), io::Error> {
         if path.exists() {
             return Ok(());
         }
-        let data = bincode::serde::encode_to_vec(self, bincode::config::standard()).unwrap();
-        let path = path.with_extension("temp");
-        {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path.clone())?;
-            file.write_all(&data)?;
-        }
-        let final_path = path.with_extension("");
-        fs::rename(&path, final_path.clone())?;
-        Ok(())
+
+        let data = rkyv::to_bytes::<RkyvError>(self).map_err(io::Error::other)?;
+        write_bytes_atomically(path, &data)
     }
 }
 
 /// Represents the metadata of a cache object, indicating whether it is a delta or not.
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+#[derive(
+    PartialEq,
+    Eq,
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub(crate) enum CacheObjectInfo {
     /// The object is one of the four basic types:
     /// [`ObjectType::Blob`], [`ObjectType::Tree`], [`ObjectType::Commit`], or [`ObjectType::Tag`].
@@ -94,7 +126,7 @@ impl CacheObjectInfo {
 }
 
 /// Represents a cached object in memory, which may be a delta or a base object.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct CacheObject {
     pub(crate) info: CacheObjectInfo,
     pub offset: usize,
@@ -102,6 +134,68 @@ pub struct CacheObject {
     pub data_decompressed: Vec<u8>,
     pub mem_recorder: Option<Arc<AtomicUsize>>, // record mem-size of all CacheObjects of a Pack
     pub is_delta_in_pack: bool,
+}
+
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+struct CacheObjectOnDisk {
+    info: CacheObjectInfo,
+    offset: usize,
+    crc32: u32,
+    data_decompressed: Vec<u8>,
+    is_delta_in_pack: bool,
+}
+
+#[derive(Debug, rkyv::Archive, rkyv::Serialize)]
+struct CacheObjectOnDiskRef<'a> {
+    #[rkyv(with = rkyv::with::AsOwned)]
+    info: Cow<'a, CacheObjectInfo>,
+    offset: usize,
+    crc32: u32,
+    #[rkyv(with = rkyv::with::AsOwned)]
+    data_decompressed: Cow<'a, [u8]>,
+    is_delta_in_pack: bool,
+}
+
+impl<'a> From<&'a CacheObject> for CacheObjectOnDiskRef<'a> {
+    fn from(value: &'a CacheObject) -> Self {
+        Self {
+            info: Cow::Borrowed(&value.info),
+            offset: value.offset,
+            crc32: value.crc32,
+            data_decompressed: Cow::Borrowed(value.data_decompressed.as_slice()),
+            is_delta_in_pack: value.is_delta_in_pack,
+        }
+    }
+}
+
+impl From<CacheObjectOnDisk> for CacheObject {
+    fn from(value: CacheObjectOnDisk) -> Self {
+        Self {
+            info: value.info,
+            offset: value.offset,
+            crc32: value.crc32,
+            data_decompressed: value.data_decompressed,
+            mem_recorder: None,
+            is_delta_in_pack: value.is_delta_in_pack,
+        }
+    }
+}
+
+impl FileLoadStore for CacheObject {
+    fn f_load(path: &Path) -> Result<Self, io::Error> {
+        let obj = CacheObjectOnDisk::f_load(path)?;
+        Ok(obj.into())
+    }
+
+    fn f_save(&self, path: &Path) -> Result<(), io::Error> {
+        if path.exists() {
+            return Ok(());
+        }
+
+        let data = rkyv::to_bytes::<RkyvError>(&CacheObjectOnDiskRef::from(self))
+            .map_err(io::Error::other)?;
+        write_bytes_atomically(path, &data)
+    }
 }
 
 impl Clone for CacheObject {
@@ -292,16 +386,10 @@ impl CacheObject {
 }
 
 /// trait alias for simple use
-pub trait ArcWrapperBounds:
-    HeapSize + Serialize + for<'a> Deserialize<'a> + Send + Sync + 'static
-{
-}
+pub trait ArcWrapperBounds: HeapSize + FileLoadStore + Send + Sync + 'static {}
 // You must impl `Alias Trait` for all the `T` satisfying Constraints
 // Or, `T` will not satisfy `Alias Trait` even if it satisfies the Original traits
-impl<T: HeapSize + Serialize + for<'a> Deserialize<'a> + Send + Sync + 'static> ArcWrapperBounds
-    for T
-{
-}
+impl<T: HeapSize + FileLoadStore + Send + Sync + 'static> ArcWrapperBounds for T {}
 
 /// Implementing encapsulation of Arc to enable third-party Trait HeapSize implementation for the Arc type
 /// Because of use Arc in LruCache, the LruCache is not clear whether a pointer will drop the referenced
@@ -393,6 +481,7 @@ mod test {
     use std::{fs, sync::Mutex};
 
     use lru_mem::LruCache;
+    use tempfile::tempdir;
 
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
@@ -498,7 +587,9 @@ mod test {
     }
 
     /// test that the Drop trait is called when an object is ejected from the LRU cache
-    #[derive(Serialize, Deserialize)]
+    #[derive(
+        serde::Serialize, serde::Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+    )]
     struct Test {
         a: usize,
     }
@@ -565,14 +656,51 @@ mod test {
         for (kind, size) in [(HashKind::Sha1, 1024usize), (HashKind::Sha256, 2048usize)] {
             let _guard = set_hash_kind_for_test(kind);
             let a = make_obj(size);
-            let s = bincode::serde::encode_to_vec(&a, bincode::config::standard()).unwrap();
-            let b: CacheObject = bincode::serde::decode_from_slice(&s, bincode::config::standard())
+            let s = rkyv::to_bytes::<RkyvError>(&CacheObjectOnDiskRef::from(&a)).unwrap();
+            let b: CacheObject = rkyv::from_bytes::<CacheObjectOnDisk, RkyvError>(&s)
                 .unwrap()
-                .0;
+                .into();
             assert_eq!(a.info, b.info);
             assert_eq!(a.data_decompressed, b.data_decompressed);
             assert_eq!(a.offset, b.offset);
+            assert!(b.mem_recorder.is_none());
         }
+    }
+
+    #[test]
+    fn test_write_bytes_atomically_creates_file_when_missing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("object");
+
+        write_bytes_atomically(&path, b"fresh").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"fresh");
+    }
+
+    #[test]
+    fn test_write_bytes_atomically_returns_when_target_exists() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("object");
+
+        fs::write(&path, b"existing").unwrap();
+        write_bytes_atomically(&path, b"new-data").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn test_cache_object_file_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("object");
+        let a = make_obj(1024);
+
+        a.f_save(&path).unwrap();
+        let b = CacheObject::f_load(&path).unwrap();
+
+        assert_eq!(a.info, b.info);
+        assert_eq!(a.data_decompressed, b.data_decompressed);
+        assert_eq!(a.offset, b.offset);
+        assert!(b.mem_recorder.is_none());
     }
 
     #[test]
