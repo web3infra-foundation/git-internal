@@ -5,10 +5,10 @@ load("@buckal//:wrapper.bzl", "rust_library")
 
 http_archive(
     name = "tempfile-vendor",
-    urls = ["https://static.crates.io/crates/tempfile/tempfile-3.25.0.crate"],
-    sha256 = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1",
+    urls = ["https://static.crates.io/crates/tempfile/tempfile-3.27.0.crate"],
+    sha256 = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd",
     type = "tar.gz",
-    strip_prefix = "tempfile-3.25.0",
+    strip_prefix = "tempfile-3.27.0",
     out = "vendor",
 )
 
@@ -31,11 +31,11 @@ rust_library(
     os_deps = {
         "linux": [
             "//third-party/rust/crates/getrandom/0.4.1:getrandom",
-            "//third-party/rust/crates/rustix/1.1.3:rustix",
+            "//third-party/rust/crates/rustix/1.1.4:rustix",
         ],
         "macos": [
             "//third-party/rust/crates/getrandom/0.4.1:getrandom",
-            "//third-party/rust/crates/rustix/1.1.3:rustix",
+            "//third-party/rust/crates/rustix/1.1.4:rustix",
         ],
         "windows": [
             "//third-party/rust/crates/getrandom/0.4.1:getrandom",
