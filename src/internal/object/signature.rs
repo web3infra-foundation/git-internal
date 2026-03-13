@@ -11,10 +11,8 @@
 //!
 use std::{fmt::Display, str::FromStr};
 
-use bincode::{Decode, Encode};
 use bstr::ByteSlice;
 use chrono::Offset;
-use serde::{Deserialize, Serialize};
 
 use crate::errors::GitError;
 
@@ -31,7 +29,17 @@ use crate::errors::GitError;
 /// ```
 ///
 /// So, we design a `SignatureType` enum to indicate the signature type.
-#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+#[derive(
+    PartialEq,
+    Eq,
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub enum SignatureType {
     Author,
     Committer,
@@ -78,7 +86,17 @@ impl SignatureType {
 }
 
 /// Represents a Git signature, including the author's name, email, timestamp, and timezone.
-#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+#[derive(
+    PartialEq,
+    Eq,
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct Signature {
     pub signature_type: SignatureType,
     pub name: String,

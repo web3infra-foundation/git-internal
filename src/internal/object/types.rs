@@ -35,7 +35,19 @@ use crate::errors::GitError;
 ///
 /// The first seven variants mirror Git pack semantics. The remaining
 /// variants describe the application's AI workflow objects.
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    Clone,
+    Copy,
+    serde::Serialize,
+    serde::Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectType {
     /// A Git commit object.
