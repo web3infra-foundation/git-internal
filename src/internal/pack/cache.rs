@@ -21,6 +21,9 @@ use crate::{
     time_it,
 };
 
+/// Cache format version appended to the disk path so that caches written with an
+/// incompatible serialization format (for example the previous bincode layout)
+/// are ignored instead of causing deserialization errors.
 const CACHE_LAYOUT_VERSION: &str = "rkyv-v1";
 
 /// Trait defining the interface for a multi-tier cache system.

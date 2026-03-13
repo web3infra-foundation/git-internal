@@ -38,6 +38,8 @@ use crate::{
 
 // static CACHE_OBJS_MEM_SIZE: AtomicUsize = AtomicUsize::new(0);
 
+const MAX_TEMP_ATTEMPTS: u32 = 64;
+
 /// file load&store trait
 pub trait FileLoadStore: Sized {
     fn f_load(path: &Path) -> Result<Self, io::Error>;
@@ -87,6 +89,12 @@ fn write_bytes_atomically(path: &Path, data: &[u8]) -> Result<(), io::Error> {
             }
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
                 attempt = attempt.saturating_add(1);
+                if attempt >= MAX_TEMP_ATTEMPTS {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("exhausted temp file attempts for {}", path.display()),
+                    ));
+                }
             }
             Err(err) => return Err(err),
         }
@@ -153,7 +161,7 @@ impl CacheObjectInfo {
 }
 
 /// Represents a cached object in memory, which may be a delta or a base object.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug)]
 pub struct CacheObject {
     pub(crate) info: CacheObjectInfo,
     pub offset: usize,
@@ -504,6 +512,7 @@ mod test {
     use std::{fs, sync::Mutex};
 
     use lru_mem::LruCache;
+    use tempfile::tempdir;
 
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
@@ -691,21 +700,39 @@ mod test {
 
     #[test]
     fn test_write_bytes_atomically_retries_when_temp_exists() {
-        let path = PathBuf::from(".cache_temp/test_write_bytes_atomically_retries/object");
-        if let Some(parent) = path.parent() {
-            let _ = fs::remove_dir_all(parent);
-            fs::create_dir_all(parent).unwrap();
-        }
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("object");
 
         fs::write(path.with_extension("temp"), b"stale").unwrap();
         write_bytes_atomically(&path, b"fresh").unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), b"fresh");
+    }
 
-        if let Some(parent) = path.parent() {
-            fs::remove_dir_all(parent).unwrap();
-        }
-        let _ = fs::remove_dir(".cache_temp");
+    #[test]
+    fn test_write_bytes_atomically_returns_when_target_exists() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("object");
+
+        fs::write(&path, b"existing").unwrap();
+        write_bytes_atomically(&path, b"new-data").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn test_cache_object_file_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("object");
+        let a = make_obj(1024);
+
+        a.f_save(&path).unwrap();
+        let b = CacheObject::f_load(&path).unwrap();
+
+        assert_eq!(a.info, b.info);
+        assert_eq!(a.data_decompressed, b.data_decompressed);
+        assert_eq!(a.offset, b.offset);
+        assert!(b.mem_recorder.is_none());
     }
 
     #[test]
