@@ -184,6 +184,10 @@ impl FileLoadStore for CacheObject {
     }
 
     fn f_save(&self, path: &Path) -> Result<(), io::Error> {
+        if path.exists() {
+            return Ok(());
+        }
+
         let data = rkyv::to_bytes::<RkyvError>(&CacheObjectOnDiskRef::from(self))
             .map_err(io::Error::other)?;
         write_bytes_atomically(path, &data)
