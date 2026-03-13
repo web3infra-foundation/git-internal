@@ -21,6 +21,8 @@ use crate::{
     time_it,
 };
 
+const CACHE_LAYOUT_VERSION: &str = "rkyv-v1";
+
 /// Trait defining the interface for a multi-tier cache system.
 /// This cache supports insertion and retrieval of objects by both offset and hash,
 /// as well as memory usage tracking and clearing functionality.
@@ -104,6 +106,7 @@ impl Caches {
         let mut path =
             PathBuf::with_capacity(self.tmp_path.capacity() + hash.to_string().len() + 5);
         path.push(tmp_path);
+        path.push(CACHE_LAYOUT_VERSION);
         let hash_str = hash._to_string();
         path.push(&hash_str[..2]); // use first 2 chars as the directory
         self.path_prefixes[hash.as_ref()[0] as usize].call_once(|| {

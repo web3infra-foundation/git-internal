@@ -2,6 +2,7 @@
 //! bound memory while still serving delta reconstruction quickly.
 
 use std::{
+    borrow::Cow,
     fs,
     fs::OpenOptions,
     io,
@@ -139,13 +140,24 @@ struct CacheObjectOnDisk {
     is_delta_in_pack: bool,
 }
 
-impl From<&CacheObject> for CacheObjectOnDisk {
-    fn from(value: &CacheObject) -> Self {
+#[derive(Debug, rkyv::Archive, rkyv::Serialize)]
+struct CacheObjectOnDiskRef<'a> {
+    #[rkyv(with = rkyv::with::AsOwned)]
+    info: Cow<'a, CacheObjectInfo>,
+    offset: usize,
+    crc32: u32,
+    #[rkyv(with = rkyv::with::AsOwned)]
+    data_decompressed: Cow<'a, [u8]>,
+    is_delta_in_pack: bool,
+}
+
+impl<'a> From<&'a CacheObject> for CacheObjectOnDiskRef<'a> {
+    fn from(value: &'a CacheObject) -> Self {
         Self {
-            info: value.info.clone(),
+            info: Cow::Borrowed(&value.info),
             offset: value.offset,
             crc32: value.crc32,
-            data_decompressed: value.data_decompressed.clone(),
+            data_decompressed: Cow::Borrowed(value.data_decompressed.as_slice()),
             is_delta_in_pack: value.is_delta_in_pack,
         }
     }
@@ -171,7 +183,9 @@ impl FileLoadStore for CacheObject {
     }
 
     fn f_save(&self, path: &Path) -> Result<(), io::Error> {
-        CacheObjectOnDisk::from(self).f_save(path)
+        let data =
+            rkyv::to_bytes::<RkyvError>(&CacheObjectOnDiskRef::from(self)).map_err(io::Error::other)?;
+        write_bytes_atomically(path, &data)
     }
 }
 
@@ -632,7 +646,7 @@ mod test {
         for (kind, size) in [(HashKind::Sha1, 1024usize), (HashKind::Sha256, 2048usize)] {
             let _guard = set_hash_kind_for_test(kind);
             let a = make_obj(size);
-            let s = rkyv::to_bytes::<RkyvError>(&CacheObjectOnDisk::from(&a)).unwrap();
+            let s = rkyv::to_bytes::<RkyvError>(&CacheObjectOnDiskRef::from(&a)).unwrap();
             let b: CacheObject = rkyv::from_bytes::<CacheObjectOnDisk, RkyvError>(&s)
                 .unwrap()
                 .into();
