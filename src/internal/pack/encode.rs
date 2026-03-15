@@ -746,7 +746,7 @@ impl PackEncoder {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, io::Cursor, path::PathBuf, sync::Arc, time::Instant};
+    use std::{io::Cursor, path::PathBuf, sync::Arc, time::Instant};
 
     use tempfile::tempdir;
     use tokio::sync::Mutex;
@@ -756,7 +756,7 @@ mod tests {
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::{
             object::{blob::Blob, types::ObjectType},
-            pack::{Pack, tests::init_logger, utils::read_offset_encoding},
+            pack::{Pack, tests::init_logger, test_pack_download::{download_pack_file, PackFileGuard}, utils::read_offset_encoding},
         },
         time_it,
     };
@@ -921,9 +921,8 @@ mod tests {
         assert!(matches!(err, GitError::PackEncodeError(_)));
     }
 
-    async fn get_entries_for_test() -> Arc<Mutex<Vec<Entry>>> {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/packs/encode-test-sha1.pack");
+    async fn get_entries_for_test() -> (Arc<Mutex<Vec<Entry>>>, PackFileGuard) {
+        let (source, dl_guard) = download_pack_file("encode-test-sha1.pack");
 
         let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
 
@@ -945,11 +944,10 @@ mod tests {
         tracing::info!("total entries: {}", p.number);
         drop(p);
 
-        entries
+        (entries, dl_guard)
     }
-    async fn get_entries_for_test_sha256() -> Arc<Mutex<Vec<Entry>>> {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/packs/encode-test-sha256.pack");
+    async fn get_entries_for_test_sha256() -> (Arc<Mutex<Vec<Entry>>>, PackFileGuard) {
+        let (source, dl_guard) = download_pack_file("encode-test-sha256.pack");
 
         let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
 
@@ -971,7 +969,7 @@ mod tests {
         tracing::info!("total entries: {}", p.number);
         drop(p);
 
-        entries
+        (entries, dl_guard)
     }
 
     #[tokio::test]
@@ -980,7 +978,7 @@ mod tests {
         init_logger();
 
         let start = Instant::now();
-        let entries = get_entries_for_test().await;
+        let (entries, _dl_guard) = get_entries_for_test().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1043,7 +1041,7 @@ mod tests {
 
         let start = Instant::now();
         // use sha256 pack file for testing
-        let entries = get_entries_for_test_sha256().await;
+        let (entries, _dl_guard) = get_entries_for_test_sha256().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1101,7 +1099,7 @@ mod tests {
     async fn test_pack_encoder_large_file() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
-        let entries = get_entries_for_test().await;
+        let (entries, _dl_guard) = get_entries_for_test().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1170,7 +1168,7 @@ mod tests {
     async fn test_pack_encoder_large_file_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
         init_logger();
-        let entries = get_entries_for_test_sha256().await;
+        let (entries, _dl_guard) = get_entries_for_test_sha256().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1240,7 +1238,7 @@ mod tests {
     async fn test_pack_encoder_with_zstdelta() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
-        let entries = get_entries_for_test().await;
+        let (entries, _dl_guard) = get_entries_for_test().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1302,7 +1300,7 @@ mod tests {
     async fn test_pack_encoder_with_zstdelta_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
         init_logger();
-        let entries = get_entries_for_test_sha256().await;
+        let (entries, _dl_guard) = get_entries_for_test_sha256().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1378,7 +1376,7 @@ mod tests {
     async fn test_pack_encoder_large_file_with_delta() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
-        let entries = get_entries_for_test().await;
+        let (entries, _dl_guard) = get_entries_for_test().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1441,7 +1439,7 @@ mod tests {
     async fn test_pack_encoder_large_file_with_delta_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
         init_logger();
-        let entries = get_entries_for_test_sha256().await;
+        let (entries, _dl_guard) = get_entries_for_test_sha256().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1505,7 +1503,7 @@ mod tests {
     async fn test_pack_encoder_output_to_files() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
-        let entries = get_entries_for_test().await;
+        let (entries, _dl_guard) = get_entries_for_test().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries
@@ -1573,7 +1571,7 @@ mod tests {
     async fn test_pack_encoder_output_to_files_with_delta() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         init_logger();
-        let entries = get_entries_for_test().await;
+        let (entries, _dl_guard) = get_entries_for_test().await;
         let entries_number = entries.lock().await.len();
 
         let total_original_size: usize = entries

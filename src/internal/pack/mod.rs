@@ -40,6 +40,9 @@ pub struct Pack {
 }
 
 #[cfg(test)]
+pub(crate) mod test_pack_download;
+
+#[cfg(test)]
 mod tests {
     use tracing_subscriber::util::SubscriberInitExt;
 
