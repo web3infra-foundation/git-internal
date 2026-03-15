@@ -11,6 +11,7 @@ use std::{
 
 mod common;
 
+use common::download_pack_file;
 use git_internal::{
     errors::GitError,
     hash::{HashKind, ObjectHash, set_hash_kind_for_test},
@@ -24,8 +25,6 @@ use git_internal::{
     },
 };
 use tokio::sync::mpsc;
-
-use common::download_pack_file;
 
 fn parse_idx_offsets(idx_bytes: &[u8], kind: HashKind) -> HashMap<Vec<u8>, u64> {
     assert!(idx_bytes.len() >= 8, "idx too short");

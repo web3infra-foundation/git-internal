@@ -810,7 +810,7 @@ mod tests {
 
     use crate::{
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
-        internal::pack::{Pack, tests::init_logger, test_pack_download::download_pack_file},
+        internal::pack::{Pack, test_pack_download::download_pack_file, tests::init_logger},
     };
 
     #[tokio::test]

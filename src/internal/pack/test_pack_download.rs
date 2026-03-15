@@ -1,7 +1,14 @@
 //! Test helper: download pack files from remote on demand and clean up after use.
 
-use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::{
+    collections::HashMap,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::{
+        LazyLock, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 const BASE_URL: &str = "https://download.libra.tools/libra/development/pack";
 
@@ -12,8 +19,34 @@ fn download_dir() -> PathBuf {
     dir
 }
 
-/// A mutex to serialize downloads per filename and avoid races.
-static DOWNLOAD_LOCK: LazyLock<std::sync::Mutex<()>> = LazyLock::new(|| std::sync::Mutex::new(()));
+/// Per-file reference counts so the file is only deleted when the last guard drops.
+static REF_COUNTS: LazyLock<Mutex<HashMap<PathBuf, &'static AtomicUsize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn lock_ref_counts() -> std::sync::MutexGuard<'static, HashMap<PathBuf, &'static AtomicUsize>> {
+    REF_COUNTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn acquire_ref(path: &Path) -> &'static AtomicUsize {
+    let mut map = lock_ref_counts();
+    let counter = map
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Box::leak(Box::new(AtomicUsize::new(0))));
+    counter.fetch_add(1, Ordering::Relaxed);
+    counter
+}
+
+fn release_ref(path: &Path) -> bool {
+    let map = lock_ref_counts();
+    if let Some(counter) = map.get(path) {
+        counter.fetch_sub(1, Ordering::Relaxed) == 1
+    } else {
+        true
+    }
+}
+
+/// A mutex to serialize downloads and avoid races.
+static DOWNLOAD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Download a pack/idx file if not already present, returning the local path.
 fn ensure_downloaded(filename: &str) -> PathBuf {
@@ -21,35 +54,43 @@ fn ensure_downloaded(filename: &str) -> PathBuf {
     if path.exists() {
         return path;
     }
-    let _lock = DOWNLOAD_LOCK.lock().unwrap();
+    let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Double-check after acquiring lock.
     if path.exists() {
         return path;
     }
     let url = format!("{BASE_URL}/{filename}");
     tracing::info!("Downloading test pack file: {url}");
-    let response = ureq::get(&url).call()
+    let mut response = ureq::get(&url)
+        .call()
         .unwrap_or_else(|e| panic!("failed to download {url}: {e}"));
-    let bytes = response.into_body().read_to_vec()
+    let mut bytes = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .read_to_end(&mut bytes)
         .unwrap_or_else(|e| panic!("failed to read response body for {url}: {e}"));
-    std::fs::write(&path, &bytes).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    std::fs::write(&path, &bytes)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
     tracing::info!("Downloaded {} ({} bytes)", filename, bytes.len());
     path
 }
 
-/// Guard that deletes the downloaded file when dropped.
+/// Guard that deletes the downloaded file when the last reference is dropped.
 pub struct PackFileGuard {
     path: PathBuf,
 }
 
 impl Drop for PackFileGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if release_ref(&self.path) {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
 /// Download a pack file (and its companion .idx if the file is a .pack),
-/// returning `(path, guard)`. The file is deleted when the guard is dropped.
+/// returning `(path, guard)`. The file is deleted when all guards for it are dropped.
 pub fn download_pack_file(filename: &str) -> (PathBuf, PackFileGuard) {
     let path = ensure_downloaded(filename);
     // Also download the companion file (.pack ↔ .idx).
@@ -60,6 +101,7 @@ pub fn download_pack_file(filename: &str) -> (PathBuf, PackFileGuard) {
         let pack = filename.replace(".idx", ".pack");
         let _ = ensure_downloaded(&pack);
     }
+    acquire_ref(&path);
     let guard = PackFileGuard { path: path.clone() };
     (path, guard)
 }

@@ -292,8 +292,10 @@ mod tests {
         str::FromStr,
     };
 
-    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
-    use crate::internal::pack::test_pack_download::download_pack_file;
+    use crate::{
+        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
+        internal::pack::test_pack_download::download_pack_file,
+    };
 
     /// Hashing "Hello, world!" with SHA1 should match known value.
     #[test]

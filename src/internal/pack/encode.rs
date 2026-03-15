@@ -756,7 +756,12 @@ mod tests {
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::{
             object::{blob::Blob, types::ObjectType},
-            pack::{Pack, tests::init_logger, test_pack_download::{download_pack_file, PackFileGuard}, utils::read_offset_encoding},
+            pack::{
+                Pack,
+                test_pack_download::{PackFileGuard, download_pack_file},
+                tests::init_logger,
+                utils::read_offset_encoding,
+            },
         },
         time_it,
     };
