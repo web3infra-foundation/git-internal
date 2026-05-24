@@ -2,10 +2,11 @@
 //! and populates caches/metadata for downstream consumers.
 
 use std::{
+    fs,
     io::{self, BufRead, Cursor, ErrorKind, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
@@ -27,7 +28,7 @@ use crate::{
         metadata::{EntryMeta, MetaAttached},
         object::types::ObjectType,
         pack::{
-            DEFAULT_TMP_DIR, Pack,
+            DEFAULT_TMP_DIR, Pack, PackStats,
             cache::{_Cache, Caches},
             cache_object::{CacheObject, CacheObjectInfo, MemSizeRecorder},
             channel_reader::StreamBufReader,
@@ -563,6 +564,35 @@ impl Pack {
         Ok(())
     }
 
+    /// Decode a pack file from disk and return object count statistics.
+    ///
+    /// Delta entries are counted in `deltas`; non-delta entries are counted by
+    /// their Git object type. The caller must configure the thread-local hash
+    /// kind before calling this function when decoding SHA-256 packs.
+    pub fn decode_stats(path: impl AsRef<Path>) -> Result<PackStats, GitError> {
+        let file = fs::File::open(path)?;
+        let mut reader = io::BufReader::new(file);
+        let mut pack = Pack::new(None, Some(100 * 1024 * 1024), None, true);
+        let stats = Arc::new(Mutex::new(PackStats::default()));
+        let stats_for_callback = stats.clone();
+
+        pack.decode(
+            &mut reader,
+            move |entry| {
+                let mut stats = stats_for_callback
+                    .lock()
+                    .expect("pack stats mutex poisoned");
+                stats.record(entry.inner.obj_type, entry.meta.is_delta.unwrap_or(false));
+            },
+            None::<fn(ObjectHash)>,
+        )?;
+
+        let stats = stats
+            .lock()
+            .map_err(|_| GitError::CustomError("pack stats mutex poisoned".to_string()))?;
+        Ok(*stats)
+    }
+
     /// Decode a Pack in a new thread and send the CacheObjects while decoding.
     /// <br> Attention: It will consume the `pack` and return in a JoinHandle.
     pub fn decode_async(
@@ -795,7 +825,7 @@ impl Pack {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        env, fs,
         io::{BufReader, Cursor, prelude::*},
         path::PathBuf,
         sync::{
@@ -810,12 +840,17 @@ mod tests {
 
     use crate::{
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
-        internal::pack::{Pack, test_pack_download::download_pack_file, tests::init_logger},
+        internal::pack::{Pack, tests::init_logger},
     };
+
+    fn test_tmp_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-cache/pack-decode")
+    }
 
     #[tokio::test]
     async fn test_pack_check_header() {
-        let (source, _guard) = download_pack_file("medium-sha1.pack");
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/medium-sha1.pack");
 
         let f = fs::File::open(source).unwrap();
         let mut buf_reader = BufReader::new(f);
@@ -854,7 +889,7 @@ mod tests {
         // 32-bit usize::MAX (~4.29B) and overflowed before a later division; this test
         // covers that former panic path.
         let mem_limit = 1_200_000_000usize;
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
         let result = std::panic::catch_unwind(|| {
             let _p = Pack::new(Some(1), Some(mem_limit), Some(tmp), true);
         });
@@ -862,11 +897,12 @@ mod tests {
     }
 
     /// Helper function to run decode tests without delta objects
-    fn run_decode_no_delta(filename: &str, kind: HashKind) {
+    fn run_decode_no_delta(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
 
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -876,18 +912,19 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_without_delta() {
-        run_decode_no_delta("small-sha1.pack", HashKind::Sha1);
-        run_decode_no_delta("small-sha256.pack", HashKind::Sha256);
+        run_decode_no_delta("tests/data/packs/small-sha1.pack", HashKind::Sha1);
+        run_decode_no_delta("tests/data/packs/small-sha256.pack", HashKind::Sha256);
     }
 
     /// Helper function to run decode tests with delta objects
-    fn run_decode_with_ref_delta(filename: &str, kind: HashKind) {
+    fn run_decode_with_ref_delta(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
 
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
 
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -897,16 +934,17 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_with_ref_delta() {
-        run_decode_with_ref_delta("ref-delta-sha1.pack", HashKind::Sha1);
-        run_decode_with_ref_delta("ref-delta-sha256.pack", HashKind::Sha256);
+        run_decode_with_ref_delta("tests/data/packs/ref-delta-sha1.pack", HashKind::Sha1);
+        run_decode_with_ref_delta("tests/data/packs/ref-delta-sha256.pack", HashKind::Sha256);
     }
 
     /// Helper function to run decode tests without memory limit
-    fn run_decode_no_mem_limit(filename: &str, kind: HashKind) {
+    fn run_decode_no_mem_limit(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
 
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -916,17 +954,18 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_no_mem_limit() {
-        run_decode_no_mem_limit("small-sha1.pack", HashKind::Sha1);
-        run_decode_no_mem_limit("small-sha256.pack", HashKind::Sha256);
+        run_decode_no_mem_limit("tests/data/packs/small-sha1.pack", HashKind::Sha1);
+        run_decode_no_mem_limit("tests/data/packs/small-sha256.pack", HashKind::Sha256);
     }
 
     /// Helper function to run decode tests with delta objects
-    async fn run_decode_large_with_delta(filename: &str, kind: HashKind) {
+    async fn run_decode_large_with_delta(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
 
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -950,17 +989,18 @@ mod tests {
     }
     #[tokio::test]
     async fn test_pack_decode_with_large_file_with_delta_without_ref() {
-        run_decode_large_with_delta("medium-sha1.pack", HashKind::Sha1).await;
-        run_decode_large_with_delta("medium-sha256.pack", HashKind::Sha256).await;
+        run_decode_large_with_delta("tests/data/packs/medium-sha1.pack", HashKind::Sha1).await;
+        run_decode_large_with_delta("tests/data/packs/medium-sha256.pack", HashKind::Sha256).await;
     } // it will be stuck on dropping `Pack` on Windows if `mem_size` is None, so we need `mimalloc`
 
     /// Helper function to run decode tests with large file stream
-    async fn run_decode_large_stream(filename: &str, kind: HashKind) {
+    async fn run_decode_large_stream(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
         let f = tokio::fs::File::open(source).await.unwrap();
         let stream = ReaderStream::new(f).map_err(axum::Error::new);
         let p = Pack::new(Some(4), Some(1024 * 1024 * 100), Some(tmp.clone()), true);
@@ -985,16 +1025,17 @@ mod tests {
     }
     #[tokio::test]
     async fn test_decode_large_file_stream() {
-        run_decode_large_stream("medium-sha1.pack", HashKind::Sha1).await;
-        run_decode_large_stream("medium-sha256.pack", HashKind::Sha256).await;
+        run_decode_large_stream("tests/data/packs/medium-sha1.pack", HashKind::Sha1).await;
+        run_decode_large_stream("tests/data/packs/medium-sha256.pack", HashKind::Sha256).await;
     }
 
     /// Helper function to run decode tests with large file async
-    async fn run_decode_large_file_async(filename: &str, kind: HashKind) {
+    async fn run_decode_large_file_async(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
         let f = fs::File::open(source).unwrap();
         let buffered = BufReader::new(f);
         let p = Pack::new(Some(4), Some(1024 * 1024 * 100), Some(tmp.clone()), true);
@@ -1010,16 +1051,17 @@ mod tests {
     }
     #[tokio::test]
     async fn test_decode_large_file_async() {
-        run_decode_large_file_async("medium-sha1.pack", HashKind::Sha1).await;
-        run_decode_large_file_async("medium-sha256.pack", HashKind::Sha256).await;
+        run_decode_large_file_async("tests/data/packs/medium-sha1.pack", HashKind::Sha1).await;
+        run_decode_large_file_async("tests/data/packs/medium-sha256.pack", HashKind::Sha256).await;
     }
 
     /// Helper function to run decode tests with delta objects without reference
-    fn run_decode_with_delta_no_ref(filename: &str, kind: HashKind) {
+    fn run_decode_with_delta_no_ref(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
-        let tmp = PathBuf::from("/tmp/.cache_temp");
+        let tmp = test_tmp_path();
 
         let f = fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -1029,8 +1071,8 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_with_delta_without_ref() {
-        run_decode_with_delta_no_ref("medium-sha1.pack", HashKind::Sha1);
-        run_decode_with_delta_no_ref("medium-sha256.pack", HashKind::Sha256);
+        run_decode_with_delta_no_ref("tests/data/packs/medium-sha1.pack", HashKind::Sha1);
+        run_decode_with_delta_no_ref("tests/data/packs/medium-sha256.pack", HashKind::Sha256);
     }
 
     #[test] // Take too long time
@@ -1041,12 +1083,12 @@ mod tests {
             .unwrap();
         rt.block_on(async move {
             // For each hash kind, run two decode tasks concurrently to simulate multi-task pressure.
-            for (kind, filename) in [
-                (HashKind::Sha1, "medium-sha1.pack"),
-                (HashKind::Sha256, "medium-sha256.pack"),
+            for (kind, path) in [
+                (HashKind::Sha1, "tests/data/packs/medium-sha1.pack"),
+                (HashKind::Sha256, "tests/data/packs/medium-sha256.pack"),
             ] {
-                let f1 = run_decode_large_with_delta(filename, kind);
-                let f2 = run_decode_large_with_delta(filename, kind);
+                let f1 = run_decode_large_with_delta(path, kind);
+                let f2 = run_decode_large_with_delta(path, kind);
                 let _ = futures::future::join(f1, f2).await;
             }
         });
