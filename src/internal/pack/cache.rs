@@ -66,6 +66,15 @@ pub struct Caches {
     complete_signal: Arc<AtomicBool>,
 }
 
+fn create_cache_dir(path: &Path) {
+    fs::create_dir_all(path).unwrap_or_else(|err| {
+        panic!(
+            "failed to create pack cache directory `{}`: {err}",
+            path.display()
+        )
+    });
+}
+
 impl Caches {
     /// only get object from memory, not from tmp file
     fn try_get(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
@@ -115,7 +124,7 @@ impl Caches {
         self.path_prefixes[hash.as_ref()[0] as usize].call_once(|| {
             // Check if the directory exists, if not, create it
             if !path.exists() {
-                fs::create_dir_all(&path).unwrap();
+                create_cache_dir(&path);
             }
         });
         path.push(hash_str);
@@ -147,7 +156,13 @@ impl Caches {
     pub fn remove_tmp_dir(&self) {
         time_it!("Remove tmp dir", {
             if self.tmp_path.exists() {
-                fs::remove_dir_all(&self.tmp_path).unwrap(); //very slow
+                if let Err(err) = fs::remove_dir_all(&self.tmp_path) {
+                    tracing::warn!(
+                        "failed to remove pack cache temp directory `{}`: {err}",
+                        self.tmp_path.display()
+                    );
+                    return;
+                }
                 // Try to remove parent .cache_temp directory if it's empty
                 if let Some(parent) = self.tmp_path.parent() {
                     let is_cache_temp = parent
@@ -175,7 +190,7 @@ impl _Cache for Caches {
     {
         // `None` means no limit, so no need to create the tmp dir
         if mem_size.is_some() {
-            fs::create_dir_all(&tmp_path).unwrap();
+            create_cache_dir(&tmp_path);
         }
 
         Caches {
@@ -267,7 +282,7 @@ impl _Cache for Caches {
 
 #[cfg(test)]
 mod test {
-    use std::{env, sync::Arc, thread};
+    use std::{sync::Arc, thread};
 
     use super::*;
     use crate::{
@@ -285,6 +300,12 @@ mod test {
             crc32: 0,
             is_delta_in_pack: false,
         }
+    }
+
+    fn test_tmp_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-cache")
+            .join(name)
     }
 
     /// test single-threaded cache behavior with different hash kinds and capacities
@@ -307,8 +328,7 @@ mod test {
             ),
         ] {
             let _guard = set_hash_kind_for_test(kind);
-            let source = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
-            let tmp_path = source.clone().join(tmp_dir);
+            let tmp_path = test_tmp_path(tmp_dir);
             if tmp_path.exists() {
                 fs::remove_dir_all(&tmp_path).unwrap();
             }
@@ -345,8 +365,7 @@ mod test {
     /// consider the multi-threaded scenario where different threads use different hash kinds
     #[test]
     fn test_cache_multi_thread_mixed_hash_kinds() {
-        let base = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
-        let tmp_path = base.join("tests/.cache_tmp_mixed");
+        let tmp_path = test_tmp_path("mixed");
         if tmp_path.exists() {
             fs::remove_dir_all(&tmp_path).unwrap();
         }

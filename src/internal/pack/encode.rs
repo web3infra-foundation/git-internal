@@ -766,6 +766,10 @@ mod tests {
         time_it,
     };
 
+    fn test_tmp_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-cache/pack-encode")
+    }
+
     /// Check if the given data is a valid pack file format by attempting to decode it.
     fn check_format(data: &Vec<u8>) {
         // Use a smaller cap on 32-bit targets to avoid usize overflow.
@@ -784,7 +788,7 @@ mod tests {
         let mut p = Pack::new(
             None,
             Some(max_pack_size), // 6GB on 64-bit, 2GB on 32-bit
-            Some(PathBuf::from("/tmp/.cache_temp")),
+            Some(test_tmp_path()),
             true,
         );
         let mut reader = Cursor::new(data);
@@ -929,7 +933,7 @@ mod tests {
     async fn get_entries_for_test() -> (Arc<Mutex<Vec<Entry>>>, PackFileGuard) {
         let (source, dl_guard) = download_pack_file("encode-test-sha1.pack");
 
-        let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
+        let mut p = Pack::new(None, None, Some(test_tmp_path()), true);
 
         let f = std::fs::File::open(&source).unwrap();
         tracing::info!("pack file size: {}", f.metadata().unwrap().len());
@@ -954,7 +958,7 @@ mod tests {
     async fn get_entries_for_test_sha256() -> (Arc<Mutex<Vec<Entry>>>, PackFileGuard) {
         let (source, dl_guard) = download_pack_file("encode-test-sha256.pack");
 
-        let mut p = Pack::new(None, None, Some(PathBuf::from("/tmp/.cache_temp")), true);
+        let mut p = Pack::new(None, None, Some(test_tmp_path()), true);
 
         let f = std::fs::File::open(&source).unwrap();
         tracing::info!("pack file size: {}", f.metadata().unwrap().len());
