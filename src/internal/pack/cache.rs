@@ -66,16 +66,41 @@ pub struct Caches {
     complete_signal: Arc<AtomicBool>,
 }
 
-fn create_cache_dir(path: &Path) {
-    fs::create_dir_all(path).unwrap_or_else(|err| {
-        panic!(
-            "failed to create pack cache directory `{}`: {err}",
-            path.display()
+fn create_cache_dir(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to create pack cache directory `{}`: {err}",
+                path.display()
+            ),
         )
-    });
+    })
 }
 
 impl Caches {
+    pub(crate) fn try_new(
+        mem_size: Option<usize>,
+        tmp_path: PathBuf,
+        thread_num: usize,
+    ) -> io::Result<Self> {
+        // `None` means no limit, so no need to create the tmp dir
+        if mem_size.is_some() {
+            create_cache_dir(&tmp_path)?;
+        }
+
+        Ok(Caches {
+            map_offset: DashMap::new(),
+            hash_set: DashSet::new(),
+            lru_cache: Mutex::new(LruCache::new(mem_size.unwrap_or(usize::MAX))),
+            mem_size,
+            tmp_path,
+            path_prefixes: [const { Once::new() }; 256],
+            pool: Arc::new(ThreadPool::new(thread_num)),
+            complete_signal: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
     /// only get object from memory, not from tmp file
     fn try_get(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
         let mut map = self.lru_cache.lock().unwrap();
@@ -124,7 +149,7 @@ impl Caches {
         self.path_prefixes[hash.as_ref()[0] as usize].call_once(|| {
             // Check if the directory exists, if not, create it
             if !path.exists() {
-                create_cache_dir(&path);
+                create_cache_dir(&path).unwrap_or_else(|err| panic!("{err}"));
             }
         });
         path.push(hash_str);
@@ -188,21 +213,7 @@ impl _Cache for Caches {
     where
         Self: Sized,
     {
-        // `None` means no limit, so no need to create the tmp dir
-        if mem_size.is_some() {
-            create_cache_dir(&tmp_path);
-        }
-
-        Caches {
-            map_offset: DashMap::new(),
-            hash_set: DashSet::new(),
-            lru_cache: Mutex::new(LruCache::new(mem_size.unwrap_or(usize::MAX))),
-            mem_size,
-            tmp_path,
-            path_prefixes: [const { Once::new() }; 256],
-            pool: Arc::new(ThreadPool::new(thread_num)),
-            complete_signal: Arc::new(AtomicBool::new(false)),
-        }
+        Caches::try_new(mem_size, tmp_path, thread_num).unwrap_or_else(|err| panic!("{err}"))
     }
 
     fn get_hash(&self, offset: usize) -> Option<ObjectHash> {

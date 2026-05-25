@@ -1,4 +1,8 @@
-use std::{fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
+};
 
 mod common;
 
@@ -15,12 +19,37 @@ fn pack_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+static CURRENT_DIR_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+struct CurrentDirGuard {
+    original: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn enter(path: &Path) -> Self {
+        let original = env::current_dir().expect("read current dir");
+        env::set_current_dir(path).expect("set current dir");
+        Self { original }
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        env::set_current_dir(&self.original).expect("restore current dir");
+    }
+}
+
+fn decode_pack_stats_serial(path: impl AsRef<Path>) -> Result<PackStats, GitError> {
+    let _guard = CURRENT_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    decode_pack_stats(path)
+}
+
 #[test]
 fn decode_pack_stats_counts_small_pack() -> Result<(), GitError> {
     let _guard = set_hash_kind_for_test(HashKind::Sha1);
     let (pack_path, _download_guard) = download_pack_file("small-sha1.pack");
 
-    let stats = decode_pack_stats(pack_path)?;
+    let stats = decode_pack_stats_serial(pack_path)?;
 
     assert_eq!(
         stats,
@@ -41,7 +70,7 @@ fn decode_pack_stats_counts_delta_entries() -> Result<(), GitError> {
     let _guard = set_hash_kind_for_test(HashKind::Sha1);
     let (pack_path, _download_guard) = download_pack_file("encode-test-sha1.pack");
 
-    let stats = decode_pack_stats(pack_path)?;
+    let stats = decode_pack_stats_serial(pack_path)?;
 
     assert_eq!(
         stats,
@@ -59,7 +88,8 @@ fn decode_pack_stats_counts_delta_entries() -> Result<(), GitError> {
 
 #[test]
 fn decode_pack_stats_returns_error_for_missing_path() {
-    let err = decode_pack_stats(pack_path("missing.pack")).expect_err("missing file must fail");
+    let err =
+        decode_pack_stats_serial(pack_path("missing.pack")).expect_err("missing file must fail");
 
     assert!(matches!(err, GitError::IOError(_)));
 }
@@ -69,7 +99,32 @@ fn decode_pack_stats_returns_error_for_invalid_pack_header() {
     let file = tempfile::NamedTempFile::new().expect("create temporary pack");
     fs::write(file.path(), b"NOPE").expect("write invalid pack header");
 
-    let err = decode_pack_stats(file.path()).expect_err("invalid pack header must fail");
+    let err = decode_pack_stats_serial(file.path()).expect_err("invalid pack header must fail");
 
     assert!(matches!(err, GitError::InvalidPackHeader(_)));
+}
+
+#[test]
+fn decode_pack_stats_returns_error_when_cache_dir_cannot_be_created() {
+    let file = tempfile::NamedTempFile::new().expect("create temporary pack");
+    fs::write(file.path(), b"NOPE").expect("write invalid pack header");
+    let pack_path = file.path().canonicalize().expect("canonicalize pack path");
+
+    let cwd = tempfile::tempdir().expect("create temporary cwd");
+    fs::write(cwd.path().join(".cache_temp"), b"not a directory").expect("block cache dir");
+
+    let _guard = CURRENT_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _cwd = CurrentDirGuard::enter(cwd.path());
+
+    let err = decode_pack_stats(pack_path).expect_err("cache dir creation must fail");
+
+    match err {
+        GitError::IOError(err) => {
+            assert!(
+                err.to_string()
+                    .contains("failed to create pack cache directory")
+            );
+        }
+        other => panic!("expected IO error, got {other:?}"),
+    }
 }

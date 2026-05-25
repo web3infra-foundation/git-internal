@@ -102,6 +102,17 @@ impl Pack {
         temp_path: Option<PathBuf>,
         clean_tmp: bool,
     ) -> Self {
+        Self::try_new(thread_num, mem_limit, temp_path, clean_tmp)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Fallible version of [`Pack::new`] that reports cache temp-dir setup errors.
+    pub fn try_new(
+        thread_num: Option<usize>,
+        mem_limit: Option<usize>,
+        temp_path: Option<PathBuf>,
+        clean_tmp: bool,
+    ) -> Result<Self, GitError> {
         let mut temp_path = temp_path.unwrap_or(PathBuf::from(DEFAULT_TMP_DIR));
         // add 8 random characters as subdirectory, check if the directory exists
         loop {
@@ -117,17 +128,17 @@ impl Pack {
             // Use wider math to avoid 32-bit overflow when computing 80%.
             ((mem_limit as u128) * 4 / 5) as usize
         });
-        Pack {
+        Ok(Pack {
             number: 0,
             signature: ObjectHash::default(),
             objects: Vec::new(),
             pool: Arc::new(ThreadPool::new(thread_num)),
             waitlist: Arc::new(Waitlist::new()),
-            caches: Arc::new(Caches::new(cache_mem_size, temp_path, thread_num)),
+            caches: Arc::new(Caches::try_new(cache_mem_size, temp_path, thread_num)?),
             mem_limit,
             cache_objs_mem: Arc::new(AtomicUsize::default()),
             clean_tmp,
-        }
+        })
     }
 
     /// Checks and reads the header of a Git pack file.
@@ -572,7 +583,7 @@ impl Pack {
     pub fn decode_stats(path: impl AsRef<Path>) -> Result<PackStats, GitError> {
         let file = fs::File::open(path)?;
         let mut reader = io::BufReader::new(file);
-        let mut pack = Pack::new(None, Some(100 * 1024 * 1024), None, true);
+        let mut pack = Pack::try_new(None, Some(100 * 1024 * 1024), None, true)?;
         let stats = Arc::new(Mutex::new(PackStats::default()));
         let stats_for_callback = stats.clone();
 
