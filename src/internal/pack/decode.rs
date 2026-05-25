@@ -6,7 +6,7 @@ use std::{
     io::{self, BufRead, Cursor, ErrorKind, Read},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
@@ -28,7 +28,7 @@ use crate::{
         metadata::{EntryMeta, MetaAttached},
         object::types::ObjectType,
         pack::{
-            DEFAULT_TMP_DIR, Pack, PackStats,
+            DEFAULT_TMP_DIR, DecodeStatsOptions, Pack, PackStats, PackStatsCounters,
             cache::{_Cache, Caches},
             cache_object::{CacheObject, CacheObjectInfo, MemSizeRecorder},
             channel_reader::StreamBufReader,
@@ -580,28 +580,45 @@ impl Pack {
     /// Delta entries are counted in `deltas`; non-delta entries are counted by
     /// their Git object type. The caller must configure the thread-local hash
     /// kind before calling this function when decoding SHA-256 packs.
+    ///
+    /// This uses [`DecodeStatsOptions::default`], which applies a 100 MiB
+    /// memory cache limit and the default relative temporary directory,
+    /// `./.cache_temp`.
     pub fn decode_stats(path: impl AsRef<Path>) -> Result<PackStats, GitError> {
+        Self::decode_stats_with_options(path, DecodeStatsOptions::default())
+    }
+
+    /// Decode a pack file from disk and return object count statistics using
+    /// explicit cache and threading options.
+    ///
+    /// Delta entries are counted in `deltas`; non-delta entries are counted by
+    /// their Git object type. The caller must configure the thread-local hash
+    /// kind before calling this function when decoding SHA-256 packs.
+    pub fn decode_stats_with_options(
+        path: impl AsRef<Path>,
+        options: DecodeStatsOptions,
+    ) -> Result<PackStats, GitError> {
         let file = fs::File::open(path)?;
         let mut reader = io::BufReader::new(file);
-        let mut pack = Pack::try_new(None, Some(100 * 1024 * 1024), None, true)?;
-        let stats = Arc::new(Mutex::new(PackStats::default()));
+        let mut pack = Pack::try_new(
+            options.thread_num,
+            options.mem_limit,
+            options.temp_path,
+            options.clean_tmp,
+        )?;
+        let stats = Arc::new(PackStatsCounters::default());
         let stats_for_callback = stats.clone();
 
         pack.decode(
             &mut reader,
             move |entry| {
-                let mut stats = stats_for_callback
-                    .lock()
-                    .expect("pack stats mutex poisoned");
-                stats.record(entry.inner.obj_type, entry.meta.is_delta.unwrap_or(false));
+                stats_for_callback
+                    .record(entry.inner.obj_type, entry.meta.is_delta.unwrap_or(false));
             },
             None::<fn(ObjectHash)>,
         )?;
 
-        let stats = stats
-            .lock()
-            .map_err(|_| GitError::CustomError("pack stats mutex poisoned".to_string()))?;
-        Ok(*stats)
+        Ok(stats.snapshot())
     }
 
     /// Decode a Pack in a new thread and send the CacheObjects while decoding.

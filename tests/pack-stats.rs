@@ -10,7 +10,9 @@ use common::download_pack_file;
 use git_internal::{
     errors::GitError,
     hash::{HashKind, set_hash_kind_for_test},
-    internal::pack::{PackStats, decode_pack_stats},
+    internal::pack::{
+        DecodeStatsOptions, PackStats, decode_pack_stats, decode_pack_stats_with_options,
+    },
 };
 
 fn pack_path(name: &str) -> PathBuf {
@@ -127,4 +129,29 @@ fn decode_pack_stats_returns_error_when_cache_dir_cannot_be_created() {
         }
         other => panic!("expected IO error, got {other:?}"),
     }
+}
+
+#[test]
+fn decode_pack_stats_allows_custom_cache_dir() {
+    let file = tempfile::NamedTempFile::new().expect("create temporary pack");
+    fs::write(file.path(), b"NOPE").expect("write invalid pack header");
+    let pack_path = file.path().canonicalize().expect("canonicalize pack path");
+
+    let cwd = tempfile::tempdir().expect("create temporary cwd");
+    fs::write(cwd.path().join(".cache_temp"), b"not a directory").expect("block cache dir");
+    let cache_dir = tempfile::tempdir().expect("create custom cache dir");
+
+    let _guard = CURRENT_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _cwd = CurrentDirGuard::enter(cwd.path());
+
+    let err = decode_pack_stats_with_options(
+        pack_path,
+        DecodeStatsOptions {
+            temp_path: Some(cache_dir.path().to_path_buf()),
+            ..DecodeStatsOptions::default()
+        },
+    )
+    .expect_err("invalid pack header must fail after custom cache setup");
+
+    assert!(matches!(err, GitError::InvalidPackHeader(_)));
 }
