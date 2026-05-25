@@ -45,12 +45,8 @@ fn release_ref(path: &Path) -> bool {
 
 static DOWNLOAD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn ensure_downloaded(filename: &str) -> PathBuf {
+fn ensure_downloaded_locked(filename: &str) -> PathBuf {
     let path = download_dir().join(filename);
-    if path.exists() {
-        return path;
-    }
-    let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if path.exists() {
         return path;
     }
@@ -70,28 +66,40 @@ fn ensure_downloaded(filename: &str) -> PathBuf {
 }
 
 pub struct PackFileGuard {
-    path: PathBuf,
+    paths: Vec<PathBuf>,
 }
 
 impl Drop for PackFileGuard {
     fn drop(&mut self) {
-        if release_ref(&self.path) {
-            let _ = std::fs::remove_file(&self.path);
+        let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for path in &self.paths {
+            if release_ref(path) {
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 }
 
 #[allow(dead_code)]
 pub fn download_pack_file(filename: &str) -> (PathBuf, PackFileGuard) {
-    let path = ensure_downloaded(filename);
+    let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = download_dir().join(filename);
+    acquire_ref(&path);
+    let path = ensure_downloaded_locked(filename);
+
+    let mut paths = vec![path.clone()];
     if filename.ends_with(".pack") {
         let idx = filename.replace(".pack", ".idx");
-        let _ = ensure_downloaded(&idx);
+        let idx_path = download_dir().join(&idx);
+        acquire_ref(&idx_path);
+        paths.push(ensure_downloaded_locked(&idx));
     } else if filename.ends_with(".idx") {
         let pack = filename.replace(".idx", ".pack");
-        let _ = ensure_downloaded(&pack);
+        let pack_path = download_dir().join(&pack);
+        acquire_ref(&pack_path);
+        paths.push(ensure_downloaded_locked(&pack));
     }
-    acquire_ref(&path);
-    let guard = PackFileGuard { path: path.clone() };
+
+    let guard = PackFileGuard { paths };
     (path, guard)
 }
