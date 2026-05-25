@@ -70,7 +70,6 @@ impl<R: BufRead> BufRead for CrcCountingReader<'_, R> {
 
 /// For the convenience of passing parameters
 struct SharedParams {
-    pub pool: Arc<ThreadPool>,
     pub waitlist: Arc<Waitlist>,
     pub caches: Arc<Caches>,
     pub cache_objs_mem_size: Arc<AtomicUsize>,
@@ -318,6 +317,8 @@ impl Pack {
                 let (data, raw_size) = Pack::decompress_data(&mut reader, size)?;
                 *offset += raw_size;
                 let crc32 = hasher.finalize();
+                #[cfg(feature = "decode_profile")]
+                crate::internal::pack::profile::base_object();
                 Ok(Some(CacheObject::new_for_undeltified(
                     t,
                     data,
@@ -353,6 +354,8 @@ impl Pack {
                     _ => unreachable!(),
                 };
                 let crc32 = hasher.finalize();
+                #[cfg(feature = "decode_profile")]
+                crate::internal::pack::profile::delta_object();
                 Ok(Some(CacheObject {
                     info: obj_info,
                     offset: init_offset,
@@ -376,6 +379,8 @@ impl Pack {
 
                 let crc32 = hasher.finalize();
 
+                #[cfg(feature = "decode_profile")]
+                crate::internal::pack::profile::delta_object();
                 Ok(Some(CacheObject {
                     info: CacheObjectInfo::HashDelta(ref_sha, final_size),
                     offset: init_offset,
@@ -426,6 +431,12 @@ impl Pack {
         let callback = Arc::new(callback);
 
         let caches = self.caches.clone();
+        let params = Arc::new(SharedParams {
+            waitlist: self.waitlist.clone(),
+            caches: self.caches.clone(),
+            cache_objs_mem_size: self.cache_objs_mem.clone(),
+            callback: callback.clone(),
+        });
         let mut reader = Wrapper::new(io::BufReader::new(pack));
 
         let result = Pack::check_header(&mut reader);
@@ -465,18 +476,12 @@ impl Pack {
                 Ok(Some(mut obj)) => {
                     obj.set_mem_recorder(self.cache_objs_mem.clone());
                     obj.record_mem_size();
-
-                    // Wrapper of Arc Params, for convenience to pass
-                    let params = Arc::new(SharedParams {
-                        pool: self.pool.clone(),
-                        waitlist: self.waitlist.clone(),
-                        caches: self.caches.clone(),
-                        cache_objs_mem_size: self.cache_objs_mem.clone(),
-                        callback: callback.clone(),
-                    });
+                    #[cfg(feature = "decode_profile")]
+                    self.profile_sample_memory();
 
                     let caches = caches.clone();
                     let waitlist = self.waitlist.clone();
+                    let params = params.clone();
                     let kind = get_hash_kind();
                     self.pool.execute(move || {
                         set_hash_kind(kind);
@@ -643,38 +648,50 @@ impl Pack {
         self.cache_objs_mem.load(Ordering::Acquire)
     }
 
-    /// Rebuild the Delta Object in a new thread & process the objects waiting for it recursively.
-    /// <br> This function must be *static*, because [&self] can't be moved into a new thread.
+    #[cfg(feature = "decode_profile")]
+    fn profile_sample_memory(&self) {
+        crate::internal::pack::profile::sample_peak_internal_memory(self.memory_used());
+    }
+
+    #[cfg(feature = "decode_profile")]
+    fn profile_sample_shared_memory(shared_params: &SharedParams) {
+        let memory = shared_params.cache_objs_mem_size.load(Ordering::Acquire)
+            + shared_params.caches.memory_used_index();
+        crate::internal::pack::profile::sample_peak_internal_memory(memory);
+    }
+
+    /// Rebuild the Delta Object and process the objects waiting for it recursively.
     fn process_delta(
         shared_params: Arc<SharedParams>,
         delta_obj: CacheObject,
         base_obj: Arc<CacheObject>,
     ) {
-        shared_params.pool.clone().execute(move || {
-            let mut new_obj = match delta_obj.info {
-                CacheObjectInfo::OffsetDelta(_, _) | CacheObjectInfo::HashDelta(_, _) => {
-                    Pack::rebuild_delta(delta_obj, base_obj)
-                }
-                CacheObjectInfo::OffsetZstdelta(_, _) => {
-                    Pack::rebuild_zstdelta(delta_obj, base_obj)
-                }
-                _ => unreachable!(),
-            };
+        let mut new_obj = match delta_obj.info {
+            CacheObjectInfo::OffsetDelta(_, _) | CacheObjectInfo::HashDelta(_, _) => {
+                Pack::rebuild_delta(delta_obj, base_obj)
+            }
+            CacheObjectInfo::OffsetZstdelta(_, _) => Pack::rebuild_zstdelta(delta_obj, base_obj),
+            _ => unreachable!(),
+        };
 
-            new_obj.set_mem_recorder(shared_params.cache_objs_mem_size.clone());
-            new_obj.record_mem_size();
-            Self::cache_obj_and_process_waitlist(shared_params, new_obj); //Indirect Recursion
-        });
+        new_obj.set_mem_recorder(shared_params.cache_objs_mem_size.clone());
+        new_obj.record_mem_size();
+        #[cfg(feature = "decode_profile")]
+        Self::profile_sample_shared_memory(&shared_params);
+        Self::cache_obj_and_process_waitlist(shared_params, new_obj); // Indirect recursion.
     }
 
     /// Cache the new object & process the objects waiting for it (in multi-threading).
     fn cache_obj_and_process_waitlist(shared_params: Arc<SharedParams>, new_obj: CacheObject) {
-        (shared_params.callback)(new_obj.to_entry_metadata());
+        let entry = new_obj.to_entry_metadata();
         let new_obj = shared_params.caches.insert(
             new_obj.offset,
             new_obj.base_object_hash().unwrap(),
             new_obj,
         );
+        #[cfg(feature = "decode_profile")]
+        Self::profile_sample_shared_memory(&shared_params);
+        (shared_params.callback)(entry);
         Self::process_waitlist(shared_params, new_obj);
     }
 
@@ -691,6 +708,8 @@ impl Pack {
     /// Reconstruct the Delta Object based on the "base object"
     /// and return the new object.
     pub fn rebuild_delta(delta_obj: CacheObject, base_obj: Arc<CacheObject>) -> CacheObject {
+        #[cfg(feature = "decode_profile")]
+        crate::internal::pack::profile::delta_rebuild();
         const COPY_INSTRUCTION_FLAG: u8 = 1 << 7;
         const COPY_OFFSET_BYTES: u8 = 4;
         const COPY_SIZE_BYTES: u8 = 3;
@@ -777,6 +796,8 @@ impl Pack {
         // Memory recording will happen after this function returns. See `process_delta`
     }
     pub fn rebuild_zstdelta(delta_obj: CacheObject, base_obj: Arc<CacheObject>) -> CacheObject {
+        #[cfg(feature = "decode_profile")]
+        crate::internal::pack::profile::delta_rebuild();
         let result = zstdelta::apply(&base_obj.data_decompressed, &delta_obj.data_decompressed)
             .expect("Failed to apply zstdelta");
         let hash = utils::calculate_object_hash(base_obj.object_type(), &result);

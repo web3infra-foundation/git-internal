@@ -22,11 +22,15 @@ impl Waitlist {
 
     /// Insert an object into the waitlist by its pack offset or object hash.
     pub fn insert_offset(&self, offset: usize, obj: CacheObject) {
+        #[cfg(feature = "decode_profile")]
+        crate::internal::pack::profile::waitlist_insert();
         self.map_offset.entry(offset).or_default().push(obj);
     }
 
     /// Insert an object into the waitlist by its object hash.
     pub fn insert_ref(&self, hash: ObjectHash, obj: CacheObject) {
+        #[cfg(feature = "decode_profile")]
+        crate::internal::pack::profile::waitlist_insert();
         self.map_ref.entry(hash).or_default().push(obj);
     }
 
@@ -40,6 +44,8 @@ impl Waitlist {
         if let Some((_, vec)) = self.map_ref.remove(&hash) {
             res.extend(vec);
         }
+        #[cfg(feature = "decode_profile")]
+        crate::internal::pack::profile::waitlist_take(res.len());
         res
     }
 }

@@ -69,3 +69,4 @@ ureq = "3"
 [features]
 default = ["diff_mydrs"]
 diff_mydrs = []
+decode_profile = []

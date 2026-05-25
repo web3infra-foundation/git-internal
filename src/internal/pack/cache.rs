@@ -70,7 +70,16 @@ impl Caches {
     /// only get object from memory, not from tmp file
     fn try_get(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
         let mut map = self.lru_cache.lock().unwrap();
-        map.get(&hash).map(|x| x.data.clone())
+        let obj = map.get(&hash).map(|x| x.data.clone());
+        #[cfg(feature = "decode_profile")]
+        {
+            if obj.is_some() {
+                crate::internal::pack::profile::cache_hit();
+            } else {
+                crate::internal::pack::profile::cache_miss();
+            }
+        }
+        obj
     }
 
     /// !IMPORTANT: because of the process of pack, the file must be written / be writing before, so it won't be dead lock
@@ -81,7 +90,11 @@ impl Caches {
         let obj = {
             loop {
                 match Self::read_from_temp(&path) {
-                    Ok(x) => break x,
+                    Ok(x) => {
+                        #[cfg(feature = "decode_profile")]
+                        crate::internal::pack::profile::fallback_load();
+                        break x;
+                    }
                     Err(e) if e.kind() == io::ErrorKind::NotFound => {
                         sleep(std::time::Duration::from_millis(10));
                         continue;
