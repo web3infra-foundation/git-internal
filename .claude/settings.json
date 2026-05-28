@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git lfs:*)",
+      "Bash(/tmp/pack_summary.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "Bash(git filter-repo:*)",
+      "Bash(git remote:*)",
+      "Bash(cargo doc:*)",
+      "Read(//Users/eli/.cargo/registry/src/**)"
+    ],
+    "additionalDirectories": [
+      "/Volumes/Data/GitMono/git-internal/tests/data/packs"
+    ]
+  }
+}
