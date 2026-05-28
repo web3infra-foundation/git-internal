@@ -259,6 +259,76 @@ fn cheap_similar(a: &[u8], b: &[u8]) -> bool {
     calc_hash(&a[..k]) == calc_hash(&b[..k])
 }
 
+#[derive(Debug, Default)]
+struct TypedEntryBuckets {
+    commits: Vec<MetaAttached<Entry, EntryMeta>>,
+    trees: Vec<MetaAttached<Entry, EntryMeta>>,
+    blobs: Vec<MetaAttached<Entry, EntryMeta>>,
+    tags: Vec<MetaAttached<Entry, EntryMeta>>,
+}
+
+async fn classify_entries_by_type(
+    entry_rx: &mut mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
+) -> Result<TypedEntryBuckets, GitError> {
+    let mut buckets = TypedEntryBuckets::default();
+
+    while let Some(entry) = entry_rx.recv().await {
+        match entry.inner.obj_type {
+            ObjectType::Commit => buckets.commits.push(entry),
+            ObjectType::Tree => buckets.trees.push(entry),
+            ObjectType::Blob => buckets.blobs.push(entry),
+            ObjectType::Tag => buckets.tags.push(entry),
+            _ => {
+                return Err(GitError::PackEncodeError(format!(
+                    "object type `{}` is not supported by delta-window pack encoding",
+                    entry.inner.obj_type
+                )));
+            }
+        }
+    }
+
+    Ok(buckets)
+}
+
+fn sort_entry_buckets(buckets: &mut TypedEntryBuckets) {
+    buckets.commits.sort_by(magic_sort);
+    buckets.trees.sort_by(magic_sort);
+    buckets.blobs.sort_by(magic_sort);
+    buckets.tags.sort_by(magic_sort);
+}
+
+fn score_delta_candidate(base: &Entry, entry: &Entry) -> Option<f64> {
+    if base.obj_type != entry.obj_type {
+        return None;
+    }
+
+    if base.chain_len >= MAX_CHAIN_LEN {
+        return None;
+    }
+
+    if base.hash == entry.hash {
+        return None;
+    }
+
+    let min_len = base.data.len().min(entry.data.len());
+    let max_len = base.data.len().max(entry.data.len());
+    if max_len == 0 || (min_len as f64 / max_len as f64) < 0.5 {
+        return None;
+    }
+
+    if !cheap_similar(&base.data, &entry.data) {
+        return None;
+    }
+
+    let rate = if (base.data.len() + entry.data.len()) / 2 > 64 {
+        delta::heuristic_encode_rate_parallel(&base.data, &entry.data)
+    } else {
+        delta::encode_rate(&base.data, &entry.data)
+    };
+
+    (rate > MIN_DELTA_RATE).then_some(rate)
+}
+
 impl PackEncoder {
     pub fn new(object_number: usize, window_size: usize, sender: mpsc::Sender<Vec<u8>>) -> Self {
         PackEncoder {
@@ -358,44 +428,22 @@ impl PackEncoder {
             ));
         }
 
-        let mut commits: Vec<MetaAttached<Entry, EntryMeta>> = Vec::new();
-        let mut trees: Vec<MetaAttached<Entry, EntryMeta>> = Vec::new();
-        let mut blobs: Vec<MetaAttached<Entry, EntryMeta>> = Vec::new();
-        let mut tags: Vec<MetaAttached<Entry, EntryMeta>> = Vec::new();
-        while let Some(entry) = entry_rx.recv().await {
-            match entry.inner.obj_type {
-                ObjectType::Commit => {
-                    commits.push(entry);
-                }
-                ObjectType::Tree => {
-                    trees.push(entry);
-                }
-                ObjectType::Blob => {
-                    blobs.push(entry);
-                }
-                ObjectType::Tag => {
-                    tags.push(entry);
-                }
-                _ => {
-                    return Err(GitError::PackEncodeError(format!(
-                        "object type `{}` is not supported by delta-window pack encoding",
-                        entry.inner.obj_type
-                    )));
-                }
-            }
-        }
-
-        commits.sort_by(magic_sort);
-        trees.sort_by(magic_sort);
-        blobs.sort_by(magic_sort);
-        tags.sort_by(magic_sort);
+        let mut buckets = classify_entries_by_type(&mut entry_rx).await?;
+        sort_entry_buckets(&mut buckets);
         tracing::info!(
             "numbers :  commits: {:?} trees: {:?} blobs:{:?} tag :{:?}",
-            commits.len(),
-            trees.len(),
-            blobs.len(),
-            tags.len()
+            buckets.commits.len(),
+            buckets.trees.len(),
+            buckets.blobs.len(),
+            buckets.tags.len()
         );
+
+        let TypedEntryBuckets {
+            commits,
+            trees,
+            blobs,
+            tags,
+        } = buckets;
 
         // parallel encoding vec with different object_type
         let (commit_results, tree_results, blob_results, tag_results) = tokio::try_join!(
@@ -496,41 +544,7 @@ impl PackEncoder {
                 .par_iter()
                 .with_min_len(3)
                 .filter_map(|try_base| {
-                    if try_base.0.obj_type != entry.obj_type {
-                        return None;
-                    }
-
-                    if try_base.0.chain_len >= MAX_CHAIN_LEN {
-                        return None;
-                    }
-
-                    if try_base.0.hash == entry.hash {
-                        return None;
-                    }
-
-                    let sym_ratio = (try_base.0.data.len().min(entry.data.len()) as f64)
-                        / (try_base.0.data.len().max(entry.data.len()) as f64);
-                    if sym_ratio < 0.5 {
-                        return None;
-                    }
-
-                    if !cheap_similar(&try_base.0.data, &entry.data) {
-                        return None;
-                    }
-
-                    let rate = if (try_base.0.data.len() + entry.data.len()) / 2 > 64 {
-                        delta::heuristic_encode_rate_parallel(&try_base.0.data, &entry.data)
-                    } else {
-                        delta::encode_rate(&try_base.0.data, &entry.data)
-                        // let try_delta_obj = zstdelta::diff(&try_base.0.data, &entry.data).unwrap();
-                        // 1.0 - try_delta_obj.len() as f64 / entry.data.len() as f64
-                    };
-
-                    if rate > MIN_DELTA_RATE {
-                        Some((rate, try_base))
-                    } else {
-                        None
-                    }
+                    score_delta_candidate(&try_base.0, entry).map(|rate| (rate, try_base))
                 })
                 .collect();
 
@@ -919,6 +933,125 @@ mod tests {
             .await
             .expect_err("must reject AI pack type");
         assert!(matches!(err, GitError::PackEncodeError(_)));
+    }
+
+    fn entry_with_type(
+        content: &str,
+        obj_type: ObjectType,
+        file_path: Option<&str>,
+    ) -> MetaAttached<Entry, EntryMeta> {
+        let mut entry: Entry = Blob::from_content(content).into();
+        entry.obj_type = obj_type;
+        let mut meta = EntryMeta::new();
+        meta.file_path = file_path.map(str::to_string);
+        MetaAttached { inner: entry, meta }
+    }
+
+    fn blob_entry_from_bytes(data: Vec<u8>) -> Entry {
+        Blob::from_content_bytes(data).into()
+    }
+
+    #[tokio::test]
+    async fn test_classify_entries_by_type_groups_supported_objects() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (entry_tx, mut entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(4);
+
+        for obj_type in [
+            ObjectType::Commit,
+            ObjectType::Tree,
+            ObjectType::Blob,
+            ObjectType::Tag,
+        ] {
+            entry_tx
+                .send(entry_with_type("content", obj_type, None))
+                .await
+                .expect("send entry");
+        }
+        drop(entry_tx);
+
+        let buckets = classify_entries_by_type(&mut entry_rx)
+            .await
+            .expect("classify supported objects");
+
+        assert_eq!(buckets.commits.len(), 1);
+        assert_eq!(buckets.trees.len(), 1);
+        assert_eq!(buckets.blobs.len(), 1);
+        assert_eq!(buckets.tags.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_classify_entries_by_type_rejects_delta_objects() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (entry_tx, mut entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(1);
+
+        entry_tx
+            .send(entry_with_type("delta", ObjectType::OffsetDelta, None))
+            .await
+            .expect("send entry");
+        drop(entry_tx);
+
+        let err = classify_entries_by_type(&mut entry_rx)
+            .await
+            .expect_err("delta objects should be rejected before delta-window encoding");
+        assert!(matches!(err, GitError::PackEncodeError(_)));
+    }
+
+    #[test]
+    fn test_sort_entry_buckets_uses_magic_sort_for_each_type() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let mut buckets = TypedEntryBuckets {
+            blobs: vec![
+                entry_with_type("no path", ObjectType::Blob, None),
+                entry_with_type("file 10", ObjectType::Blob, Some("src/file10.txt")),
+                entry_with_type("file 2", ObjectType::Blob, Some("src/file2.txt")),
+            ],
+            ..TypedEntryBuckets::default()
+        };
+
+        sort_entry_buckets(&mut buckets);
+
+        let sorted_paths: Vec<_> = buckets
+            .blobs
+            .iter()
+            .map(|entry| entry.meta.file_path.as_deref())
+            .collect();
+        assert_eq!(
+            sorted_paths,
+            vec![Some("src/file2.txt"), Some("src/file10.txt"), None]
+        );
+    }
+
+    #[test]
+    fn test_score_delta_candidate_rejects_unsuitable_bases() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let entry = blob_entry_from_bytes(vec![b'a'; 128]);
+
+        assert!(score_delta_candidate(&entry, &entry).is_none());
+
+        let mut saturated_chain_base = blob_entry_from_bytes(vec![b'a'; 128]);
+        saturated_chain_base.chain_len = MAX_CHAIN_LEN;
+        assert!(score_delta_candidate(&saturated_chain_base, &entry).is_none());
+
+        let mut tree_base = blob_entry_from_bytes(vec![b'a'; 128]);
+        tree_base.obj_type = ObjectType::Tree;
+        assert!(score_delta_candidate(&tree_base, &entry).is_none());
+
+        let small_base = blob_entry_from_bytes(vec![b'a'; 32]);
+        let large_entry = blob_entry_from_bytes(vec![b'a'; 128]);
+        assert!(score_delta_candidate(&small_base, &large_entry).is_none());
+    }
+
+    #[test]
+    fn test_score_delta_candidate_accepts_similar_content() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let base = blob_entry_from_bytes(vec![b'a'; 128]);
+        let mut data = vec![b'a'; 128];
+        data.extend_from_slice(b" with a small tail");
+        let entry = blob_entry_from_bytes(data);
+
+        let score = score_delta_candidate(&base, &entry);
+
+        assert!(score.is_some_and(|rate| rate > MIN_DELTA_RATE));
     }
 
     async fn get_entries_for_test() -> Arc<Mutex<Vec<Entry>>> {
