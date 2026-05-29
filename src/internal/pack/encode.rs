@@ -199,7 +199,6 @@ fn encode_one_object(entry: &Entry, offset: Option<usize>) -> Result<Vec<u8>, Gi
         .expect("zlib compress should never failed");
     inflate.flush().expect("zlib flush should never failed");
     let compressed_data = inflate.finish().expect("zlib compress should never failed");
-    // self.write_all_and_update(&compressed_data).await;
     encoded_data.extend(compressed_data);
     Ok(encoded_data)
 }
@@ -348,8 +347,8 @@ impl PackEncoder {
         enable_zstdelta: bool,
     ) -> Result<(), GitError> {
         let head = encode_header(self.object_number);
-        self.send_data(head.clone()).await;
         self.inner_hash.update(&head);
+        self.send_data(head).await;
 
         // ensure only one decode can only invoke once
         if self.start_encoding {
@@ -451,10 +450,10 @@ impl PackEncoder {
 
         let mut idx_entries = Vec::with_capacity(total_entries);
         for res in &mut all_res {
-            for mut data in res.drain(..) {
-                data.1.offset = self.inner_offset as u64;
-                self.write_all_and_update(&data.0).await;
-                idx_entries.push(data.1);
+            for (encoded_bytes, mut idx_entry) in res.drain(..) {
+                idx_entry.offset = self.inner_offset as u64;
+                self.write_owned_and_update(encoded_bytes).await;
+                idx_entries.push(idx_entry);
             }
         }
 
@@ -463,7 +462,7 @@ impl PackEncoder {
         // Hash signature
         let hash_result = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
-        self.send_data(hash_result.to_vec()).await;
+        self.send_data(hash_result).await;
 
         self.drop_sender();
         Ok(())
@@ -604,8 +603,8 @@ impl PackEncoder {
         }
 
         let head = encode_header(self.object_number);
-        self.send_data(head.clone()).await;
         self.inner_hash.update(&head);
+        self.send_data(head).await;
 
         // ensure only one decode can only invoke once
         if self.start_encoding {
@@ -614,7 +613,7 @@ impl PackEncoder {
             ));
         }
 
-        let mut idx_entries = Vec::new();
+        let mut idx_entries = Vec::with_capacity(self.object_number);
         let batch_size = usize::max(1000, entry_rx.max_capacity() / 10); // A temporary value, not optimized
         tracing::info!("encode with batch size: {}", batch_size);
         loop {
@@ -655,10 +654,10 @@ impl PackEncoder {
 
             time_it!("parallel encode: write batch", {
                 for obj_data in batch_result {
-                    let mut obj_data = obj_data?;
-                    obj_data.1.offset = self.inner_offset as u64;
-                    self.write_all_and_update(&obj_data.0).await;
-                    idx_entries.push(obj_data.1);
+                    let (encoded_bytes, mut idx_entry) = obj_data?;
+                    idx_entry.offset = self.inner_offset as u64;
+                    self.write_owned_and_update(encoded_bytes).await;
+                    idx_entries.push(idx_entry);
                 }
             });
         }
@@ -674,18 +673,18 @@ impl PackEncoder {
         // hash signature
         let hash_result = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
-        self.send_data(hash_result.to_vec()).await;
+        self.send_data(hash_result).await;
         self.drop_sender();
 
         self.idx_entries = Some(idx_entries);
         Ok(())
     }
 
-    /// Write data to writer and update hash & offset
-    async fn write_all_and_update(&mut self, data: &[u8]) {
-        self.inner_hash.update(data);
+    /// Write owned pack object bytes and update hash and offset without copying the buffer again.
+    async fn write_owned_and_update(&mut self, data: Vec<u8>) {
+        self.inner_hash.update(&data);
         self.inner_offset += data.len();
-        self.send_data(data.to_vec()).await;
+        self.send_data(data).await;
     }
 
     async fn generate_idx_file(&mut self) -> Result<(), GitError> {
@@ -890,6 +889,40 @@ mod tests {
 
         for content in contents {
             let entry: Entry = Blob::from_content(&content).into();
+            entry_tx
+                .send(MetaAttached {
+                    inner: entry,
+                    meta: EntryMeta::new(),
+                })
+                .await
+                .unwrap();
+        }
+        drop(entry_tx);
+
+        let mut result = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            result.extend(chunk);
+        }
+
+        check_format(&result);
+    }
+
+    #[tokio::test]
+    async fn test_parallel_encode_after_owned_write_roundtrips() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let contents = vec![
+            "parallel alpha",
+            "parallel beta",
+            "parallel gamma",
+            "parallel delta",
+        ];
+        let (tx, mut rx) = mpsc::channel(16);
+        let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(16);
+        let encoder = PackEncoder::new(contents.len(), 0, tx);
+        encoder.encode_async(entry_rx).await.unwrap();
+
+        for content in contents {
+            let entry: Entry = Blob::from_content(content).into();
             entry_tx
                 .send(MetaAttached {
                     inner: entry,
