@@ -862,6 +862,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_try_as_offset_delta_accepts_empty_bucket() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let entries = Vec::new();
+
+        let results = PackEncoder::try_as_offset_delta(entries, 0, false)
+            .expect("empty bucket should encode successfully");
+
+        assert!(results.is_empty());
+    }
+
     #[tokio::test]
     async fn test_delta_window_encode_after_copy_optimization_roundtrips() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
