@@ -845,7 +845,6 @@ impl Pack {
         })?;
         let mut reader = BufReader::new(file);
 
-        // Validate header and get total object count.
         let (object_num, _header_bytes) = Pack::check_header(&mut reader)?;
 
         let mut stats = PackStats {
@@ -853,10 +852,7 @@ impl Pack {
             ..Default::default()
         };
 
-        // We create a minimal temporary Pack just to drive decode_pack_object.
-        // Using a dedicated decode loop here avoids the full thread-pool + callback
-        // machinery of Pack::decode while still reusing the same per-object parser.
-        let mut offset: usize = 12; // header is 12 bytes
+        let mut offset: usize = 12; 
         for _ in 0..object_num {
             match Pack::decode_pack_object(&mut reader, &mut offset)? {
                 Some(obj) => {
@@ -869,7 +865,7 @@ impl Pack {
                                 ObjectType::Tree => stats.trees += 1,
                                 ObjectType::Blob => stats.blobs += 1,
                                 ObjectType::Tag => stats.tags += 1,
-                                _ => {} // other base types – not counted separately
+                                _ => {} 
                             }
                         }
                         CacheObjectInfo::OffsetDelta(_, _)
@@ -1170,14 +1166,13 @@ mod tests {
             stats.total, stats.commits, stats.trees, stats.blobs, stats.tags, stats.deltas
         );
 
-        // Sanity: all per-type counts add up to total.
         let sum = stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas;
         assert_eq!(
             sum, stats.total,
             "per-type counts should sum to total ({} vs {})",
             sum, stats.total
         );
-        // The pack is a real git repo slice – expect at least one commit and one blob.
+
         assert!(stats.commits > 0, "expected at least one commit");
         assert!(stats.blobs > 0, "expected at least one blob");
     }
@@ -1200,12 +1195,12 @@ mod tests {
 
         let sum = stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas;
         assert_eq!(sum, stats.total, "per-type counts must equal total");
-        // medium-sha1.pack is known to contain offset-delta objects.
+
         assert!(
             stats.deltas > 0,
             "expected delta objects in medium-sha1 pack"
         );
-        // And it has enough total objects that it's a meaningful check.
+
         assert!(stats.total > 1000, "expected a sizeable medium pack");
     }
 
@@ -1230,7 +1225,6 @@ mod tests {
         use std::io::Write;
         use tempfile::NamedTempFile;
 
-        // Write 12 bytes with wrong magic ("FAKE" instead of "PACK").
         let mut tmp = NamedTempFile::new().expect("create temp file");
         tmp.write_all(b"FAKE\x00\x00\x00\x02\x00\x00\x00\x05")
             .expect("write temp bytes");
