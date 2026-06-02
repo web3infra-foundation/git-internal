@@ -49,13 +49,8 @@ fn release_ref(path: &Path) -> bool {
 static DOWNLOAD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Download a pack/idx file if not already present, returning the local path.
-fn ensure_downloaded(filename: &str) -> PathBuf {
+fn ensure_downloaded_locked(filename: &str) -> PathBuf {
     let path = download_dir().join(filename);
-    if path.exists() {
-        return path;
-    }
-    let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // Double-check after acquiring lock.
     if path.exists() {
         return path;
     }
@@ -83,6 +78,7 @@ pub struct PackFileGuard {
 
 impl Drop for PackFileGuard {
     fn drop(&mut self) {
+        let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if release_ref(&self.path) {
             let _ = std::fs::remove_file(&self.path);
         }
@@ -92,14 +88,15 @@ impl Drop for PackFileGuard {
 /// Download a pack file (and its companion .idx if the file is a .pack),
 /// returning `(path, guard)`. The file is deleted when all guards for it are dropped.
 pub fn download_pack_file(filename: &str) -> (PathBuf, PackFileGuard) {
-    let path = ensure_downloaded(filename);
+    let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = ensure_downloaded_locked(filename);
     // Also download the companion file (.pack ↔ .idx).
     if filename.ends_with(".pack") {
         let idx = filename.replace(".pack", ".idx");
-        let _ = ensure_downloaded(&idx);
+        let _ = ensure_downloaded_locked(&idx);
     } else if filename.ends_with(".idx") {
         let pack = filename.replace(".idx", ".pack");
-        let _ = ensure_downloaded(&pack);
+        let _ = ensure_downloaded_locked(&pack);
     }
     acquire_ref(&path);
     let guard = PackFileGuard { path: path.clone() };
