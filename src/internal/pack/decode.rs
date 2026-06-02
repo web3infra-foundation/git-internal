@@ -2,6 +2,7 @@
 //! and populates caches/metadata for downstream consumers.
 
 use std::{
+    fmt,
     io::{self, BufRead, Cursor, ErrorKind, Read},
     path::PathBuf,
     sync::{
@@ -40,6 +41,49 @@ use crate::{
     utils::CountingReader,
     zstdelta,
 };
+
+/// Statistics collected during pack file decoding, providing a breakdown
+/// of object types found in the pack.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackStats {
+    /// Total number of objects in the pack (including deltas).
+    pub total: usize,
+    /// Number of commit objects.
+    pub commits: usize,
+    /// Number of tree objects.
+    pub trees: usize,
+    /// Number of blob objects.
+    pub blobs: usize,
+    /// Number of tag objects.
+    pub tags: usize,
+    /// Total number of delta objects (offset + hash + zstd).
+    pub deltas: usize,
+    /// Number of offset delta objects.
+    pub offset_deltas: usize,
+    /// Number of hash (reference) delta objects.
+    pub hash_deltas: usize,
+    /// Number of zstd offset delta objects.
+    pub offset_zstdeltas: usize,
+    /// The pack file trailer hash (signature).
+    pub pack_hash: String,
+}
+
+impl fmt::Display for PackStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Pack Statistics:")?;
+        writeln!(f, "  Total objects:    {}", self.total)?;
+        writeln!(f, "  Commits:          {}", self.commits)?;
+        writeln!(f, "  Trees:            {}", self.trees)?;
+        writeln!(f, "  Blobs:            {}", self.blobs)?;
+        writeln!(f, "  Tags:             {}", self.tags)?;
+        writeln!(f, "  Deltas (total):   {}", self.deltas)?;
+        writeln!(f, "    Offset deltas:  {}", self.offset_deltas)?;
+        writeln!(f, "    Hash deltas:    {}", self.hash_deltas)?;
+        writeln!(f, "    Zstd deltas:    {}", self.offset_zstdeltas)?;
+        writeln!(f, "  Pack hash:        {}", self.pack_hash)?;
+        Ok(())
+    }
+}
 
 /// A reader that counts bytes read and computes CRC32 checksum.
 /// which is used to verify the integrity of decompressed data.
@@ -274,6 +318,126 @@ impl Pack {
                 )))
             }
         }
+    }
+
+    /// Given a pack file reader, scan all objects and collect type distribution
+    /// statistics without performing full delta reconstruction or caching.
+    ///
+    /// This function reuses the existing `check_header`, `read_type_and_varint_size`,
+    /// `read_offset_encoding`, and `ZlibDecoder` helpers, but skips the heavyweight
+    /// decode pipeline (thread pool, waitlist, LRU cache, delta rebuild). It is
+    /// intentionally single-threaded and allocation-light.
+    ///
+    /// # Parameters
+    /// * `pack` - A buffered reader over the pack file.
+    ///
+    /// # Returns
+    /// * `Ok(PackStats)` - Object count and type distribution.
+    /// * `Err(GitError)` - On invalid header, truncated data, or decompression failure.
+    pub fn pack_stats(mut pack: impl BufRead + Send) -> Result<PackStats, GitError> {
+        let (object_num, _header_data) = Pack::check_header(&mut pack)?;
+        let mut stats = PackStats {
+            total: object_num as usize,
+            ..Default::default()
+        };
+        let mut offset: usize = 12; // past the 12-byte header
+
+        for _ in 0..object_num {
+            let (type_bits, _size) = utils::read_type_and_varint_size(&mut pack, &mut offset)
+                .map_err(|e| {
+                    GitError::InvalidPackFile(format!("Read error at offset {offset}: {e}"))
+                })?;
+
+            match type_bits {
+                1 => stats.commits += 1,
+                2 => stats.trees += 1,
+                3 => stats.blobs += 1,
+                4 => stats.tags += 1,
+                5 => {
+                    stats.offset_zstdeltas += 1;
+                    stats.deltas += 1;
+                }
+                6 => {
+                    stats.offset_deltas += 1;
+                    stats.deltas += 1;
+                }
+                7 => {
+                    stats.hash_deltas += 1;
+                    stats.deltas += 1;
+                }
+                _ => {
+                    return Err(GitError::InvalidObjectType(format!(
+                        "Unknown pack type bits: {type_bits} at offset {offset}"
+                    )));
+                }
+            }
+
+            // Advance past the object body so the next iteration reads the next object.
+            // For non-delta objects we inflate; for deltas we also skip the extra prefix
+            // (offset encoding or base hash) before inflating.
+            match type_bits {
+                1..=4 => {
+                    // base object: directly zlib-compressed
+                    let mut counting_reader = CountingReader::new(&mut pack);
+                    let mut deflate = ZlibDecoder::new(&mut counting_reader);
+                    let mut buf = Vec::new();
+                    deflate.read_to_end(&mut buf).map_err(|e| {
+                        GitError::InvalidPackFile(format!(
+                            "Decompression error at offset {offset}: {e}"
+                        ))
+                    })?;
+                    offset += counting_reader.bytes_read as usize;
+                }
+                5 | 6 => {
+                    // offset delta / zstd offset delta: offset encoding + zlib data
+                    let (_delta_offset, consumed) = utils::read_offset_encoding(&mut pack)
+                        .map_err(|e| {
+                            GitError::InvalidPackFile(format!(
+                                "Read offset encoding error at offset {offset}: {e}"
+                            ))
+                        })?;
+                    offset += consumed;
+                    let mut counting_reader = CountingReader::new(&mut pack);
+                    let mut deflate = ZlibDecoder::new(&mut counting_reader);
+                    let mut buf = Vec::new();
+                    deflate.read_to_end(&mut buf).map_err(|e| {
+                        GitError::InvalidPackFile(format!(
+                            "Decompression error at offset {offset}: {e}"
+                        ))
+                    })?;
+                    offset += counting_reader.bytes_read as usize;
+                }
+                7 => {
+                    // hash delta: base object hash + zlib data
+                    let hash_size = get_hash_kind().size();
+                    let mut hash_buf = vec![0u8; hash_size];
+                    pack.read_exact(&mut hash_buf).map_err(|e| {
+                        GitError::InvalidPackFile(format!(
+                            "Read hash error at offset {offset}: {e}"
+                        ))
+                    })?;
+                    offset += hash_size;
+                    let mut counting_reader = CountingReader::new(&mut pack);
+                    let mut deflate = ZlibDecoder::new(&mut counting_reader);
+                    let mut buf = Vec::new();
+                    deflate.read_to_end(&mut buf).map_err(|e| {
+                        GitError::InvalidPackFile(format!(
+                            "Decompression error at offset {offset}: {e}"
+                        ))
+                    })?;
+                    offset += counting_reader.bytes_read as usize;
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Read the 20- or 32-byte trailer hash
+        let trailer = ObjectHash::from_stream(&mut pack).map_err(|e| {
+            GitError::InvalidPackFile(format!("Failed to read trailer hash: {e:?}"))
+        })?;
+        stats.pack_hash = trailer.to_string();
+
+        Ok(stats)
     }
 
     /// Decodes a pack object from a given Read and BufRead source and returns the object as a [`CacheObject`].
@@ -795,7 +959,7 @@ impl Pack {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        env, fs,
         io::{BufReader, Cursor, prelude::*},
         path::PathBuf,
         sync::{
@@ -809,13 +973,17 @@ mod tests {
     use tokio_util::io::ReaderStream;
 
     use crate::{
+        errors::GitError,
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
-        internal::pack::{Pack, test_pack_download::download_pack_file, tests::init_logger},
+        internal::pack::{Pack, tests::init_logger},
     };
+
+    use super::PackStats;
 
     #[tokio::test]
     async fn test_pack_check_header() {
-        let (source, _guard) = download_pack_file("medium-sha1.pack");
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/medium-sha1.pack");
 
         let f = fs::File::open(source).unwrap();
         let mut buf_reader = BufReader::new(f);
@@ -862,9 +1030,10 @@ mod tests {
     }
 
     /// Helper function to run decode tests without delta objects
-    fn run_decode_no_delta(filename: &str, kind: HashKind) {
+    fn run_decode_no_delta(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -876,16 +1045,17 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_without_delta() {
-        run_decode_no_delta("small-sha1.pack", HashKind::Sha1);
-        run_decode_no_delta("small-sha256.pack", HashKind::Sha256);
+        run_decode_no_delta("tests/data/packs/small-sha1.pack", HashKind::Sha1);
+        run_decode_no_delta("tests/data/packs/small-sha256.pack", HashKind::Sha256);
     }
 
     /// Helper function to run decode tests with delta objects
-    fn run_decode_with_ref_delta(filename: &str, kind: HashKind) {
+    fn run_decode_with_ref_delta(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
 
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -897,14 +1067,15 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_with_ref_delta() {
-        run_decode_with_ref_delta("ref-delta-sha1.pack", HashKind::Sha1);
-        run_decode_with_ref_delta("ref-delta-sha256.pack", HashKind::Sha256);
+        run_decode_with_ref_delta("tests/data/packs/ref-delta-sha1.pack", HashKind::Sha1);
+        run_decode_with_ref_delta("tests/data/packs/ref-delta-sha256.pack", HashKind::Sha256);
     }
 
     /// Helper function to run decode tests without memory limit
-    fn run_decode_no_mem_limit(filename: &str, kind: HashKind) {
+    fn run_decode_no_mem_limit(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -916,15 +1087,16 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_no_mem_limit() {
-        run_decode_no_mem_limit("small-sha1.pack", HashKind::Sha1);
-        run_decode_no_mem_limit("small-sha256.pack", HashKind::Sha256);
+        run_decode_no_mem_limit("tests/data/packs/small-sha1.pack", HashKind::Sha1);
+        run_decode_no_mem_limit("tests/data/packs/small-sha256.pack", HashKind::Sha256);
     }
 
     /// Helper function to run decode tests with delta objects
-    async fn run_decode_large_with_delta(filename: &str, kind: HashKind) {
+    async fn run_decode_large_with_delta(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -950,15 +1122,16 @@ mod tests {
     }
     #[tokio::test]
     async fn test_pack_decode_with_large_file_with_delta_without_ref() {
-        run_decode_large_with_delta("medium-sha1.pack", HashKind::Sha1).await;
-        run_decode_large_with_delta("medium-sha256.pack", HashKind::Sha256).await;
+        run_decode_large_with_delta("tests/data/packs/medium-sha1.pack", HashKind::Sha1).await;
+        run_decode_large_with_delta("tests/data/packs/medium-sha256.pack", HashKind::Sha256).await;
     } // it will be stuck on dropping `Pack` on Windows if `mem_size` is None, so we need `mimalloc`
 
     /// Helper function to run decode tests with large file stream
-    async fn run_decode_large_stream(filename: &str, kind: HashKind) {
+    async fn run_decode_large_stream(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = tokio::fs::File::open(source).await.unwrap();
@@ -985,14 +1158,15 @@ mod tests {
     }
     #[tokio::test]
     async fn test_decode_large_file_stream() {
-        run_decode_large_stream("medium-sha1.pack", HashKind::Sha1).await;
-        run_decode_large_stream("medium-sha256.pack", HashKind::Sha256).await;
+        run_decode_large_stream("tests/data/packs/medium-sha1.pack", HashKind::Sha1).await;
+        run_decode_large_stream("tests/data/packs/medium-sha256.pack", HashKind::Sha256).await;
     }
 
     /// Helper function to run decode tests with large file async
-    async fn run_decode_large_file_async(filename: &str, kind: HashKind) {
+    async fn run_decode_large_file_async(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = fs::File::open(source).unwrap();
@@ -1010,14 +1184,15 @@ mod tests {
     }
     #[tokio::test]
     async fn test_decode_large_file_async() {
-        run_decode_large_file_async("medium-sha1.pack", HashKind::Sha1).await;
-        run_decode_large_file_async("medium-sha256.pack", HashKind::Sha256).await;
+        run_decode_large_file_async("tests/data/packs/medium-sha1.pack", HashKind::Sha1).await;
+        run_decode_large_file_async("tests/data/packs/medium-sha256.pack", HashKind::Sha256).await;
     }
 
     /// Helper function to run decode tests with delta objects without reference
-    fn run_decode_with_delta_no_ref(filename: &str, kind: HashKind) {
+    fn run_decode_with_delta_no_ref(rel_path: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -1029,8 +1204,8 @@ mod tests {
     }
     #[test]
     fn test_pack_decode_with_delta_without_ref() {
-        run_decode_with_delta_no_ref("medium-sha1.pack", HashKind::Sha1);
-        run_decode_with_delta_no_ref("medium-sha256.pack", HashKind::Sha256);
+        run_decode_with_delta_no_ref("tests/data/packs/medium-sha1.pack", HashKind::Sha1);
+        run_decode_with_delta_no_ref("tests/data/packs/medium-sha256.pack", HashKind::Sha256);
     }
 
     #[test] // Take too long time
@@ -1041,14 +1216,391 @@ mod tests {
             .unwrap();
         rt.block_on(async move {
             // For each hash kind, run two decode tasks concurrently to simulate multi-task pressure.
-            for (kind, filename) in [
-                (HashKind::Sha1, "medium-sha1.pack"),
-                (HashKind::Sha256, "medium-sha256.pack"),
+            for (kind, path) in [
+                (HashKind::Sha1, "tests/data/packs/medium-sha1.pack"),
+                (HashKind::Sha256, "tests/data/packs/medium-sha256.pack"),
             ] {
-                let f1 = run_decode_large_with_delta(filename, kind);
-                let f2 = run_decode_large_with_delta(filename, kind);
+                let f1 = run_decode_large_with_delta(path, kind);
+                let f2 = run_decode_large_with_delta(path, kind);
                 let _ = futures::future::join(f1, f2).await;
             }
         });
+    }
+
+    // ── PackStats tests ──
+
+    /// Check whether a file at `rel_path` is a real pack file (magic == b"PACK").
+    fn is_valid_pack(rel_path: &str) -> bool {
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
+        if let Ok(mut f) = fs::File::open(&source) {
+            let mut magic = [0u8; 4];
+            f.read_exact(&mut magic).is_ok() && &magic == b"PACK"
+        } else {
+            false
+        }
+    }
+
+    /// Helper: open a test pack and build stats.
+    fn stats_for_pack(rel_path: &str, kind: HashKind) -> PackStats {
+        let _guard = set_hash_kind_for_test(kind);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
+        let f = fs::File::open(&source).unwrap();
+        let reader = BufReader::new(f);
+        Pack::pack_stats(reader).unwrap()
+    }
+
+    /// Helper: run decode and return the pack's object count for cross-validation.
+    fn decode_count(rel_path: &str, kind: HashKind) -> usize {
+        let _guard = set_hash_kind_for_test(kind);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push(rel_path);
+        let f = fs::File::open(&source).unwrap();
+        let mut reader = BufReader::new(f);
+        let mut p = Pack::new(Some(1), Some(20 * 1024 * 1024), None, true);
+        p.decode(&mut reader, |_| {}, None::<fn(ObjectHash)>)
+            .unwrap();
+        p.number
+    }
+
+    // ── Normal-path tests ──
+
+    /// Test with a locally generated minimal pack file (SHA-1, no deltas).
+    #[test]
+    fn test_pack_stats_mini() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/mini-test.pack");
+        let f = fs::File::open(&source).expect("mini-test.pack should exist");
+        let reader = BufReader::new(f);
+        let stats = Pack::pack_stats(reader).unwrap();
+
+        assert_eq!(stats.deltas, 0, "mini pack has no deltas");
+        assert!(stats.total >= 4, "mini pack should have at least 4 objects");
+        assert_eq!(
+            stats.total,
+            stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas,
+            "total must equal sum of all categories"
+        );
+        assert!(
+            !stats.pack_hash.is_empty(),
+            "trailer hash must be populated"
+        );
+        assert_eq!(
+            stats.deltas,
+            stats.offset_deltas + stats.hash_deltas + stats.offset_zstdeltas
+        );
+    }
+
+    /// Cross-validate mini pack: stats.total == decode pack.number
+    #[test]
+    fn test_pack_stats_mini_matches_decode() {
+        let path = "tests/data/packs/mini-test.pack";
+        let kind = HashKind::Sha1;
+        let stats_total = {
+            let _guard = set_hash_kind_for_test(kind);
+            let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            source.push(path);
+            let f = fs::File::open(&source).unwrap();
+            let reader = BufReader::new(f);
+            Pack::pack_stats(reader).unwrap().total
+        };
+        let decode_total = decode_count(path, kind);
+        assert_eq!(
+            stats_total, decode_total,
+            "pack_stats total {stats_total} != decode total {decode_total}"
+        );
+    }
+
+    #[test]
+    fn test_pack_stats_small_sha1() {
+        if !is_valid_pack("tests/data/packs/small-sha1.pack") {
+            eprintln!("SKIP: small-sha1.pack not available (LFS not pulled)");
+            return;
+        }
+        let stats = stats_for_pack("tests/data/packs/small-sha1.pack", HashKind::Sha1);
+        assert!(stats.total > 0, "total should be > 0");
+        assert_eq!(stats.deltas, 0, "small pack has no deltas");
+        assert_eq!(
+            stats.total,
+            stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas,
+            "total must equal sum of all categories"
+        );
+        assert!(
+            !stats.pack_hash.is_empty(),
+            "trailer hash must be populated"
+        );
+        assert_eq!(
+            stats.deltas,
+            stats.offset_deltas + stats.hash_deltas + stats.offset_zstdeltas,
+            "delta sub-counts must sum to deltas"
+        );
+    }
+
+    #[test]
+    fn test_pack_stats_small_sha256() {
+        if !is_valid_pack("tests/data/packs/small-sha256.pack") {
+            eprintln!("SKIP: small-sha256.pack not available (LFS not pulled)");
+            return;
+        }
+        let stats = stats_for_pack("tests/data/packs/small-sha256.pack", HashKind::Sha256);
+        assert!(stats.total > 0);
+        assert_eq!(stats.deltas, 0);
+        assert_eq!(
+            stats.total,
+            stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas
+        );
+        assert!(!stats.pack_hash.is_empty());
+    }
+
+    #[test]
+    fn test_pack_stats_ref_delta_sha1() {
+        if !is_valid_pack("tests/data/packs/ref-delta-sha1.pack") {
+            eprintln!("SKIP: ref-delta-sha1.pack not available (LFS not pulled)");
+            return;
+        }
+        let stats = stats_for_pack("tests/data/packs/ref-delta-sha1.pack", HashKind::Sha1);
+        assert!(stats.total > 0);
+        assert!(stats.deltas > 0, "ref-delta pack should contain deltas");
+        assert!(
+            stats.hash_deltas > 0,
+            "ref-delta pack should contain hash deltas"
+        );
+        assert_eq!(
+            stats.total,
+            stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas
+        );
+        assert_eq!(
+            stats.deltas,
+            stats.offset_deltas + stats.hash_deltas + stats.offset_zstdeltas
+        );
+        assert!(!stats.pack_hash.is_empty());
+    }
+
+    #[test]
+    fn test_pack_stats_ref_delta_sha256() {
+        if !is_valid_pack("tests/data/packs/ref-delta-sha256.pack") {
+            eprintln!("SKIP: ref-delta-sha256.pack not available (LFS not pulled)");
+            return;
+        }
+        let stats = stats_for_pack("tests/data/packs/ref-delta-sha256.pack", HashKind::Sha256);
+        assert!(stats.total > 0);
+        assert!(stats.deltas > 0);
+        assert!(stats.hash_deltas > 0);
+        assert_eq!(
+            stats.total,
+            stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas
+        );
+        assert_eq!(
+            stats.deltas,
+            stats.offset_deltas + stats.hash_deltas + stats.offset_zstdeltas
+        );
+        assert!(!stats.pack_hash.is_empty());
+    }
+
+    #[test]
+    fn test_pack_stats_medium_sha1() {
+        if !is_valid_pack("tests/data/packs/medium-sha1.pack") {
+            eprintln!("SKIP: medium-sha1.pack not available (LFS not pulled)");
+            return;
+        }
+        let stats = stats_for_pack("tests/data/packs/medium-sha1.pack", HashKind::Sha1);
+        assert_eq!(stats.total, 35031);
+        assert_eq!(
+            stats.total,
+            stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas
+        );
+        assert!(!stats.pack_hash.is_empty());
+    }
+
+    /// Cross-validate: stats.total from `pack_stats` must equal `pack.number`
+    /// from a full `decode`.
+    #[test]
+    fn test_pack_stats_total_matches_decode() {
+        let has_lfs = is_valid_pack("tests/data/packs/small-sha1.pack")
+            && is_valid_pack("tests/data/packs/small-sha256.pack")
+            && is_valid_pack("tests/data/packs/ref-delta-sha1.pack")
+            && is_valid_pack("tests/data/packs/ref-delta-sha256.pack");
+        if !has_lfs {
+            eprintln!("SKIP: LFS pack files not available");
+            return;
+        }
+        for (path, kind) in [
+            ("tests/data/packs/small-sha1.pack", HashKind::Sha1),
+            ("tests/data/packs/small-sha256.pack", HashKind::Sha256),
+            ("tests/data/packs/ref-delta-sha1.pack", HashKind::Sha1),
+            ("tests/data/packs/ref-delta-sha256.pack", HashKind::Sha256),
+        ] {
+            let stats_total = {
+                let _guard = set_hash_kind_for_test(kind);
+                let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                source.push(path);
+                let f = fs::File::open(&source).unwrap();
+                let reader = BufReader::new(f);
+                Pack::pack_stats(reader).unwrap().total
+            };
+            let decode_total = decode_count(path, kind);
+            assert_eq!(
+                stats_total, decode_total,
+                "pack_stats total {stats_total} != decode total {decode_total} for {path}"
+            );
+        }
+    }
+
+    /// Verify Display impl renders expected sections.
+    #[test]
+    fn test_pack_stats_display() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/mini-test.pack");
+        let f = fs::File::open(&source).expect("mini-test.pack should exist");
+        let reader = BufReader::new(f);
+        let stats = Pack::pack_stats(reader).unwrap();
+        let display = format!("{stats}");
+        assert!(display.contains("Pack Statistics"), "missing title");
+        assert!(display.contains("Total objects"), "missing total");
+        assert!(display.contains("Commits"), "missing commits");
+        assert!(display.contains("Trees"), "missing trees");
+        assert!(display.contains("Blobs"), "missing blobs");
+        assert!(display.contains("Tags"), "missing tags");
+        assert!(display.contains("Deltas (total)"), "missing deltas");
+        assert!(display.contains("Pack hash"), "missing pack hash");
+    }
+
+    // ── Error-path tests ──
+
+    /// File not found: passing an empty reader triggers an error when the
+    /// header cannot be read.
+    #[test]
+    fn test_pack_stats_invalid_magic() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        // Construct a reader whose first 4 bytes are "NOTP" instead of "PACK"
+        let data = b"NOTP\x00\x00\x00\x02\x00\x00\x00\x00";
+        let reader = BufReader::new(Cursor::new(data.as_slice()));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "non-PACK magic should fail");
+        match result {
+            Err(GitError::InvalidPackHeader(msg)) => {
+                assert!(msg.contains("78,79,84,80"), "should show byte values");
+            }
+            other => panic!("expected InvalidPackHeader, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_pack_stats_invalid_version() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        // "PACK" + version 3 (only version 2 is supported) + 0 objects
+        let data = b"PACK\x00\x00\x00\x03\x00\x00\x00\x00";
+        let reader = BufReader::new(Cursor::new(data.as_slice()));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "version 3 should be rejected");
+        match result {
+            Err(GitError::InvalidPackFile(msg)) => {
+                assert!(msg.contains("3"), "error message should mention version 3");
+            }
+            other => panic!("expected InvalidPackFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_pack_stats_truncated_after_header() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        // Header says 5 objects, but there is no object data following it
+        let mut data = Vec::new();
+        data.extend_from_slice(b"PACK"); // magic
+        data.extend_from_slice(&2u32.to_be_bytes()); // version 2
+        data.extend_from_slice(&5u32.to_be_bytes()); // 5 objects
+        let reader = BufReader::new(Cursor::new(data));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "truncated pack should fail");
+        match result {
+            Err(GitError::InvalidPackFile(msg)) => {
+                assert!(
+                    msg.contains("Read error"),
+                    "expected 'Read error' in message, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidPackFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_pack_stats_truncated_in_object_body() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        // Valid header (1 object) + a truncated first byte that claims
+        // continuation (msb set) but no further bytes follow
+        let mut data = Vec::new();
+        data.extend_from_slice(b"PACK"); // magic
+        data.extend_from_slice(&2u32.to_be_bytes()); // version 2
+        data.extend_from_slice(&1u32.to_be_bytes()); // 1 object
+        data.push(0x80u8); // type=0, size=0, msb=1 → expects more bytes
+        let reader = BufReader::new(Cursor::new(data));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "truncated object body should fail");
+    }
+
+    #[test]
+    fn test_pack_stats_invalid_type_bits() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        // Construct data with type bits = 0 (invalid)
+        // First byte: 0b_0000_0001 → type_bits = 0, size = 1, msb = 0
+        let mut data = Vec::new();
+        data.extend_from_slice(b"PACK"); // magic
+        data.extend_from_slice(&2u32.to_be_bytes()); // version 2
+        data.extend_from_slice(&1u32.to_be_bytes()); // 1 object
+        // type_bits=0, size=1, no continuation: single byte object
+        // But type_bits=0 is not a valid pack object type
+        data.push(0b_0000_0001u8); // type 0, size 1
+        // Follow with a valid zlib stream for 1 byte of data
+        // Minimal zlib: 0x78 0x01 is the header, then compressed data
+        // For a single zero byte: 78 01 01 00 00 ff ff
+        // But actually we don't get to the zlib — type_bits=0 will fail first
+        // since read_type_and_varint_size succeeds for type=0 (it just extracts bits),
+        // but the match in pack_stats will fail
+        let reader = BufReader::new(Cursor::new(data));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "invalid type bits should fail");
+        match result {
+            Err(GitError::InvalidObjectType(_)) => { /* expected */ }
+            other => panic!("expected InvalidObjectType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_pack_stats_empty_reader() {
+        // An empty reader cannot even satisfy the 12-byte header read
+        let data: &[u8] = &[];
+        let reader = BufReader::new(Cursor::new(data));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "empty reader should fail");
+    }
+
+    #[test]
+    fn test_pack_stats_short_header() {
+        // Only 3 bytes — not enough for the "PACK" magic
+        let data = b"PAC";
+        let reader = BufReader::new(Cursor::new(data.as_slice()));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "short header should fail");
+    }
+
+    /// Verify `Default` produces a zeroed PackStats.
+    #[test]
+    fn test_pack_stats_default() {
+        let stats = PackStats::default();
+        assert_eq!(stats.total, 0);
+        assert_eq!(stats.commits, 0);
+        assert_eq!(stats.trees, 0);
+        assert_eq!(stats.blobs, 0);
+        assert_eq!(stats.tags, 0);
+        assert_eq!(stats.deltas, 0);
+        assert_eq!(stats.offset_deltas, 0);
+        assert_eq!(stats.hash_deltas, 0);
+        assert_eq!(stats.offset_zstdeltas, 0);
+        assert!(stats.pack_hash.is_empty());
+        // Equality should hold
+        assert_eq!(stats, PackStats::default());
     }
 }
