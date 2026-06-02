@@ -366,12 +366,15 @@ impl Pack {
     ///   failure, or trailer hash mismatch.
     pub fn pack_stats(pack: impl BufRead) -> Result<PackStats, GitError> {
         let mut pack = Wrapper::new(pack);
-        let (object_num, _header_data) = Pack::check_header(&mut pack)?;
+        let (object_num, header_data) = Pack::check_header(&mut pack)?;
         let mut stats = PackStats {
             total: object_num as usize,
             ..Default::default()
         };
-        let mut offset: usize = 12; // past the 12-byte header
+        let mut offset: usize = header_data.len();
+        // Pre-allocate buffer for hash-delta base references (20 or 32 bytes)
+        let hash_size = get_hash_kind().size();
+        let mut hash_buf = vec![0u8; hash_size];
 
         for _ in 0..object_num {
             let (type_bits, _size) = utils::read_type_and_varint_size(&mut pack, &mut offset)
@@ -422,9 +425,7 @@ impl Pack {
                 }
                 7 => {
                     // hash delta: base object hash + zlib data
-                    let hash_size = get_hash_kind().size();
-                    let mut hash_buf = vec![0u8; hash_size];
-                    pack.read_exact(&mut hash_buf).map_err(|e| {
+                    pack.read_exact(&mut hash_buf[..hash_size]).map_err(|e| {
                         GitError::InvalidPackFile(format!(
                             "Read hash error at offset {offset}: {e}"
                         ))
