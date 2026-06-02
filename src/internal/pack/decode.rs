@@ -354,13 +354,18 @@ impl Pack {
     /// intentionally single-threaded and allocation-light: decompressed data is
     /// streamed to [`io::sink`] so memory usage is O(1) regardless of object size.
     ///
+    /// The pack trailer hash is verified against a running hash of all bytes read
+    /// from the stream, matching the behaviour of [`Pack::decode`].
+    ///
     /// # Parameters
     /// * `pack` - A buffered reader over the pack file.
     ///
     /// # Returns
     /// * `Ok(PackStats)` - Object count and type distribution.
-    /// * `Err(GitError)` - On invalid header, truncated data, or decompression failure.
-    pub fn pack_stats(mut pack: impl BufRead) -> Result<PackStats, GitError> {
+    /// * `Err(GitError)` - On invalid header, truncated data, decompression
+    ///   failure, or trailer hash mismatch.
+    pub fn pack_stats(pack: impl BufRead) -> Result<PackStats, GitError> {
+        let mut pack = Wrapper::new(pack);
         let (object_num, _header_data) = Pack::check_header(&mut pack)?;
         let mut stats = PackStats {
             total: object_num as usize,
@@ -431,10 +436,17 @@ impl Pack {
             }
         }
 
-        // Read the 20- or 32-byte trailer hash
+        // Verify integrity: compare running hash against trailer
+        let computed_hash = pack.final_hash();
         let trailer = ObjectHash::from_stream(&mut pack).map_err(|e| {
             GitError::InvalidPackFile(format!("Failed to read trailer hash: {e:?}"))
         })?;
+        if computed_hash != trailer {
+            return Err(GitError::InvalidPackFile(format!(
+                "Pack trailer mismatch: computed {}, stored {}",
+                computed_hash, trailer
+            )));
+        }
         stats.pack_hash = trailer.to_string();
 
         Ok(stats)
@@ -1586,6 +1598,31 @@ mod tests {
         let reader = BufReader::new(Cursor::new(data.as_slice()));
         let result = Pack::pack_stats(reader);
         assert!(result.is_err(), "short header should fail");
+    }
+
+    #[test]
+    fn test_pack_stats_trailer_mismatch() {
+        // Load the valid mini-test.pack, flip the last trailer byte so the
+        // running hash no longer matches the stored trailer.
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/mini-test.pack");
+        let mut data = fs::read(&source).unwrap();
+        // Flip the last byte of the 20-byte SHA-1 trailer
+        let len = data.len();
+        data[len - 1] ^= 0xFF;
+        let reader = BufReader::new(Cursor::new(data));
+        let result = Pack::pack_stats(reader);
+        assert!(result.is_err(), "trailer mismatch should be rejected");
+        match result {
+            Err(GitError::InvalidPackFile(msg)) => {
+                assert!(
+                    msg.contains("trailer mismatch") || msg.contains("Pack trailer"),
+                    "error should mention trailer, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidPackFile, got {other:?}"),
+        }
     }
 
     /// Verify `Default` produces a zeroed PackStats.
