@@ -985,13 +985,13 @@ mod tests {
     use futures_util::TryStreamExt;
     use tokio_util::io::ReaderStream;
 
+    use super::PackStats;
+
     use crate::{
         errors::GitError,
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
         internal::pack::{Pack, tests::init_logger},
     };
-
-    use super::PackStats;
 
     #[tokio::test]
     async fn test_pack_check_header() {
