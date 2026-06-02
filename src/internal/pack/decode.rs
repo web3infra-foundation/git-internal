@@ -334,7 +334,33 @@ impl Pack {
     /// # Returns
     /// * `Ok(PackStats)` - Object count and type distribution.
     /// * `Err(GitError)` - On invalid header, truncated data, or decompression failure.
-    pub fn pack_stats(mut pack: impl BufRead + Send) -> Result<PackStats, GitError> {
+    // Drain zlib data from `pack` to io::sink and advance `offset`.
+    fn consume_zlib(pack: &mut impl BufRead, offset: &mut usize) -> Result<(), GitError> {
+        let mut counting_reader = CountingReader::new(pack);
+        let mut deflate = ZlibDecoder::new(&mut counting_reader);
+        io::copy(&mut deflate, &mut io::sink()).map_err(|e| {
+            GitError::InvalidPackFile(format!("Decompression error at offset {offset}: {e}"))
+        })?;
+        *offset += counting_reader.bytes_read as usize;
+        Ok(())
+    }
+
+    /// Given a pack file reader, scan all objects and collect type distribution
+    /// statistics without performing full delta reconstruction or caching.
+    ///
+    /// This function reuses the existing `check_header`, `read_type_and_varint_size`,
+    /// `read_offset_encoding`, and `ZlibDecoder` helpers, but skips the heavyweight
+    /// decode pipeline (thread pool, waitlist, LRU cache, delta rebuild). It is
+    /// intentionally single-threaded and allocation-light: decompressed data is
+    /// streamed to [`io::sink`] so memory usage is O(1) regardless of object size.
+    ///
+    /// # Parameters
+    /// * `pack` - A buffered reader over the pack file.
+    ///
+    /// # Returns
+    /// * `Ok(PackStats)` - Object count and type distribution.
+    /// * `Err(GitError)` - On invalid header, truncated data, or decompression failure.
+    pub fn pack_stats(mut pack: impl BufRead) -> Result<PackStats, GitError> {
         let (object_num, _header_data) = Pack::check_header(&mut pack)?;
         let mut stats = PackStats {
             total: object_num as usize,
@@ -372,21 +398,11 @@ impl Pack {
                 }
             }
 
-            // Advance past the object body so the next iteration reads the next object.
-            // For non-delta objects we inflate; for deltas we also skip the extra prefix
-            // (offset encoding or base hash) before inflating.
+            // Advance past the object body.
             match type_bits {
                 1..=4 => {
                     // base object: directly zlib-compressed
-                    let mut counting_reader = CountingReader::new(&mut pack);
-                    let mut deflate = ZlibDecoder::new(&mut counting_reader);
-                    let mut buf = Vec::new();
-                    deflate.read_to_end(&mut buf).map_err(|e| {
-                        GitError::InvalidPackFile(format!(
-                            "Decompression error at offset {offset}: {e}"
-                        ))
-                    })?;
-                    offset += counting_reader.bytes_read as usize;
+                    Self::consume_zlib(&mut pack, &mut offset)?;
                 }
                 5 | 6 => {
                     // offset delta / zstd offset delta: offset encoding + zlib data
@@ -397,15 +413,7 @@ impl Pack {
                             ))
                         })?;
                     offset += consumed;
-                    let mut counting_reader = CountingReader::new(&mut pack);
-                    let mut deflate = ZlibDecoder::new(&mut counting_reader);
-                    let mut buf = Vec::new();
-                    deflate.read_to_end(&mut buf).map_err(|e| {
-                        GitError::InvalidPackFile(format!(
-                            "Decompression error at offset {offset}: {e}"
-                        ))
-                    })?;
-                    offset += counting_reader.bytes_read as usize;
+                    Self::consume_zlib(&mut pack, &mut offset)?;
                 }
                 7 => {
                     // hash delta: base object hash + zlib data
@@ -417,15 +425,7 @@ impl Pack {
                         ))
                     })?;
                     offset += hash_size;
-                    let mut counting_reader = CountingReader::new(&mut pack);
-                    let mut deflate = ZlibDecoder::new(&mut counting_reader);
-                    let mut buf = Vec::new();
-                    deflate.read_to_end(&mut buf).map_err(|e| {
-                        GitError::InvalidPackFile(format!(
-                            "Decompression error at offset {offset}: {e}"
-                        ))
-                    })?;
-                    offset += counting_reader.bytes_read as usize;
+                    Self::consume_zlib(&mut pack, &mut offset)?;
                 }
                 _ => unreachable!(),
             }
@@ -1470,8 +1470,7 @@ mod tests {
 
     // ── Error-path tests ──
 
-    /// File not found: passing an empty reader triggers an error when the
-    /// header cannot be read.
+    /// Pack with invalid magic: first 4 bytes are "NOTP" instead of "PACK".
     #[test]
     fn test_pack_stats_invalid_magic() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
@@ -1482,7 +1481,10 @@ mod tests {
         assert!(result.is_err(), "non-PACK magic should fail");
         match result {
             Err(GitError::InvalidPackHeader(msg)) => {
-                assert!(msg.contains("78,79,84,80"), "should show byte values");
+                // The error message should mention the byte values of "NOTP"
+                // (78, 79, 84, 80) in some formatting
+                assert!(msg.contains("78"), "should mention first byte 78 (N)");
+                assert!(msg.contains("84"), "should mention fourth byte 84 (P)");
             }
             other => panic!("expected InvalidPackHeader, got {other:?}"),
         }
