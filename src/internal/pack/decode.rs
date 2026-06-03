@@ -27,7 +27,7 @@ use crate::{
         metadata::{EntryMeta, MetaAttached},
         object::types::ObjectType,
         pack::{
-            DEFAULT_TMP_DIR, Pack,
+            DEFAULT_TMP_DIR, Pack, PackStats,
             cache::{_Cache, Caches},
             cache_object::{CacheObject, CacheObjectInfo, MemSizeRecorder},
             channel_reader::StreamBufReader,
@@ -126,6 +126,7 @@ impl Pack {
             mem_limit,
             cache_objs_mem: Arc::new(AtomicUsize::default()),
             clean_tmp,
+            stats: PackStats::default(),
         }
     }
 
@@ -466,6 +467,21 @@ impl Pack {
                     obj.set_mem_recorder(self.cache_objs_mem.clone());
                     obj.record_mem_size();
 
+                    // Intercept and accumulate object statistics
+                    self.stats.total += 1;
+                    match obj.info {
+                        CacheObjectInfo::BaseObject(ObjectType::Commit, _) => {
+                            self.stats.commits += 1
+                        }
+                        CacheObjectInfo::BaseObject(ObjectType::Tree, _) => self.stats.trees += 1,
+                        CacheObjectInfo::BaseObject(ObjectType::Blob, _) => self.stats.blobs += 1,
+                        CacheObjectInfo::BaseObject(ObjectType::Tag, _) => self.stats.tags += 1,
+                        CacheObjectInfo::OffsetDelta(_, _)
+                        | CacheObjectInfo::OffsetZstdelta(_, _)
+                        | CacheObjectInfo::HashDelta(_, _) => self.stats.deltas += 1,
+                        _ => {}
+                    }
+
                     // Wrapper of Arc Params, for convenience to pass
                     let params = Arc::new(SharedParams {
                         pool: self.pool.clone(),
@@ -792,6 +808,28 @@ impl Pack {
     }
 }
 
+/// Calculate the distribution of object types in a given pack file.
+/// This utility reuses the decode process to collect `PackStats` with zero-overhead.
+pub fn calculate_pack_stats<P: AsRef<std::path::Path>>(path: P) -> Result<PackStats, GitError> {
+    // Set HashKind (required for git-internal environment)
+    set_hash_kind(crate::hash::HashKind::Sha1);
+
+    // Open file and create a buffered reader
+    let f = std::fs::File::open(path)
+        .map_err(|e| GitError::InvalidPackFile(format!("Failed to open file: {e}")))?;
+    let mut reader = std::io::BufReader::new(f);
+
+    // Initialize a lightweight Pack object (limit thread number, auto-clean tmp dir)
+    let mut pack = Pack::new(Some(1), None, None, true);
+
+    // Reuse the main decode logic with an empty callback
+    // since we only care about collecting stats during the decoding process
+    pack.decode(&mut reader, |_| {}, None::<fn(ObjectHash)>)?;
+
+    // Return the collected stats
+    Ok(pack.stats)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1050,5 +1088,92 @@ mod tests {
                 let _ = futures::future::join(f1, f2).await;
             }
         });
+    }
+
+    #[test]
+    fn test_calculate_pack_stats_normal() {
+        use super::calculate_pack_stats;
+        // Import the pack download helper to bypass local LFS limitations
+        use crate::internal::pack::test_pack_download::download_pack_file;
+
+        // Dynamically fetch the test pack file to prevent 'file not found' errors
+        let (source, _dl_guard) = download_pack_file("small-sha1.pack");
+
+        let stats = calculate_pack_stats(&source).expect("Failed to calculate pack stats");
+
+        // Assert that the pack file is not empty
+        assert!(stats.total > 0);
+        // Assert that blobs exist
+        assert!(stats.blobs > 0);
+
+        println!("Pack Stats for small-sha1: {:#?}", stats);
+    }
+
+    #[test]
+    fn test_calculate_pack_stats_quality() {
+        use super::calculate_pack_stats;
+        use std::time::Instant;
+        // Import the pack download helper
+        use crate::internal::pack::test_pack_download::download_pack_file;
+
+        // Dynamically fetch the test pack file
+        let (source, _dl_guard) = download_pack_file("small-sha1.pack");
+
+        // Start performance timer
+        let start = Instant::now();
+        let stats = calculate_pack_stats(&source).expect("Failed to calculate pack stats");
+        let duration = start.elapsed();
+
+        assert!(stats.total > 0);
+        assert!(stats.blobs > 0);
+
+        // Trigger the custom Display trait
+        println!("\n{}", stats);
+        println!(
+            "⏱️  Total parsing and stats collection time: {:?}",
+            duration
+        );
+        println!("--------------------------------------\n");
+    }
+
+    #[test]
+    fn test_calculate_pack_stats_file_not_found() {
+        use super::calculate_pack_stats;
+        let path = PathBuf::from("tests/data/packs/this_file_does_not_exist.pack");
+
+        let result = calculate_pack_stats(&path);
+        // Expect an error for missing file
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_pack_stats_invalid_pack() {
+        use super::calculate_pack_stats;
+        use crate::errors::GitError;
+
+        let mut temp_file = std::env::temp_dir();
+        temp_file.push("invalid_temp_git.pack");
+
+        // Write invalid data to the temp file
+        std::fs::write(&temp_file, b"THIS IS NOT A VALID PACK FILE")
+            .expect("Failed to write temp file");
+
+        let result = calculate_pack_stats(&temp_file);
+
+        // Expect an error
+        assert!(result.is_err());
+
+        // Use pattern matching to assert the exact error enum variants
+        match result.unwrap_err() {
+            GitError::InvalidPackHeader(_) | GitError::InvalidPackFile(_) => {
+                // Expected errors, pass
+            }
+            other_err => {
+                panic!("Expected Invalid Pack error, but got: {:?}", other_err);
+            }
+        }
+
+        // Cleanup temp file
+        let _ = std::fs::remove_file(temp_file);
     }
 }

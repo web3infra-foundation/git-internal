@@ -9,6 +9,10 @@ pub mod encode;
 pub mod entry;
 mod index_entry;
 pub mod pack_index;
+
+#[cfg(test)]
+pub mod test_pack_download;
+
 pub mod utils;
 pub mod waitlist;
 pub mod wrapper;
@@ -26,6 +30,54 @@ use crate::{
 
 const DEFAULT_TMP_DIR: &str = "./.cache_temp";
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PackStats {
+    pub total: usize,
+    pub commits: usize,
+    pub trees: usize,
+    pub blobs: usize,
+    pub tags: usize,
+    pub deltas: usize,
+}
+
+// Implement Display trait for user-friendly formatting and percentage calculation
+impl std::fmt::Display for PackStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Internal closure to safely calculate percentages (preventing divide-by-zero)
+        let pct = |count: usize| -> f64 {
+            if self.total == 0 {
+                0.0
+            } else {
+                (count as f64 / self.total as f64) * 100.0
+            }
+        };
+
+        write!(
+            f,
+            "📦 Pack Decode Statistics Summary\n\
+             ======================================\n\
+             Total Objects: {}\n\
+             - Commits: {:>6}  ({:>5.1}%)\n\
+             - Trees:   {:>6}  ({:>5.1}%)\n\
+             - Blobs:   {:>6}  ({:>5.1}%)\n\
+             - Tags:    {:>6}  ({:>5.1}%)\n\
+             - Deltas:  {:>6}  ({:>5.1}%)\n\
+             ======================================",
+            self.total,
+            self.commits,
+            pct(self.commits),
+            self.trees,
+            pct(self.trees),
+            self.blobs,
+            pct(self.blobs),
+            self.tags,
+            pct(self.tags),
+            self.deltas,
+            pct(self.deltas)
+        )
+    }
+}
+
 /// Representation of a Git pack file in memory.
 pub struct Pack {
     pub number: usize,
@@ -37,10 +89,8 @@ pub struct Pack {
     pub mem_limit: Option<usize>,
     pub cache_objs_mem: Arc<AtomicUsize>,
     pub clean_tmp: bool,
+    pub stats: PackStats, // Statistics field for tracking object distribution
 }
-
-#[cfg(test)]
-pub(crate) mod test_pack_download;
 
 #[cfg(test)]
 mod tests {
