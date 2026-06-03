@@ -986,7 +986,6 @@ mod tests {
     use tokio_util::io::ReaderStream;
 
     use super::PackStats;
-
     use crate::{
         errors::GitError,
         hash::{HashKind, ObjectHash, set_hash_kind_for_test},
