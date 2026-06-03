@@ -994,6 +994,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_pack_check_header() {
+        if !is_valid_pack("tests/data/packs/medium-sha1.pack") {
+            eprintln!("SKIP: medium-sha1.pack not available (LFS not pulled)");
+            return;
+        }
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push("tests/data/packs/medium-sha1.pack");
 
@@ -1043,6 +1047,10 @@ mod tests {
 
     /// Helper function to run decode tests without delta objects
     fn run_decode_no_delta(rel_path: &str, kind: HashKind) {
+        if !is_valid_pack(rel_path) {
+            eprintln!("SKIP: {rel_path} not available (LFS not pulled)");
+            return;
+        }
         let _guard = set_hash_kind_for_test(kind);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push(rel_path);
@@ -1063,6 +1071,10 @@ mod tests {
 
     /// Helper function to run decode tests with delta objects
     fn run_decode_with_ref_delta(rel_path: &str, kind: HashKind) {
+        if !is_valid_pack(rel_path) {
+            eprintln!("SKIP: {rel_path} not available (LFS not pulled)");
+            return;
+        }
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
 
@@ -1085,6 +1097,10 @@ mod tests {
 
     /// Helper function to run decode tests without memory limit
     fn run_decode_no_mem_limit(rel_path: &str, kind: HashKind) {
+        if !is_valid_pack(rel_path) {
+            eprintln!("SKIP: {rel_path} not available (LFS not pulled)");
+            return;
+        }
         let _guard = set_hash_kind_for_test(kind);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push(rel_path);
@@ -1105,6 +1121,10 @@ mod tests {
 
     /// Helper function to run decode tests with delta objects
     async fn run_decode_large_with_delta(rel_path: &str, kind: HashKind) {
+        if !is_valid_pack(rel_path) {
+            eprintln!("SKIP: {rel_path} not available (LFS not pulled)");
+            return;
+        }
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1140,6 +1160,10 @@ mod tests {
 
     /// Helper function to run decode tests with large file stream
     async fn run_decode_large_stream(rel_path: &str, kind: HashKind) {
+        if !is_valid_pack(rel_path) {
+            eprintln!("SKIP: {rel_path} not available (LFS not pulled)");
+            return;
+        }
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1176,6 +1200,10 @@ mod tests {
 
     /// Helper function to run decode tests with large file async
     async fn run_decode_large_file_async(rel_path: &str, kind: HashKind) {
+        if !is_valid_pack(rel_path) {
+            eprintln!("SKIP: {rel_path} not available (LFS not pulled)");
+            return;
+        }
         let _guard = set_hash_kind_for_test(kind);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push(rel_path);
@@ -1202,6 +1230,10 @@ mod tests {
 
     /// Helper function to run decode tests with delta objects without reference
     fn run_decode_with_delta_no_ref(rel_path: &str, kind: HashKind) {
+        if !is_valid_pack(rel_path) {
+            eprintln!("SKIP: {rel_path} not available (LFS not pulled)");
+            return;
+        }
         let _guard = set_hash_kind_for_test(kind);
         let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         source.push(rel_path);
