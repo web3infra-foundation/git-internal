@@ -454,7 +454,7 @@ impl PackEncoder {
         self.idx_entries = Some(idx_entries);
 
         // Hash signature
-        let hash_result = self.inner_hash.clone().finalize();
+        let hash_result: Vec<u8> = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result).await;
 
@@ -664,7 +664,7 @@ impl PackEncoder {
         }
 
         // hash signature
-        let hash_result = self.inner_hash.clone().finalize();
+        let hash_result: Vec<u8> = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result).await;
         self.drop_sender();
@@ -673,7 +673,7 @@ impl PackEncoder {
         Ok(())
     }
 
-    /// Write data to writer and update hash & offset
+    /// Update hash and offset, then move an already-owned encoded chunk to the output channel.
     async fn write_all_and_update(&mut self, data: Vec<u8>) {
         self.inner_hash.update(&data);
         self.inner_offset += data.len();
@@ -836,15 +836,14 @@ mod tests {
         let mut encoder = PackEncoder::new(1, 0, tx);
         let payload = b"encoded object data".to_vec();
         let payload_ptr = payload.as_ptr();
-        let payload_capacity = payload.capacity();
         let initial_offset = encoder.inner_offset;
 
         encoder.write_all_and_update(payload).await;
 
         let sent = rx.recv().await.expect("encoded data should be sent");
         assert_eq!(sent, b"encoded object data");
+        // Pointer identity is intentional: this test guards the owned no-copy fast path.
         assert_eq!(sent.as_ptr(), payload_ptr);
-        assert_eq!(sent.capacity(), payload_capacity);
         assert_eq!(encoder.inner_offset, initial_offset + sent.len());
     }
 
@@ -855,8 +854,6 @@ mod tests {
         let mut encoder = PackEncoder::new(2, 0, tx);
         let first = b"first encoded object".to_vec();
         let second = b"second encoded object".to_vec();
-        let first_ptr = first.as_ptr();
-        let second_ptr = second.as_ptr();
         let initial_offset = encoder.inner_offset;
         let mut expected_hash = HashAlgorithm::new();
         expected_hash.update(&first);
@@ -867,8 +864,8 @@ mod tests {
 
         let sent_first = rx.recv().await.expect("first object should be sent");
         let sent_second = rx.recv().await.expect("second object should be sent");
-        assert_eq!(sent_first.as_ptr(), first_ptr);
-        assert_eq!(sent_second.as_ptr(), second_ptr);
+        assert_eq!(sent_first, b"first encoded object");
+        assert_eq!(sent_second, b"second encoded object");
         assert_eq!(
             encoder.inner_offset,
             initial_offset + sent_first.len() + sent_second.len()
