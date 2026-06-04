@@ -9,6 +9,7 @@ pub mod encode;
 pub mod entry;
 mod index_entry;
 pub mod pack_index;
+pub mod stats;
 pub mod utils;
 pub mod waitlist;
 pub mod wrapper;
