@@ -50,7 +50,7 @@ ring = "0.17.14"
 serde_json = "1.0.149"
 zstd-sys = { version = "2.0.16", features = ["experimental"] }
 sea-orm = { version = "1.1.19", features = ["sqlx-sqlite"] }
-flate2 = { version = "1.1.9", features = ["zlib"] }
+flate2 = { version = "1.1.9", features = ["zlib-ng"] }
 serde = { version = "1.0.228", features = ["derive"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 uuid = { version = "1.22.0", features = ["serde", "v4", "v7"] }
@@ -69,3 +69,4 @@ ureq = "3"
 [features]
 default = ["diff_mydrs"]
 diff_mydrs = []
+diff_rabin = []

@@ -5,6 +5,9 @@ use diffs::Diff;
 #[cfg(feature = "diff_mydrs")]
 use diffs::myers;
 
+#[cfg(feature = "diff_rabin")]
+pub mod rabin;
+
 const DATA_INS_LEN: usize = 0x7f;
 const VAR_INT_ENCODING_BITS: u8 = 7;
 

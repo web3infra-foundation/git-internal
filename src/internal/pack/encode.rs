@@ -125,6 +125,66 @@ pub async fn encode_and_output_to_files(
     Ok(())
 }
 
+/// Encode entries into a pack using Rabin fingerprint delta (requires `diff_rabin` feature).
+/// Same as `encode_and_output_to_files` but uses the Rabin algorithm instead of Myers/Patience.
+#[cfg(feature = "diff_rabin")]
+pub async fn encode_and_output_to_files_with_rabin(
+    raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
+    object_number: usize,
+    output_dir: PathBuf,
+    window_size: usize,
+) -> Result<(), GitError> {
+    let (pack_tx, mut pack_rx) = mpsc::channel(1024);
+    let (idx_tx, mut idx_rx) = mpsc::channel(1024);
+    let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
+
+    // timestamp for temp filename
+    let now = Utc::now();
+    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();
+    let tmp_path = output_dir.join(format!("{}objects.pack.tmp", timestamp));
+    let mut pack_file = File::create(&tmp_path).await?;
+
+    let pack_writer = tokio::spawn(async move {
+        while let Some(chunk) = pack_rx.recv().await {
+            TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
+        }
+        TokioAsyncWriteExt::flush(&mut pack_file).await?;
+        Ok::<(), GitError>(())
+    });
+
+    pack_encoder.encode_with_rabin(raw_entries_rx).await?;
+
+    // wait for pack write to finish
+    let pack_write_result = pack_writer
+        .await
+        .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
+    pack_write_result?;
+
+    let final_pack_name =
+        output_dir.join(format!("pack-{}.pack", pack_encoder.final_hash.unwrap()));
+    let final_idx_name = output_dir.join(format!("pack-{}.idx", pack_encoder.final_hash.unwrap()));
+    tokio::fs::rename(tmp_path, &final_pack_name).await?;
+
+    let mut idx_file = File::create(&final_idx_name).await?;
+    let idx_writer = tokio::spawn(async move {
+        while let Some(chunk) = idx_rx.recv().await {
+            TokioAsyncWriteExt::write_all(&mut idx_file, &chunk).await?;
+        }
+        TokioAsyncWriteExt::flush(&mut idx_file).await?;
+        Ok::<(), GitError>(())
+    });
+
+    // build idx
+    pack_encoder.encode_idx_file().await?;
+
+    let idx_write_result = idx_writer
+        .await
+        .map_err(|e| GitError::PackEncodeError(format!("idx writer task join error: {e}")))?;
+    idx_write_result?;
+
+    Ok(())
+}
+
 /// Encode header of pack file (12 byte)<br>
 /// Content: 'PACK', Version(2), number of objects
 fn encode_header(object_number: usize) -> Vec<u8> {
@@ -324,11 +384,10 @@ impl PackEncoder {
         &mut self,
         entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
     ) -> Result<(), GitError> {
-        //self.inner_encode(entry_rx, false).await
         if self.window_size == 0 {
             self.parallel_encode(entry_rx).await
         } else {
-            self.inner_encode(entry_rx, false).await
+            self.inner_encode(entry_rx, false, false).await
         }
     }
 
@@ -337,7 +396,20 @@ impl PackEncoder {
         &mut self,
         entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
     ) -> Result<(), GitError> {
-        self.inner_encode(entry_rx, true).await
+        self.inner_encode(entry_rx, true, false).await
+    }
+
+    /// Encode with Rabin fingerprint delta (requires `diff_rabin` feature).
+    #[cfg(feature = "diff_rabin")]
+    pub async fn encode_with_rabin(
+        &mut self,
+        entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
+    ) -> Result<(), GitError> {
+        if self.window_size == 0 {
+            self.parallel_encode(entry_rx).await
+        } else {
+            self.inner_encode(entry_rx, false, true).await
+        }
     }
 
     /// Delta selection heuristics are based on:
@@ -346,6 +418,7 @@ impl PackEncoder {
         &mut self,
         mut entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
         enable_zstdelta: bool,
+        enable_rabin: bool,
     ) -> Result<(), GitError> {
         let head = encode_header(self.object_number);
         self.send_data(head.clone()).await;
@@ -407,6 +480,7 @@ impl PackEncoder {
                         .collect(),
                     10,
                     enable_zstdelta,
+                    enable_rabin,
                 )
             }),
             tokio::task::spawn_blocking(move || {
@@ -417,6 +491,7 @@ impl PackEncoder {
                         .collect(),
                     10,
                     enable_zstdelta,
+                    enable_rabin,
                 )
             }),
             tokio::task::spawn_blocking(move || {
@@ -427,6 +502,7 @@ impl PackEncoder {
                         .collect(),
                     10,
                     enable_zstdelta,
+                    enable_rabin,
                 )
             }),
             tokio::task::spawn_blocking(move || {
@@ -436,6 +512,7 @@ impl PackEncoder {
                         .collect(),
                     10,
                     enable_zstdelta,
+                    enable_rabin,
                 )
             }),
         )
@@ -475,10 +552,12 @@ impl PackEncoder {
     /// # Returns
     /// - Return (Vec<Vec<u8>) if success make delta
     /// - Return (None) if didn't delta,
+    #[cfg_attr(not(feature = "diff_rabin"), allow(unused_variables))]
     fn try_as_offset_delta(
         mut bucket: Vec<Entry>,
         window_size: usize,
         enable_zstdelta: bool,
+        enable_rabin: bool,
     ) -> Result<Vec<(Vec<u8>, IndexEntry)>, GitError> {
         let mut current_offset = 0usize;
         let mut window: VecDeque<(Entry, usize)> = VecDeque::with_capacity(window_size);
@@ -490,72 +569,106 @@ impl PackEncoder {
             // 每次循环重置最佳基对象选择
             let mut best_base: Option<&(Entry, usize)> = None;
             let mut best_rate: f64 = 0.0;
-            let tie_epsilon: f64 = 0.15;
 
-            let candidates: Vec<_> = window
-                .par_iter()
-                .with_min_len(3)
-                .filter_map(|try_base| {
-                    if try_base.0.obj_type != entry.obj_type {
-                        return None;
-                    }
+            // Fast pre-filter using cheap_similar + size ratio + heuristic rate.
+            // When diff_rabin is available, we use actual rabin delta sizes for
+            // scoring (O(n), fast and accurate). Without it, we fall back to
+            // heuristic rate estimates (fast but less accurate), because computing
+            // full Myers deltas for every candidate would be too slow.
+            #[cfg(feature = "diff_rabin")]
+            {
+                let pre_filtered: Vec<_> = window
+                    .iter()
+                    .filter(|try_base| {
+                        try_base.0.obj_type == entry.obj_type
+                            && try_base.0.chain_len < MAX_CHAIN_LEN
+                            && try_base.0.hash != entry.hash
+                            && (try_base.0.data.len().min(entry.data.len()) as f64)
+                                / (try_base.0.data.len().max(entry.data.len()) as f64)
+                                >= 0.5
+                            && cheap_similar(&try_base.0.data, &entry.data)
+                    })
+                    .collect();
 
-                    if try_base.0.chain_len >= MAX_CHAIN_LEN {
-                        return None;
-                    }
-
-                    if try_base.0.hash == entry.hash {
-                        return None;
-                    }
-
-                    let sym_ratio = (try_base.0.data.len().min(entry.data.len()) as f64)
-                        / (try_base.0.data.len().max(entry.data.len()) as f64);
-                    if sym_ratio < 0.5 {
-                        return None;
-                    }
-
-                    if !cheap_similar(&try_base.0.data, &entry.data) {
-                        return None;
-                    }
-
-                    let rate = if (try_base.0.data.len() + entry.data.len()) / 2 > 64 {
-                        delta::heuristic_encode_rate_parallel(&try_base.0.data, &entry.data)
-                    } else {
-                        delta::encode_rate(&try_base.0.data, &entry.data)
-                        // let try_delta_obj = zstdelta::diff(&try_base.0.data, &entry.data).unwrap();
-                        // 1.0 - try_delta_obj.len() as f64 / entry.data.len() as f64
-                    };
-
-                    if rate > MIN_DELTA_RATE {
-                        Some((rate, try_base))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            for (rate, try_base) in candidates {
-                match best_base {
-                    None => {
-                        best_rate = rate;
-                        //best_base_offset = current_offset - try_base.1;
-                        best_base = Some(try_base);
-                    }
-                    Some(best_base_ref) => {
-                        let is_better = if rate > best_rate + tie_epsilon {
-                            true
-                        } else if (rate - best_rate).abs() <= tie_epsilon {
-                            try_base.0.chain_len > best_base_ref.0.chain_len
-                        } else {
-                            false
-                        };
-
-                        if is_better {
-                            best_rate = rate;
-                            best_base = Some(try_base);
+                if !pre_filtered.is_empty() {
+                    let mut best_delta_size = usize::MAX;
+                    for try_base in &pre_filtered {
+                        // Use rabin for fast O(n) actual-delta scoring
+                        let delta_size =
+                            delta::encode_rabin(&try_base.0.data, &entry.data).len();
+                        if delta_size < best_delta_size {
+                            best_delta_size = delta_size;
+                            best_rate =
+                                1.0 - delta_size as f64 / entry.data.len() as f64;
+                            best_base = Some(*try_base);
                         }
                     }
                 }
+            }
+
+            // Without diff_rabin: use heuristic rate estimation (fast, avoids
+            // expensive Myers deltas for every candidate).
+            #[cfg(not(feature = "diff_rabin"))]
+            {
+                let candidates: Vec<_> = window
+                    .par_iter()
+                    .with_min_len(3)
+                    .filter_map(|try_base| {
+                        if try_base.0.obj_type != entry.obj_type
+                            || try_base.0.chain_len >= MAX_CHAIN_LEN
+                            || try_base.0.hash == entry.hash
+                        {
+                            return None;
+                        }
+                        let sym_ratio = (try_base.0.data.len().min(entry.data.len()) as f64)
+                            / (try_base.0.data.len().max(entry.data.len()) as f64);
+                        if sym_ratio < 0.5 || !cheap_similar(&try_base.0.data, &entry.data) {
+                            return None;
+                        }
+                        let rate = if (try_base.0.data.len() + entry.data.len()) / 2 > 64 {
+                            delta::heuristic_encode_rate_parallel(
+                                &try_base.0.data,
+                                &entry.data,
+                            )
+                        } else {
+                            delta::encode_rate(&try_base.0.data, &entry.data)
+                        };
+                        if rate > MIN_DELTA_RATE {
+                            Some((rate, try_base))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                let tie_epsilon: f64 = 0.15;
+                for (rate, try_base) in candidates {
+                    match best_base {
+                        None => {
+                            best_rate = rate;
+                            best_base = Some(try_base);
+                        }
+                        Some(best_base_ref) => {
+                            let is_better = if rate > best_rate + tie_epsilon {
+                                true
+                            } else if (rate - best_rate).abs() <= tie_epsilon {
+                                try_base.0.chain_len > best_base_ref.0.chain_len
+                            } else {
+                                false
+                            };
+
+                            if is_better {
+                                best_rate = rate;
+                                best_base = Some(try_base);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Don't use delta if it wouldn't actually save space
+            if best_rate < MIN_DELTA_RATE {
+                best_base = None;
             }
 
             let mut entry_for_window = entry.clone();
@@ -569,10 +682,21 @@ impl PackEncoder {
                         })
                         .unwrap()
                 } else {
-                    entry.obj_type = ObjectType::OffsetDelta;
-                    delta::encode(&best_base.0.data, &entry.data)
+                    // Rabin branch gated behind diff_rabin feature
+                    #[cfg(feature = "diff_rabin")]
+                    if enable_rabin {
+                        entry.obj_type = ObjectType::OffsetDelta;
+                        delta::encode_rabin(&best_base.0.data, &entry.data)
+                    } else {
+                        entry.obj_type = ObjectType::OffsetDelta;
+                        delta::encode(&best_base.0.data, &entry.data)
+                    }
+                    #[cfg(not(feature = "diff_rabin"))]
+                    {
+                        entry.obj_type = ObjectType::OffsetDelta;
+                        delta::encode(&best_base.0.data, &entry.data)
+                    }
                 };
-                //entry.obj_type = ObjectType::OffsetDelta;
                 entry.data = delta;
                 entry.chain_len = best_base.0.chain_len + 1;
                 current_offset - best_base.1

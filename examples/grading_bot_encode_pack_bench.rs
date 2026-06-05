@@ -7,6 +7,8 @@
 //! cargo run --release --example grading_bot_encode_pack_bench -- /data/rk8s-dev/rk8s/.git
 //! # Optional second arg: delta window size (default: 10, 0 disables delta).
 //! cargo run --release --example grading_bot_encode_pack_bench -- /data/rk8s-dev/rk8s/.git 50
+//! # Optional --rabin flag: use Rabin fingerprint delta (requires diff_rabin feature).
+//! cargo run --release --features diff_rabin --example grading_bot_encode_pack_bench -- --rabin /data/rk8s-dev/rk8s/.git
 //! ```
 //!
 //! The example walks both loose objects (`.git/objects/<aa>/<38-hex>`) and
@@ -24,6 +26,8 @@ use std::{
 };
 
 use flate2::read::ZlibDecoder;
+#[cfg(feature = "diff_rabin")]
+use git_internal::internal::pack::encode::encode_and_output_to_files_with_rabin;
 use git_internal::{
     hash::{HashKind, ObjectHash, set_hash_kind},
     internal::{
@@ -112,21 +116,42 @@ fn format_bytes(b: usize) -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 1. Parse arguments -------------------------------------------------
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 || args.len() > 3 {
+
+    // Parse flags and positional args
+    let mut positional: Vec<&str> = Vec::new();
+    let mut use_rabin = false;
+    for arg in args.iter().skip(1) {
+        if arg == "--rabin" {
+            use_rabin = true;
+        } else if arg.starts_with("--") {
+            eprintln!("unknown flag: {arg}");
+            std::process::exit(2);
+        } else {
+            positional.push(arg.as_str());
+        }
+    }
+
+    if positional.is_empty() || positional.len() > 2 {
         eprintln!(
-            "usage: {} <path-to-.git> [window_size]",
+            "usage: {} [--rabin] <path-to-.git> [window_size]\n  --rabin  Use Rabin fingerprint delta (requires diff_rabin feature)",
             args.first().map(String::as_str).unwrap_or("grading_bot_encode_pack_bench")
         );
         std::process::exit(2);
     }
-    let git_dir = PathBuf::from(&args[1]);
-    let window_size: usize = if args.len() == 3 {
-        args[2]
+    let git_dir = PathBuf::from(positional[0]);
+    let window_size: usize = if positional.len() == 2 {
+        positional[1]
             .parse()
-            .map_err(|e| format!("invalid window_size {:?}: {e}", args[2]))?
+            .map_err(|e| format!("invalid window_size {:?}: {e}", positional[1]))?
     } else {
         10
     };
+
+    #[cfg(not(feature = "diff_rabin"))]
+    if use_rabin {
+        eprintln!("warning: --rabin requires the `diff_rabin` feature; falling back to default delta");
+        use_rabin = false;
+    }
 
     if !git_dir.join("objects").is_dir() {
         return Err(format!(
@@ -183,12 +208,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n = unique;
     let win = window_size;
     let out_path_for_task = out_path.clone();
+    let algorithm_name = if use_rabin { "rabin" } else { "myers" };
     let encode_handle = tokio::spawn(async move {
-        encode_and_output_to_files(rx, n, out_path_for_task, win).await
+        if use_rabin {
+            #[cfg(feature = "diff_rabin")]
+            {
+                encode_and_output_to_files_with_rabin(rx, n, out_path_for_task, win).await
+            }
+            #[cfg(not(feature = "diff_rabin"))]
+            {
+                let _ = (rx, n, out_path_for_task, win);
+                unreachable!("--rabin requires diff_rabin feature")
+            }
+        } else {
+            encode_and_output_to_files(rx, n, out_path_for_task, win).await
+        }
     });
 
     println!();
-    println!("Encoding pack ({} objects, window={window_size}) ...", n);
+    println!("Encoding pack ({} objects, window={window_size}, algorithm={algorithm_name}) ...", n);
 
     // Capture baseline memory before encoding starts.
     let baseline_rss = read_proc_status_kib("VmRSS").unwrap_or(0);

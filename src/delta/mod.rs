@@ -114,6 +114,24 @@ pub fn encode(old_data: &[u8], new_data: &[u8]) -> Vec<u8> {
     differ.encode()
 }
 
+/// Produce a Git-style delta using Rabin fingerprint matching (available with `diff_rabin` feature).
+#[cfg(feature = "diff_rabin")]
+pub fn encode_rabin(old_data: &[u8], new_data: &[u8]) -> Vec<u8> {
+    encode::rabin::encode_rabin(old_data, new_data)
+}
+
+/// Compute exact similarity rate via Rabin fingerprint delta (available with `diff_rabin` feature).
+#[cfg(feature = "diff_rabin")]
+pub fn rabin_encode_rate(old_data: &[u8], new_data: &[u8]) -> f64 {
+    encode::rabin::rabin_encode_rate(old_data, new_data)
+}
+
+/// Fast heuristic similarity screening using Rabin hashes (available with `diff_rabin` feature).
+#[cfg(feature = "diff_rabin")]
+pub fn heuristic_encode_rate_rabin(old_data: &[u8], new_data: &[u8]) -> f64 {
+    encode::rabin::heuristic_encode_rate_rabin(old_data, new_data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{encode_rate, heuristic_encode_rate, heuristic_encode_rate_parallel};
