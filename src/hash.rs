@@ -288,14 +288,13 @@ pub fn set_hash_kind_for_test(kind: HashKind) -> HashKindGuard {
 mod tests {
 
     use std::{
+        env,
         io::{BufReader, Read, Seek, SeekFrom},
+        path::PathBuf,
         str::FromStr,
     };
 
-    use crate::{
-        hash::{HashKind, ObjectHash, set_hash_kind_for_test},
-        internal::pack::test_pack_download::download_pack_file,
-    };
+    use crate::hash::{HashKind, ObjectHash, set_hash_kind_for_test};
 
     /// Hashing "Hello, world!" with SHA1 should match known value.
     #[test]
@@ -329,7 +328,8 @@ mod tests {
     #[test]
     fn test_signature_without_delta() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let (source, _dl_guard) = download_pack_file("small-sha1.pack");
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/small-sha1.pack");
 
         let f = std::fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);
@@ -345,7 +345,8 @@ mod tests {
     #[test]
     fn test_signature_without_delta_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let (source, _dl_guard) = download_pack_file("small-sha256.pack");
+        let mut source = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        source.push("tests/data/packs/small-sha256.pack");
 
         let f = std::fs::File::open(source).unwrap();
         let mut buffered = BufReader::new(f);

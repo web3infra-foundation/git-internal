@@ -6,12 +6,10 @@ use std::{
     convert::TryInto,
     fs,
     io::BufReader,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-mod common;
-
-use common::download_pack_file;
 use git_internal::{
     errors::GitError,
     hash::{HashKind, ObjectHash, set_hash_kind_for_test},
@@ -25,6 +23,23 @@ use git_internal::{
     },
 };
 use tokio::sync::mpsc;
+
+fn packs_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/packs")
+}
+
+fn find_pack(prefix: &str) -> PathBuf {
+    let dir = packs_dir();
+    for entry in fs::read_dir(&dir).expect("read packs dir failed") {
+        let entry = entry.expect("dir entry error");
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(prefix) && name.ends_with(".pack") {
+            return entry.path();
+        }
+    }
+    panic!("pack with prefix `{prefix}` not found in {:?}", dir);
+}
 
 fn parse_idx_offsets(idx_bytes: &[u8], kind: HashKind) -> HashMap<Vec<u8>, u64> {
     assert!(idx_bytes.len() >= 8, "idx too short");
@@ -89,8 +104,8 @@ fn parse_idx_offsets(idx_bytes: &[u8], kind: HashKind) -> HashMap<Vec<u8>, u64> 
 
 type DecodePackResult = Result<(Vec<MetaAttached<Entry, EntryMeta>>, ObjectHash, usize), GitError>;
 
-fn decode_pack(filename: &str) -> DecodePackResult {
-    let (pack_path, _dl_guard) = download_pack_file(filename);
+fn decode_pack(prefix: &str) -> DecodePackResult {
+    let pack_path = find_pack(prefix);
     let file = fs::File::open(pack_path)?;
     let mut reader = BufReader::new(file);
     let mut pack = Pack::new(Some(2), Some(64 * 1024 * 1024), None, true);
@@ -112,9 +127,9 @@ fn decode_pack(filename: &str) -> DecodePackResult {
     Ok((entries, pack_hash, count))
 }
 
-async fn roundtrip(filename: &str, kind: HashKind) -> Result<(), GitError> {
+async fn roundtrip(prefix: &str, kind: HashKind) -> Result<(), GitError> {
     let _guard = set_hash_kind_for_test(kind);
-    let (metas, pack_hash, count) = decode_pack(filename)?;
+    let (metas, pack_hash, count) = decode_pack(prefix)?;
     assert_eq!(metas.len(), count, "decoded entries count mismatch");
 
     let mut idx_entries = Vec::with_capacity(metas.len());
@@ -145,20 +160,20 @@ async fn roundtrip(filename: &str, kind: HashKind) -> Result<(), GitError> {
 
 #[tokio::test]
 async fn idx_offsets_match_sha1_small() -> Result<(), GitError> {
-    roundtrip("small-sha1.pack", HashKind::Sha1).await
+    roundtrip("small-sha1", HashKind::Sha1).await
 }
 
 #[tokio::test]
 async fn idx_offsets_match_sha1_delta() -> Result<(), GitError> {
-    roundtrip("ref-delta-sha1.pack", HashKind::Sha1).await
+    roundtrip("ref-delta-sha1", HashKind::Sha1).await
 }
 
 #[tokio::test]
 async fn idx_offsets_match_sha256_small() -> Result<(), GitError> {
-    roundtrip("small-sha256.pack", HashKind::Sha256).await
+    roundtrip("small-sha256", HashKind::Sha256).await
 }
 
 #[tokio::test]
 async fn idx_offsets_match_sha256_delta() -> Result<(), GitError> {
-    roundtrip("ref-delta-sha256.pack", HashKind::Sha256).await
+    roundtrip("ref-delta-sha256", HashKind::Sha256).await
 }
