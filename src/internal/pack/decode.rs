@@ -80,12 +80,20 @@ struct SharedParams {
 impl Drop for Pack {
     fn drop(&mut self) {
         if self.clean_tmp {
-            self.caches.remove_tmp_dir();
+            self.abort_decode();
+            if let Err(e) = self.caches.remove_tmp_dir() {
+                tracing::warn!(error = %e, "failed to remove pack decode temp directory");
+            }
         }
     }
 }
 
 impl Pack {
+    fn abort_decode(&self) {
+        self.pool.join();
+        self.caches.shutdown();
+    }
+
     /// # Parameters
     /// - `thread_num`: The number of threads to use for decoding and cache, `None` mean use the number of logical CPUs.
     ///   It can't be zero, or panic <br>
@@ -326,19 +334,21 @@ impl Pack {
                 )))
             }
             ObjectType::OffsetDelta | ObjectType::OffsetZstdelta => {
-                let (delta_offset, bytes) = utils::read_offset_encoding(&mut reader).unwrap();
+                let (delta_offset, bytes) =
+                    utils::read_offset_encoding(&mut reader).map_err(|e| {
+                        GitError::InvalidPackFile(format!("Read offset-delta base error: {e}"))
+                    })?;
                 *offset += bytes;
 
                 let (data, raw_size) = Pack::decompress_data(&mut reader, size)?;
                 *offset += raw_size;
 
-                // Count the base object offset: the current offset - delta offset
-                let base_offset = init_offset
-                    .checked_sub(delta_offset as usize)
-                    .ok_or_else(|| {
-                        GitError::InvalidObjectInfo("Invalid OffsetDelta offset".to_string())
-                    })
-                    .unwrap();
+                let delta_offset = usize::try_from(delta_offset).map_err(|_| {
+                    GitError::InvalidObjectInfo("Invalid OffsetDelta offset".to_string())
+                })?;
+                let base_offset = init_offset.checked_sub(delta_offset).ok_or_else(|| {
+                    GitError::InvalidObjectInfo("Invalid OffsetDelta offset".to_string())
+                })?;
 
                 let mut reader = Cursor::new(&data);
                 let (_, final_size) = utils::read_delta_object_size(&mut reader)?;
@@ -364,7 +374,9 @@ impl Pack {
             }
             ObjectType::HashDelta => {
                 // Read hash bytes to get the reference object hash(size depends on hash kind,e.g.,20 for SHA1,32 for SHA256)
-                let ref_sha = ObjectHash::from_stream(&mut reader).unwrap();
+                let ref_sha = ObjectHash::from_stream(&mut reader).map_err(|e| {
+                    GitError::InvalidPackFile(format!("Read hash-delta base hash error: {e}"))
+                })?;
                 // Offset is incremented by 20/32 bytes
                 *offset += get_hash_kind().size();
 
@@ -513,6 +525,7 @@ impl Pack {
                 }
                 Ok(None) => {}
                 Err(e) => {
+                    self.abort_decode();
                     return Err(e);
                 }
             }
@@ -520,9 +533,18 @@ impl Pack {
         }
         log_info(i, self);
         let render_hash = reader.final_hash();
-        self.signature = ObjectHash::from_stream(&mut reader).unwrap();
+        self.signature = match ObjectHash::from_stream(&mut reader) {
+            Ok(signature) => signature,
+            Err(e) => {
+                self.abort_decode();
+                return Err(GitError::InvalidPackFile(format!(
+                    "Error reading pack trailer hash: {e}"
+                )));
+            }
+        };
 
         if render_hash != self.signature {
+            self.abort_decode();
             return Err(GitError::InvalidPackFile(format!(
                 "The pack file hash {} does not match the trailer hash {}",
                 render_hash, self.signature
@@ -531,6 +553,7 @@ impl Pack {
 
         let end = utils::is_eof(&mut reader);
         if !end {
+            self.abort_decode();
             return Err(GitError::InvalidPackFile(
                 "The pack file is not at the end".to_string(),
             ));
@@ -845,6 +868,32 @@ mod tests {
             }
             Err(e) => panic!("Decompression failed: {e:?}"),
         }
+    }
+
+    #[test]
+    fn test_pack_decode_truncated_pack_returns_err_without_panic() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (source, _dl_guard) = download_pack_file("small-sha1.pack");
+        let mut bytes = fs::read(source).unwrap();
+        bytes.truncate(bytes.len() - 1);
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_path = tmp_dir.path().to_path_buf();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let mut buffered = BufReader::new(Cursor::new(bytes));
+            let mut pack = Pack::new(Some(2), Some(1024 * 1024), Some(tmp_path), true);
+            pack.decode(&mut buffered, |_| {}, None::<fn(ObjectHash)>)
+        }));
+
+        assert!(result.is_ok(), "truncated pack decode should not panic");
+        assert!(
+            matches!(
+                result.unwrap(),
+                Err(crate::errors::GitError::InvalidPackFile(_))
+                    | Err(crate::errors::GitError::IOError(_))
+            ),
+            "truncated pack decode should return a pack error"
+        );
     }
 
     #[test]

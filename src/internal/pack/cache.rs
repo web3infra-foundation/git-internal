@@ -143,12 +143,31 @@ impl Caches {
             + self.hash_set.capacity() * (std::mem::size_of::<ObjectHash>())
     }
 
+    pub(crate) fn shutdown(&self) {
+        time_it!("Caches clear", {
+            self.complete_signal.store(true, Ordering::Release);
+            self.pool.join();
+            self.lru_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            self.hash_set.clear();
+            self.hash_set.shrink_to_fit();
+            self.map_offset.clear();
+            self.map_offset.shrink_to_fit();
+        });
+    }
+
     /// remove the tmp dir
-    pub fn remove_tmp_dir(&self) {
+    pub fn remove_tmp_dir(&self) -> io::Result<()> {
         time_it!("Remove tmp dir", {
             if self.tmp_path.exists() {
-                fs::remove_dir_all(&self.tmp_path).unwrap(); //very slow
-                // Try to remove parent .cache_temp directory if it's empty
+                match fs::remove_dir_all(&self.tmp_path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+
                 if let Some(parent) = self.tmp_path.parent() {
                     let is_cache_temp = parent
                         .file_name()
@@ -156,13 +175,21 @@ impl Caches {
                         .map(|n| n == ".cache_temp")
                         .unwrap_or(false);
                     if is_cache_temp {
-                        // Attempt to remove the parent directory if empty
-                        // This will fail silently if the directory is not empty or doesn't exist
-                        let _ = fs::remove_dir(parent);
+                        match fs::remove_dir(parent) {
+                            Ok(()) => {}
+                            Err(e)
+                                if matches!(
+                                    e.kind(),
+                                    io::ErrorKind::DirectoryNotEmpty | io::ErrorKind::NotFound
+                                ) => {}
+                            Err(e) => return Err(e),
+                        }
                     }
                 }
             }
-        });
+
+            Ok(())
+        })
     }
 }
 
@@ -249,15 +276,7 @@ impl _Cache for Caches {
         self.lru_cache.lock().unwrap().current_size() + self.memory_used_index()
     }
     fn clear(&self) {
-        time_it!("Caches clear", {
-            self.complete_signal.store(true, Ordering::Release);
-            self.pool.join();
-            self.lru_cache.lock().unwrap().clear();
-            self.hash_set.clear();
-            self.hash_set.shrink_to_fit();
-            self.map_offset.clear();
-            self.map_offset.shrink_to_fit();
-        });
+        self.shutdown();
 
         assert_eq!(self.pool.queued_count(), 0);
         assert_eq!(self.pool.active_count(), 0);
@@ -391,5 +410,22 @@ mod test {
         handle_sha256.join().unwrap();
 
         assert_eq!(cache.total_inserted(), 2);
+    }
+
+    #[test]
+    fn test_remove_tmp_dir_does_not_panic_when_cleanup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_path = dir.path().join("not-a-directory");
+        fs::write(&tmp_path, b"cache marker").unwrap();
+        let cache = Caches::new(None, tmp_path, 1);
+
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cache.remove_tmp_dir()));
+
+        assert!(result.is_ok(), "cache cleanup should not panic");
+        assert!(
+            result.unwrap().is_err(),
+            "cleanup failure should be returned"
+        );
     }
 }
