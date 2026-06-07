@@ -348,8 +348,8 @@ impl PackEncoder {
         enable_zstdelta: bool,
     ) -> Result<(), GitError> {
         let head = encode_header(self.object_number);
-        self.send_data(head.clone()).await;
         self.inner_hash.update(&head);
+        self.send_data(head).await;
 
         // ensure only one decode can only invoke once
         if self.start_encoding {
@@ -441,28 +441,22 @@ impl PackEncoder {
         )
         .map_err(|e| GitError::PackEncodeError(format!("Task join error: {e}")))?;
 
-        let commit_res = commit_results?;
-        let tree_res = tree_results?;
-        let blob_res = blob_results?;
-        let tag_res = tag_results?;
+        let all_res = [commit_results?, tree_results?, blob_results?, tag_results?];
+        let result_count = all_res.iter().map(Vec::len).sum();
 
-        let mut all_res = vec![commit_res, tree_res, blob_res, tag_res];
-
-        let mut idx_entries = Vec::new();
-        for res in &mut all_res {
-            for data in res {
-                data.1.offset = self.inner_offset as u64;
-                self.write_all_and_update(&data.0).await;
-                idx_entries.push(data.1.clone());
-            }
+        let mut idx_entries = Vec::with_capacity(result_count);
+        for (obj_data, mut idx_entry) in all_res.into_iter().flatten() {
+            idx_entry.offset = self.inner_offset as u64;
+            self.write_all_and_update(obj_data).await;
+            idx_entries.push(idx_entry);
         }
 
         self.idx_entries = Some(idx_entries);
 
         // Hash signature
-        let hash_result = self.inner_hash.clone().finalize();
+        let hash_result: Vec<u8> = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
-        self.send_data(hash_result.to_vec()).await;
+        self.send_data(hash_result).await;
 
         self.drop_sender();
         Ok(())
@@ -482,7 +476,7 @@ impl PackEncoder {
     ) -> Result<Vec<(Vec<u8>, IndexEntry)>, GitError> {
         let mut current_offset = 0usize;
         let mut window: VecDeque<(Entry, usize)> = VecDeque::with_capacity(window_size);
-        let mut res: Vec<(Vec<u8>, IndexEntry)> = Vec::new();
+        let mut res: Vec<(Vec<u8>, IndexEntry)> = Vec::with_capacity(bucket.len());
         //let mut idx_entries: Vec<IndexEntry> = Vec::new();
 
         for entry in bucket.iter_mut() {
@@ -584,8 +578,8 @@ impl PackEncoder {
             if window.len() > window_size {
                 window.pop_front();
             }
-            res.push((obj_data.clone(), IndexEntry::new(entry, 0)));
             current_offset += obj_data.len();
+            res.push((obj_data, IndexEntry::new(entry, 0)));
         }
         Ok(res)
     }
@@ -602,8 +596,8 @@ impl PackEncoder {
         }
 
         let head = encode_header(self.object_number);
-        self.send_data(head.clone()).await;
         self.inner_hash.update(&head);
+        self.send_data(head).await;
 
         // ensure only one decode can only invoke once
         if self.start_encoding {
@@ -653,10 +647,10 @@ impl PackEncoder {
 
             time_it!("parallel encode: write batch", {
                 for obj_data in batch_result {
-                    let mut obj_data = obj_data?;
-                    obj_data.1.offset = self.inner_offset as u64;
-                    self.write_all_and_update(&obj_data.0).await;
-                    idx_entries.push(obj_data.1);
+                    let (obj_data, mut idx_entry) = obj_data?;
+                    idx_entry.offset = self.inner_offset as u64;
+                    self.write_all_and_update(obj_data).await;
+                    idx_entries.push(idx_entry);
                 }
             });
         }
@@ -670,20 +664,20 @@ impl PackEncoder {
         }
 
         // hash signature
-        let hash_result = self.inner_hash.clone().finalize();
+        let hash_result: Vec<u8> = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
-        self.send_data(hash_result.to_vec()).await;
+        self.send_data(hash_result).await;
         self.drop_sender();
 
         self.idx_entries = Some(idx_entries);
         Ok(())
     }
 
-    /// Write data to writer and update hash & offset
-    async fn write_all_and_update(&mut self, data: &[u8]) {
-        self.inner_hash.update(data);
+    /// Update hash and offset, then move an already-owned encoded chunk to the output channel.
+    async fn write_all_and_update(&mut self, data: Vec<u8>) {
+        self.inner_hash.update(&data);
         self.inner_offset += data.len();
-        self.send_data(data.to_vec()).await;
+        self.send_data(data).await;
     }
 
     async fn generate_idx_file(&mut self) -> Result<(), GitError> {
@@ -746,7 +740,7 @@ impl PackEncoder {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Cursor, path::PathBuf, sync::Arc, time::Instant};
+    use std::{collections::HashMap, io::Cursor, path::PathBuf, sync::Arc, time::Instant};
 
     use tempfile::tempdir;
     use tokio::sync::Mutex;
@@ -791,6 +785,192 @@ mod tests {
         tracing::debug!("start check format");
         p.decode(&mut reader, |_| {}, None::<fn(ObjectHash)>)
             .expect("pack file format error");
+    }
+
+    fn parse_small_idx_offsets(idx_bytes: &[u8], hash_len: usize) -> HashMap<Vec<u8>, u64> {
+        let fanout_start = 8;
+        let fanout_end = fanout_start + 256 * 4;
+        let object_count = u32::from_be_bytes(
+            idx_bytes[fanout_end - 4..fanout_end]
+                .try_into()
+                .expect("fanout count"),
+        ) as usize;
+        let names_end = fanout_end + object_count * hash_len;
+        let names = &idx_bytes[fanout_end..names_end];
+        let offsets_start = names_end + object_count * 4;
+
+        (0..object_count)
+            .map(|index| {
+                let offset_start = offsets_start + index * 4;
+                let offset = u32::from_be_bytes(
+                    idx_bytes[offset_start..offset_start + 4]
+                        .try_into()
+                        .expect("idx offset"),
+                );
+                assert_eq!(
+                    offset & 0x8000_0000,
+                    0,
+                    "test pack should use small offsets"
+                );
+                (
+                    names[index * hash_len..(index + 1) * hash_len].to_vec(),
+                    offset as u64,
+                )
+            })
+            .collect()
+    }
+
+    fn test_entry(obj_type: ObjectType, data: &[u8]) -> Entry {
+        Entry {
+            obj_type,
+            data: data.to_vec(),
+            hash: ObjectHash::from_type_and_data(obj_type, data),
+            chain_len: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_write_all_and_update_moves_buffer_to_sender() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut encoder = PackEncoder::new(1, 0, tx);
+        let payload = b"encoded object data".to_vec();
+        let payload_ptr = payload.as_ptr();
+        let initial_offset = encoder.inner_offset;
+
+        encoder.write_all_and_update(payload).await;
+
+        let sent = rx.recv().await.expect("encoded data should be sent");
+        assert_eq!(sent, b"encoded object data");
+        // Pointer identity is intentional: this test guards the owned no-copy fast path.
+        assert_eq!(sent.as_ptr(), payload_ptr);
+        assert_eq!(encoder.inner_offset, initial_offset + sent.len());
+    }
+
+    #[tokio::test]
+    async fn test_write_all_and_update_moves_multiple_buffers_and_updates_hash() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (tx, mut rx) = mpsc::channel(2);
+        let mut encoder = PackEncoder::new(2, 0, tx);
+        let first = b"first encoded object".to_vec();
+        let second = b"second encoded object".to_vec();
+        let initial_offset = encoder.inner_offset;
+        let mut expected_hash = HashAlgorithm::new();
+        expected_hash.update(&first);
+        expected_hash.update(&second);
+
+        encoder.write_all_and_update(first).await;
+        encoder.write_all_and_update(second).await;
+
+        let sent_first = rx.recv().await.expect("first object should be sent");
+        let sent_second = rx.recv().await.expect("second object should be sent");
+        assert_eq!(sent_first, b"first encoded object");
+        assert_eq!(sent_second, b"second encoded object");
+        assert_eq!(
+            encoder.inner_offset,
+            initial_offset + sent_first.len() + sent_second.len()
+        );
+        assert_eq!(
+            encoder.inner_hash.clone().finalize(),
+            expected_hash.finalize()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_windowed_encoder_preserves_order_hash_and_idx_offsets() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let blob_base = vec![b'a'; 512];
+        let mut blob_delta = vec![b'a'; 511];
+        blob_delta[510] = b'b';
+        let entries = vec![
+            test_entry(ObjectType::Tag, b"tag data"),
+            test_entry(ObjectType::Blob, &blob_delta),
+            test_entry(ObjectType::Tree, b"tree data"),
+            test_entry(ObjectType::Blob, &blob_base),
+            test_entry(ObjectType::Commit, b"commit data"),
+        ];
+        let expected_types = [
+            ObjectType::Commit,
+            ObjectType::Tree,
+            ObjectType::Blob,
+            ObjectType::Blob,
+            ObjectType::Tag,
+        ];
+        let (pack_tx, mut pack_rx) = mpsc::channel(32);
+        let (idx_tx, mut idx_rx) = mpsc::channel(1024);
+        let (entry_tx, entry_rx) = mpsc::channel(entries.len());
+        let mut encoder = PackEncoder::new_with_idx(entries.len(), 10, pack_tx, idx_tx);
+
+        for entry in entries {
+            entry_tx
+                .send(MetaAttached {
+                    inner: entry,
+                    meta: EntryMeta::new(),
+                })
+                .await
+                .expect("send entry");
+        }
+        drop(entry_tx);
+
+        encoder.encode(entry_rx).await.expect("encode pack");
+        let pack_hash = encoder.get_hash().expect("pack hash");
+        let mut pack_bytes = Vec::new();
+        while let Some(chunk) = pack_rx.recv().await {
+            pack_bytes.extend(chunk);
+        }
+        let hash_len = pack_hash.size();
+        assert_eq!(
+            &pack_bytes[pack_bytes.len() - hash_len..],
+            pack_hash.as_ref()
+        );
+
+        encoder.encode_idx_file().await.expect("encode idx");
+        let mut idx_bytes = Vec::new();
+        while let Some(chunk) = idx_rx.recv().await {
+            idx_bytes.extend(chunk);
+        }
+        assert_eq!(
+            &idx_bytes[idx_bytes.len() - 2 * hash_len..idx_bytes.len() - hash_len],
+            pack_hash.as_ref()
+        );
+
+        let cache_dir = tempdir().expect("cache tempdir");
+        let decoded = Arc::new(Mutex::new(Vec::new()));
+        let decoded_for_callback = decoded.clone();
+        let mut pack = Pack::new(None, None, Some(cache_dir.path().join("pack-cache")), true);
+        pack.decode(
+            &mut Cursor::new(&pack_bytes),
+            move |entry| decoded_for_callback.blocking_lock().push(entry),
+            None::<fn(ObjectHash)>,
+        )
+        .expect("decode generated pack");
+
+        let decoded = decoded.lock().await;
+        let mut decoded_in_pack_order = decoded.iter().collect::<Vec<_>>();
+        decoded_in_pack_order.sort_by_key(|entry| entry.meta.pack_offset);
+        assert_eq!(
+            decoded_in_pack_order
+                .iter()
+                .map(|entry| entry.inner.obj_type)
+                .collect::<Vec<_>>(),
+            expected_types
+        );
+        assert!(
+            decoded
+                .iter()
+                .any(|entry| entry.meta.is_delta == Some(true)),
+            "windowed encode should emit at least one delta object"
+        );
+
+        let idx_offsets = parse_small_idx_offsets(&idx_bytes, hash_len);
+        for entry in decoded.iter() {
+            assert_eq!(
+                idx_offsets.get(entry.inner.hash.as_ref()),
+                entry.meta.pack_offset.map(|offset| offset as u64).as_ref(),
+                "idx offset mismatch for {}",
+                entry.inner.hash
+            );
+        }
     }
 
     #[tokio::test]
