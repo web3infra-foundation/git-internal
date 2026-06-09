@@ -132,6 +132,74 @@ pub fn heuristic_encode_rate_rabin(old_data: &[u8], new_data: &[u8]) -> f64 {
     encode::rabin::heuristic_encode_rate_rabin(old_data, new_data)
 }
 
+// ── Re-exports for index-caching and optimized delta APIs ───────────────
+
+/// Re-export `RabinDeltaIndex` for external index caching.
+#[cfg(feature = "diff_rabin")]
+pub use encode::rabin::RabinDeltaIndex;
+
+/// Build a Rabin fingerprint index from source data (available with `diff_rabin`).
+///
+/// The index can be cached and reused across multiple delta computations
+/// against the same source, avoiding redundant index construction.
+#[cfg(feature = "diff_rabin")]
+pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
+    encode::rabin::create_delta_index(source)
+}
+
+/// Produce a delta using a pre-built index (available with `diff_rabin`).
+///
+/// Skips index construction — the caller supplies a cached `RabinDeltaIndex`.
+#[cfg(feature = "diff_rabin")]
+pub fn encode_rabin_with_index(index: &RabinDeltaIndex, target: &[u8]) -> Vec<u8> {
+    encode::rabin::encode_rabin_with_index(index, target)
+}
+
+/// Produce a delta with early termination if output exceeds `max_size`
+/// (available with `diff_rabin`).
+///
+/// Returns `None` if the delta was aborted because it would exceed `max_size`.
+/// This is the fast path for candidate scoring: try many bases, abort early
+/// when a candidate can't beat the current best.
+#[cfg(feature = "diff_rabin")]
+pub fn encode_rabin_with_index_and_max_size(
+    index: &RabinDeltaIndex,
+    target: &[u8],
+    max_size: usize,
+) -> Option<Vec<u8>> {
+    encode::rabin::encode_rabin_with_index_and_max_size(index, target, max_size)
+}
+
+/// Git-compatible name hash for delta-friendly object sorting.
+///
+/// Implements git's `pack_name_hash` for use in `magic_sort` to cluster
+/// files with similar paths together, maximizing delta opportunities.
+///
+/// Always available regardless of feature flags — this is a standalone
+/// hash function that doesn't depend on rabin.
+///
+/// Accepts raw bytes to avoid any allocation overhead in sort comparators.
+/// Git paths are always valid UTF-8 / ASCII.
+pub fn pack_name_hash(path_bytes: &[u8]) -> u32 {
+    // Extract the last path component by scanning for '/' from the end.
+    // This avoids any string allocation overhead.
+    let start = path_bytes
+        .iter()
+        .rposition(|&b| b == b'/')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let name = &path_bytes[start..];
+
+    let mut hash: u32 = 0;
+    for &c in name {
+        if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' {
+            continue;
+        }
+        hash = (hash >> 2).wrapping_add((c as u32) << 24);
+    }
+    hash
+}
+
 #[cfg(test)]
 mod tests {
     use super::{encode_rate, heuristic_encode_rate, heuristic_encode_rate_parallel};

@@ -130,28 +130,34 @@ static U: [u32; 256] = [
 
 /// A single hash-index entry: offset into source buffer and its Rabin fingerprint.
 #[derive(Debug, Clone, Copy)]
-struct IndexEntry {
-    offset: u32,
-    hash: u32,
+pub struct IndexEntry {
+    pub offset: u32,
+    pub hash: u32,
 }
 
 /// Pre-built Rabin fingerprint index over a source buffer.
-struct RabinDeltaIndex {
+///
+/// This can be cached and reused across multiple delta computations against
+/// the same source — matching git's approach where `delta_index` is created
+/// once per source and reused for all target candidates in the window.
+pub struct RabinDeltaIndex {
     /// Copy of the source data for match extension.
-    source: Vec<u8>,
+    pub source: Vec<u8>,
     /// All index entries packed consecutively, grouped by bucket.
-    entries: Box<[IndexEntry]>,
+    pub entries: Box<[IndexEntry]>,
     /// Start indices into `entries` per bucket; `buckets.len() == hash_mask + 2`
     /// (last entry is a sentinel marking the end of the last bucket).
-    buckets: Box<[u32]>,
+    pub buckets: Box<[u32]>,
     /// Bitmask for fast `hash & mask` bucket lookup.
-    hash_mask: u32,
+    pub hash_mask: u32,
 }
 
 // ── Index construction ───────────────────────────────────────────────────
 
 /// Build a Rabin fingerprint index over `source`, following Git's `create_delta_index`.
-fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
+///
+/// Returns `None` if the source is too short to index (< RABIN_WINDOW bytes).
+pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
     let src_len = source.len();
     if src_len == 0 {
         return None;
@@ -318,7 +324,15 @@ fn push_copy_op(out: &mut Vec<u8>, offset: u32, size: u32) {
 }
 
 /// Generate a delta from `index` for `target`, following Git's `create_delta`.
-fn create_delta(index: &RabinDeltaIndex, target: &[u8]) -> Vec<u8> {
+///
+/// If `max_size` is `Some(n)`, the computation aborts early and returns `None`
+/// as soon as the output exceeds `n` bytes. This matches git's `max_size`
+/// parameter in `create_delta`, used for early termination during candidate scoring.
+fn create_delta(
+    index: &RabinDeltaIndex,
+    target: &[u8],
+    max_size: Option<usize>,
+) -> Option<Vec<u8>> {
     let src_data = &index.source;
     let src_len = src_data.len();
     let trg_len = target.len();
@@ -332,7 +346,7 @@ fn create_delta(index: &RabinDeltaIndex, target: &[u8]) -> Vec<u8> {
     write_varint(trg_len, &mut out);
 
     if trg_len == 0 {
-        return out;
+        return Some(out);
     }
 
     let hmask = index.hash_mask as usize;
@@ -494,6 +508,13 @@ fn create_delta(index: &RabinDeltaIndex, target: &[u8]) -> Vec<u8> {
             }
         }
 
+        // Early termination: if output already exceeds max_size, abort.
+        if let Some(max) = max_size
+            && out.len() > max
+        {
+            return None;
+        }
+
         // Grow output buffer if needed
         if out.len() + MAX_OP_SIZE > out.capacity() {
             out.reserve(MAX_OP_SIZE * 2);
@@ -505,7 +526,14 @@ fn create_delta(index: &RabinDeltaIndex, target: &[u8]) -> Vec<u8> {
         out[data_len_pos] = inscnt as u8;
     }
 
-    out
+    // Final max_size check before returning
+    if let Some(max) = max_size
+        && out.len() > max
+    {
+        return None;
+    }
+
+    Some(out)
 }
 
 // ── Public API ───────────────────────────────────────────────────────────
@@ -528,11 +556,43 @@ pub fn encode_rabin(old_data: &[u8], new_data: &[u8]) -> Vec<u8> {
     }
 
     if let Some(index) = create_delta_index(old_data) {
-        create_delta(&index, new_data)
+        create_delta(&index, new_data, None)
+            .expect("delta should always succeed when max_size is None")
     } else {
         // Index creation failed (e.g., old_data too small); emit literal-only delta
         encode_literal_only(old_data.len(), new_data)
     }
+}
+
+/// Encode `new_data` as a Git-compatible delta against a pre-built index.
+///
+/// This skips the index construction step, allowing the caller to cache and
+/// reuse the index across multiple target objects — matching git's approach
+/// where `delta_index` is built once per source in the delta window.
+pub fn encode_rabin_with_index(index: &RabinDeltaIndex, target: &[u8]) -> Vec<u8> {
+    create_delta(index, target, None)
+        .expect("delta should always succeed when max_size is None")
+}
+
+/// Encode `new_data` as a delta against a pre-built index, with early
+/// termination if the output exceeds `max_size` bytes.
+///
+/// Returns `None` if the delta was aborted (output would exceed `max_size`),
+/// or if the output is empty. This is the key optimization for candidate scoring:
+/// we can try many candidates rapidly, aborting as soon as a delta exceeds
+/// the current best.
+pub fn encode_rabin_with_index_and_max_size(
+    index: &RabinDeltaIndex,
+    target: &[u8],
+    max_size: usize,
+) -> Option<Vec<u8>> {
+    if target.is_empty() {
+        let mut out = Vec::with_capacity(4);
+        write_varint(index.source.len(), &mut out);
+        write_varint(0, &mut out);
+        return Some(out);
+    }
+    create_delta(index, target, Some(max_size))
 }
 
 /// Compute the similarity rate (shared bytes / new_data length) by running
@@ -547,7 +607,8 @@ pub fn rabin_encode_rate(old_data: &[u8], new_data: &[u8]) -> f64 {
     }
 
     if let Some(index) = create_delta_index(old_data) {
-        let delta = create_delta(&index, new_data);
+        let delta = create_delta(&index, new_data, None)
+            .expect("delta should always succeed when max_size is None");
         // Estimate shared bytes from delta size:
         // delta_size ≈ header(4-10) + literal_bytes + copy_op_bytes(3-8 each)
         // shared_bytes ≈ new_size - (delta_size - header - copy_op_overhead)

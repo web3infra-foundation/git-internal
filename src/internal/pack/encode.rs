@@ -13,7 +13,6 @@ use ahash::AHasher;
 // use libc::ungetc;
 use chrono::Utc;
 use flate2::write::ZlibEncoder;
-use natord::compare;
 use rayon::prelude::*;
 //use tokio::io::AsyncWriteExt;
 use tokio::io::AsyncWriteExt as TokioAsyncWriteExt;
@@ -264,7 +263,11 @@ fn encode_one_object(entry: &Entry, offset: Option<usize>) -> Result<Vec<u8>, Gi
     Ok(encoded_data)
 }
 
-/// Magic sort function for entries
+/// Magic sort function for entries.
+///
+/// Sorts by: path existence → dir → name_hash (desc) → size (desc) → pointer.
+/// The name_hash (git's `pack_name_hash`) clusters files with similar names
+/// together, maximizing delta opportunities within the sliding window.
 fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryMeta>) -> Ordering {
     let path_a = a.meta.file_path.as_ref();
     let path_b = b.meta.file_path.as_ref();
@@ -275,18 +278,18 @@ fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryM
             let pa = Path::new(pa);
             let pb = Path::new(pb);
 
-            // 1. Compare parent directory paths
+            // 1a. Compare parent directory paths
             let dir_ord = pa.parent().cmp(&pb.parent());
             if dir_ord != Ordering::Equal {
                 return dir_ord;
             }
 
-            // 2. Compare filenames (natural sort)
-            let name_a = pa.file_name().unwrap_or_default().to_string_lossy();
-            let name_b = pb.file_name().unwrap_or_default().to_string_lossy();
-            let name_ord = compare(&name_a, &name_b);
-            if name_ord != Ordering::Equal {
-                return name_ord;
+            // 1b. Compare by name hash (descending).
+            // Uses raw bytes for zero-allocation comparison.
+            let hash_a = delta::pack_name_hash(pa.as_os_str().as_encoded_bytes());
+            let hash_b = delta::pack_name_hash(pb.as_os_str().as_encoded_bytes());
+            if hash_a != hash_b {
+                return hash_b.cmp(&hash_a); // descending
             }
         }
         (Some(_), None) => return Ordering::Less, // entries with paths sort first
@@ -294,29 +297,91 @@ fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryM
         (None, None) => {}
     }
 
+    // 2. Sort by size descending (larger objects first — better as delta bases)
     let ord = b.inner.data.len().cmp(&a.inner.data.len());
     if ord != Ordering::Equal {
         return ord;
     }
 
-    // fallback pointer order (newest first)
+    // 3. Fallback pointer order (newest first)
     (a as *const MetaAttached<Entry, EntryMeta>).cmp(&(b as *const MetaAttached<Entry, EntryMeta>))
 }
 
-/// Calculate hash of data
+/// Calculate hash of data (used for fast similarity checks).
 fn calc_hash(data: &[u8]) -> u64 {
     let mut hasher = AHasher::default();
     data.hash(&mut hasher);
     hasher.finish()
 }
 
-/// Cheap check if two byte slices are similar by comparing their hashes of the first 128 bytes.
+/// Multi-point similarity check: compares hashes at the beginning and end
+/// of both buffers. If either region matches, the buffers are likely similar
+/// enough to be worth delta computation.
+///
+/// This is more lenient than the original `cheap_similar` (which only checked
+/// the first 128 bytes), catching cases where files share content after
+/// different headers (e.g., different license headers but identical code).
+#[cfg(feature = "diff_rabin")]
+fn multi_point_similar(a: &[u8], b: &[u8]) -> bool {
+    let min_len = a.len().min(b.len());
+    if min_len < 16 {
+        return false;
+    }
+
+    // Check beginning (first 128 bytes or whole buffer)
+    let head_len = 128.min(min_len);
+    if calc_hash(&a[..head_len]) == calc_hash(&b[..head_len]) {
+        return true;
+    }
+
+    // Check end (last 128 bytes)
+    let tail_start = min_len.saturating_sub(128);
+    if calc_hash(&a[tail_start..min_len]) == calc_hash(&b[tail_start..min_len]) {
+        return true;
+    }
+
+    false
+}
+
+/// Cheap check if two byte slices are similar by comparing their hashes
+/// of the first 128 bytes. Used only in the non-rabin path.
+#[cfg(not(feature = "diff_rabin"))]
 fn cheap_similar(a: &[u8], b: &[u8]) -> bool {
     let k = a.len().min(b.len()).min(128);
     if k == 0 {
         return false;
     }
     calc_hash(&a[..k]) == calc_hash(&b[..k])
+}
+
+/// A window entry for delta base selection with optional cached Rabin index.
+///
+/// When `diff_rabin` is enabled, the index is built once per source entry
+/// and reused across all target candidates — matching git's approach where
+/// `delta_index` is cached in the window's `unpacked` struct.
+#[cfg(feature = "diff_rabin")]
+struct DeltaWindowEntry {
+    entry: Entry,
+    offset: usize,
+    rabin_index: Option<delta::RabinDeltaIndex>,
+}
+
+/// Window entry without rabin support.
+#[cfg(not(feature = "diff_rabin"))]
+struct DeltaWindowEntry {
+    entry: Entry,
+    offset: usize,
+}
+
+impl DeltaWindowEntry {
+    fn new(entry: Entry, offset: usize) -> Self {
+        Self {
+            entry,
+            offset,
+            #[cfg(feature = "diff_rabin")]
+            rabin_index: None,
+        }
+    }
 }
 
 impl PackEncoder {
@@ -560,49 +625,97 @@ impl PackEncoder {
         enable_rabin: bool,
     ) -> Result<Vec<(Vec<u8>, IndexEntry)>, GitError> {
         let mut current_offset = 0usize;
-        let mut window: VecDeque<(Entry, usize)> = VecDeque::with_capacity(window_size);
+        let mut window: VecDeque<DeltaWindowEntry> = VecDeque::with_capacity(window_size);
         let mut res: Vec<(Vec<u8>, IndexEntry)> = Vec::new();
-        //let mut idx_entries: Vec<IndexEntry> = Vec::new();
 
         for entry in bucket.iter_mut() {
-            //let entry_for_window = entry.clone();
-            // 每次循环重置最佳基对象选择
-            let mut best_base: Option<&(Entry, usize)> = None;
+            let mut best_base: Option<&DeltaWindowEntry> = None;
             let mut best_rate: f64 = 0.0;
 
             // Fast pre-filter using cheap_similar + size ratio + heuristic rate.
             // When diff_rabin is available, we use actual rabin delta sizes for
-            // scoring (O(n), fast and accurate). Without it, we fall back to
-            // heuristic rate estimates (fast but less accurate), because computing
-            // full Myers deltas for every candidate would be too slow.
+            // scoring (O(n), fast and accurate) with index caching and max_size
+            // early termination. Without it, we fall back to heuristic rate
+            // estimates (fast but less accurate).
             #[cfg(feature = "diff_rabin")]
             {
-                let pre_filtered: Vec<_> = window
+                let trg_size = entry.data.len();
+
+                // Collect indices of filtered candidates, iterating from
+                // most recent (back of window) to oldest (front). Most
+                // recent entries are more likely to be good delta bases
+                // when name_hash sorting clusters related files.
+                let pre_filtered_idxs: Vec<usize> = window
                     .iter()
-                    .filter(|try_base| {
-                        try_base.0.obj_type == entry.obj_type
-                            && try_base.0.chain_len < MAX_CHAIN_LEN
-                            && try_base.0.hash != entry.hash
-                            && (try_base.0.data.len().min(entry.data.len()) as f64)
-                                / (try_base.0.data.len().max(entry.data.len()) as f64)
-                                >= 0.5
-                            && cheap_similar(&try_base.0.data, &entry.data)
+                    .enumerate()
+                    .rev() // most recent first (matching git's search order)
+                    .filter(|(_i, try_base)| {
+                        let src_size = try_base.entry.data.len();
+                        try_base.entry.obj_type == entry.obj_type
+                            && try_base.entry.chain_len < MAX_CHAIN_LEN
+                            && try_base.entry.hash != entry.hash
+                            // Git's size filter: src_size / 32 <= trg_size
+                            && trg_size >= src_size / 32
+                            // Sizediff must be less than half target size
+                            && src_size.saturating_sub(trg_size.min(src_size))
+                                < trg_size / 2
+                            // Multi-point similarity: check head AND tail
+                            // to catch files that share content after
+                            // different headers.
+                            && multi_point_similar(&try_base.entry.data, &entry.data)
                     })
+                    .map(|(i, _)| i)
                     .collect();
 
-                if !pre_filtered.is_empty() {
-                    let mut best_delta_size = usize::MAX;
-                    for try_base in &pre_filtered {
-                        // Use rabin for fast O(n) actual-delta scoring
-                        let delta_size =
-                            delta::encode_rabin(&try_base.0.data, &entry.data).len();
-                        if delta_size < best_delta_size {
-                            best_delta_size = delta_size;
-                            best_rate =
-                                1.0 - delta_size as f64 / entry.data.len() as f64;
-                            best_base = Some(*try_base);
+                if !pre_filtered_idxs.is_empty() {
+                    // Progressive max_size matching git's try_delta:
+                    //   max_size = trg_size/2 - hash_size
+                    // Deltas larger than this aren't worth the overhead.
+                    let max_delta_size = trg_size.saturating_sub(trg_size / 2 + 20);
+                    let mut best_delta_size = max_delta_size;
+                    let mut best_idx: Option<usize> = None;
+
+                    // Score candidates with index caching and max_size early
+                    // termination — matching git's try_delta approach.
+                    for &idx in &pre_filtered_idxs {
+                        // Ensure the rabin index is cached (built once per source).
+                        // Small objects (< RABIN_WINDOW+1 bytes) can't be indexed;
+                        // skip them as they won't produce useful deltas anyway.
+                        if window[idx].rabin_index.is_none() {
+                            match delta::create_delta_index(&window[idx].entry.data) {
+                                Some(new_index) => {
+                                    window[idx].rabin_index = Some(new_index);
+                                }
+                                None => {
+                                    // Source too small to index — skip this candidate
+                                    continue;
+                                }
+                            }
+                        }
+
+                        // Scope the index borrow so `best_base` can later
+                        // immutably borrow `window[idx]`.
+                        let delta = {
+                            let index = window[idx].rabin_index.as_ref().unwrap();
+                            delta::encode_rabin_with_index_and_max_size(
+                                index,
+                                &entry.data,
+                                best_delta_size,
+                            )
+                        };
+
+                        if let Some(delta_data) = delta {
+                            let delta_size = delta_data.len();
+                            if delta_size < best_delta_size {
+                                best_delta_size = delta_size;
+                                best_rate = 1.0
+                                    - delta_size as f64 / entry.data.len() as f64;
+                                best_idx = Some(idx);
+                            }
                         }
                     }
+
+                    best_base = best_idx.map(|i| &window[i]);
                 }
             }
 
@@ -614,24 +727,26 @@ impl PackEncoder {
                     .par_iter()
                     .with_min_len(3)
                     .filter_map(|try_base| {
-                        if try_base.0.obj_type != entry.obj_type
-                            || try_base.0.chain_len >= MAX_CHAIN_LEN
-                            || try_base.0.hash == entry.hash
+                        if try_base.entry.obj_type != entry.obj_type
+                            || try_base.entry.chain_len >= MAX_CHAIN_LEN
+                            || try_base.entry.hash == entry.hash
                         {
                             return None;
                         }
-                        let sym_ratio = (try_base.0.data.len().min(entry.data.len()) as f64)
-                            / (try_base.0.data.len().max(entry.data.len()) as f64);
-                        if sym_ratio < 0.5 || !cheap_similar(&try_base.0.data, &entry.data) {
+                        let sym_ratio = (try_base.entry.data.len().min(entry.data.len()) as f64)
+                            / (try_base.entry.data.len().max(entry.data.len()) as f64);
+                        if sym_ratio < 0.5
+                            || !cheap_similar(&try_base.entry.data, &entry.data)
+                        {
                             return None;
                         }
-                        let rate = if (try_base.0.data.len() + entry.data.len()) / 2 > 64 {
+                        let rate = if (try_base.entry.data.len() + entry.data.len()) / 2 > 64 {
                             delta::heuristic_encode_rate_parallel(
-                                &try_base.0.data,
+                                &try_base.entry.data,
                                 &entry.data,
                             )
                         } else {
-                            delta::encode_rate(&try_base.0.data, &entry.data)
+                            delta::encode_rate(&try_base.entry.data, &entry.data)
                         };
                         if rate > MIN_DELTA_RATE {
                             Some((rate, try_base))
@@ -652,7 +767,7 @@ impl PackEncoder {
                             let is_better = if rate > best_rate + tie_epsilon {
                                 true
                             } else if (rate - best_rate).abs() <= tie_epsilon {
-                                try_base.0.chain_len > best_base_ref.0.chain_len
+                                try_base.entry.chain_len > best_base_ref.entry.chain_len
                             } else {
                                 false
                             };
@@ -676,7 +791,7 @@ impl PackEncoder {
             let offset = best_base.map(|best_base| {
                 let delta = if enable_zstdelta {
                     entry.obj_type = ObjectType::OffsetZstdelta;
-                    zstdelta::diff(&best_base.0.data, &entry.data)
+                    zstdelta::diff(&best_base.entry.data, &entry.data)
                         .map_err(|e| {
                             GitError::DeltaObjectError(format!("zstdelta diff failed: {e}"))
                         })
@@ -686,25 +801,25 @@ impl PackEncoder {
                     #[cfg(feature = "diff_rabin")]
                     if enable_rabin {
                         entry.obj_type = ObjectType::OffsetDelta;
-                        delta::encode_rabin(&best_base.0.data, &entry.data)
+                        delta::encode_rabin(&best_base.entry.data, &entry.data)
                     } else {
                         entry.obj_type = ObjectType::OffsetDelta;
-                        delta::encode(&best_base.0.data, &entry.data)
+                        delta::encode(&best_base.entry.data, &entry.data)
                     }
                     #[cfg(not(feature = "diff_rabin"))]
                     {
                         entry.obj_type = ObjectType::OffsetDelta;
-                        delta::encode(&best_base.0.data, &entry.data)
+                        delta::encode(&best_base.entry.data, &entry.data)
                     }
                 };
                 entry.data = delta;
-                entry.chain_len = best_base.0.chain_len + 1;
-                current_offset - best_base.1
+                entry.chain_len = best_base.entry.chain_len + 1;
+                current_offset - best_base.offset
             });
 
             entry_for_window.chain_len = entry.chain_len;
             let obj_data = encode_one_object(entry, offset)?;
-            window.push_back((entry_for_window, current_offset));
+            window.push_back(DeltaWindowEntry::new(entry_for_window, current_offset));
             if window.len() > window_size {
                 window.pop_front();
             }
