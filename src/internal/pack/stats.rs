@@ -2,9 +2,11 @@ use std::{
     fmt,
     fs::File,
     io::BufReader,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
+
+use tempfile::TempDir;
 
 use crate::{
     errors::GitError,
@@ -62,8 +64,9 @@ impl PackStats {
             .map_err(|e| GitError::InvalidPackFile(format!("Failed to open pack file: {e}")))?;
         let mut reader = BufReader::new(f);
 
-        let tmp = PathBuf::from("./.cache_temp");
-        let mut pack = Pack::new(None, None, Some(tmp), true);
+        let temp_dir = TempDir::new()
+            .map_err(|e| GitError::InvalidPackFile(format!("Failed to create temp dir: {e}")))?;
+        let mut pack = Pack::new(None, None, Some(temp_dir.path().to_path_buf()), true);
 
         let stats = Arc::new(Mutex::new(PackStats::default()));
         let stats_cloned = Arc::clone(&stats);
@@ -117,8 +120,7 @@ mod tests {
     fn test_analyze_small_pack_sha1() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let (pack_path, _dl_guard) = download_pack_file("small-sha1.pack");
-        let stats =
-            PackStats::analyze(pack_path).expect("Failed to analyze");
+        let stats = PackStats::analyze(pack_path).expect("Failed to analyze");
 
         assert!(stats.total > 0);
         assert_eq!(
@@ -131,8 +133,7 @@ mod tests {
     fn test_analyze_small_pack_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let (pack_path, _dl_guard) = download_pack_file("small-sha256.pack");
-        let stats =
-            PackStats::analyze(pack_path).expect("Failed to analyze");
+        let stats = PackStats::analyze(pack_path).expect("Failed to analyze");
 
         assert!(stats.total > 0);
         assert_eq!(
@@ -145,8 +146,7 @@ mod tests {
     fn test_analyze_delta_pack_sha1() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let (pack_path, _dl_guard) = download_pack_file("ref-delta-sha1.pack");
-        let stats =
-            PackStats::analyze(pack_path).expect("Failed to analyze");
+        let stats = PackStats::analyze(pack_path).expect("Failed to analyze");
 
         assert!(stats.total > 0);
 
@@ -160,8 +160,7 @@ mod tests {
     fn test_analyze_delta_pack_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
         let (pack_path, _dl_guard) = download_pack_file("ref-delta-sha256.pack");
-        let stats = PackStats::analyze(pack_path)
-            .expect("Failed to analyze");
+        let stats = PackStats::analyze(pack_path).expect("Failed to analyze");
 
         assert!(stats.total > 0);
         assert_eq!(
