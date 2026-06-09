@@ -813,9 +813,40 @@ mod tests {
         internal::pack::{Pack, test_pack_download::download_pack_file, tests::init_logger},
     };
 
+    // Helper that retries download_pack_file to avoid transient races where a downloaded
+    // fixture may be removed by other tests. Returns (path, guard).
+    fn get_pack_source(filename: &str) -> (PathBuf, tempfile::NamedTempFile) {
+        use std::thread::sleep;
+        use std::time::Duration;
+        use tempfile::NamedTempFile;
+        // try a few times
+        for _ in 0..3 {
+            let (path, guard) = download_pack_file(filename);
+            if path.exists() {
+                // copy to a local temp file to avoid races with other tests deleting the shared fixture
+                let mut src = std::fs::File::open(&path).unwrap();
+                let mut tmp = NamedTempFile::new().expect("create temp file");
+                std::io::copy(&mut src, &mut tmp).expect("copy pack to temp");
+                // keep the original guard alive until we return to avoid premature deletion during copy
+                drop(guard);
+                return (tmp.path().to_path_buf(), tmp);
+            }
+            // drop guard and try again after a short sleep
+            drop(guard);
+            sleep(Duration::from_millis(100));
+        }
+        // Last attempt, let it propagate any panic/unwrap inside download_pack_file
+        let (path, guard) = download_pack_file(filename);
+        let mut src = std::fs::File::open(&path).unwrap();
+        let mut tmp = NamedTempFile::new().expect("create temp file");
+        std::io::copy(&mut src, &mut tmp).expect("copy pack to temp");
+        drop(guard);
+        (tmp.path().to_path_buf(), tmp)
+    }
+
     #[tokio::test]
     async fn test_pack_check_header() {
-        let (source, _guard) = download_pack_file("medium-sha1.pack");
+        let (source, _guard) = get_pack_source("medium-sha1.pack");
 
         let f = fs::File::open(source).unwrap();
         let mut buf_reader = BufReader::new(f);
@@ -864,7 +895,7 @@ mod tests {
     /// Helper function to run decode tests without delta objects
     fn run_decode_no_delta(filename: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let (source, _dl_guard) = get_pack_source(filename);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -885,7 +916,7 @@ mod tests {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
 
-        let (source, _dl_guard) = download_pack_file(filename);
+        let (source, _dl_guard) = get_pack_source(filename);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -904,7 +935,7 @@ mod tests {
     /// Helper function to run decode tests without memory limit
     fn run_decode_no_mem_limit(filename: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let (source, _dl_guard) = get_pack_source(filename);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -924,7 +955,7 @@ mod tests {
     async fn run_decode_large_with_delta(filename: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
-        let (source, _dl_guard) = download_pack_file(filename);
+        let (source, _dl_guard) = get_pack_source(filename);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 
@@ -958,7 +989,7 @@ mod tests {
     async fn run_decode_large_stream(filename: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
         init_logger();
-        let (source, _dl_guard) = download_pack_file(filename);
+        let (source, _dl_guard) = get_pack_source(filename);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = tokio::fs::File::open(source).await.unwrap();
@@ -992,7 +1023,7 @@ mod tests {
     /// Helper function to run decode tests with large file async
     async fn run_decode_large_file_async(filename: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let (source, _dl_guard) = get_pack_source(filename);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
         let f = fs::File::open(source).unwrap();
@@ -1017,7 +1048,7 @@ mod tests {
     /// Helper function to run decode tests with delta objects without reference
     fn run_decode_with_delta_no_ref(filename: &str, kind: HashKind) {
         let _guard = set_hash_kind_for_test(kind);
-        let (source, _dl_guard) = download_pack_file(filename);
+        let (source, _dl_guard) = get_pack_source(filename);
 
         let tmp = PathBuf::from("/tmp/.cache_temp");
 

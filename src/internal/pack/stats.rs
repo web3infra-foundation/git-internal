@@ -111,12 +111,14 @@ impl PackStats {
 mod tests {
     use super::*;
     use crate::hash::{HashKind, set_hash_kind_for_test};
+    use crate::internal::pack::test_pack_download::download_pack_file;
 
     #[test]
     fn test_analyze_small_pack_sha1() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (pack_path, _dl_guard) = download_pack_file("small-sha1.pack");
         let stats =
-            PackStats::analyze("tests/data/packs/small-sha1.pack").expect("Failed to analyze");
+            PackStats::analyze(pack_path).expect("Failed to analyze");
 
         assert!(stats.total > 0);
         assert_eq!(
@@ -128,8 +130,9 @@ mod tests {
     #[test]
     fn test_analyze_small_pack_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
+        let (pack_path, _dl_guard) = download_pack_file("small-sha256.pack");
         let stats =
-            PackStats::analyze("tests/data/packs/small-sha256.pack").expect("Failed to analyze");
+            PackStats::analyze(pack_path).expect("Failed to analyze");
 
         assert!(stats.total > 0);
         assert_eq!(
@@ -141,8 +144,9 @@ mod tests {
     #[test]
     fn test_analyze_delta_pack_sha1() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (pack_path, _dl_guard) = download_pack_file("ref-delta-sha1.pack");
         let stats =
-            PackStats::analyze("tests/data/packs/ref-delta-sha1.pack").expect("Failed to analyze");
+            PackStats::analyze(pack_path).expect("Failed to analyze");
 
         assert!(stats.total > 0);
 
@@ -155,7 +159,8 @@ mod tests {
     #[test]
     fn test_analyze_delta_pack_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let stats = PackStats::analyze("tests/data/packs/ref-delta-sha256.pack")
+        let (pack_path, _dl_guard) = download_pack_file("ref-delta-sha256.pack");
+        let stats = PackStats::analyze(pack_path)
             .expect("Failed to analyze");
 
         assert!(stats.total > 0);
@@ -187,8 +192,28 @@ mod tests {
     #[test]
     fn test_validate_header() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let result = PackStats::validate_header("tests/data/packs/small-sha1.pack");
+        let (pack_path, _dl_guard) = download_pack_file("small-sha1.pack");
+        let result = PackStats::validate_header(pack_path);
         assert!(result.is_ok());
         assert!(result.unwrap() > 0);
+    }
+
+    #[test]
+    fn test_validate_header_nonexistent() {
+        let result = PackStats::validate_header("tests/data/packs/nonexistent.pack");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_header_invalid_file() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp = NamedTempFile::new().expect("create temp file");
+        temp.write_all(b"XX").expect("write temp file");
+        temp.flush().expect("flush temp file");
+
+        let result = PackStats::validate_header(temp.path());
+        assert!(result.is_err());
     }
 }
