@@ -52,6 +52,10 @@ pub struct PackEncoder {
     inner_hash: HashAlgorithm, // introduce different hash algorithm
     final_hash: Option<ObjectHash>,
     start_encoding: bool,
+    /// Profiling toggle: when true, skips the similarity pre-filter
+    /// (`multi_point_similar` / `cheap_similar`) so all candidates
+    /// within the delta window are considered — matching git's behavior.
+    pub disable_prefilter: bool,
 }
 
 /// Encode entries into a pack, write `.pack`/`.idx` files to `output_dir`.
@@ -174,6 +178,67 @@ pub async fn encode_and_output_to_files_with_rabin(
     });
 
     // build idx
+    pack_encoder.encode_idx_file().await?;
+
+    let idx_write_result = idx_writer
+        .await
+        .map_err(|e| GitError::PackEncodeError(format!("idx writer task join error: {e}")))?;
+    idx_write_result?;
+
+    Ok(())
+}
+
+/// Encode entries into a pack using Rabin fingerprint delta WITHOUT the
+/// similarity pre-filter (requires `diff_rabin` feature). This skips
+/// `multi_point_similar` / `cheap_similar` so all candidates in the
+/// delta window are considered — matching git's behavior exactly, at
+/// the cost of increased delta computation time.
+#[cfg(feature = "diff_rabin")]
+pub async fn encode_and_output_to_files_with_rabin_no_prefilter(
+    raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
+    object_number: usize,
+    output_dir: PathBuf,
+    window_size: usize,
+) -> Result<(), GitError> {
+    let (pack_tx, mut pack_rx) = mpsc::channel(1024);
+    let (idx_tx, mut idx_rx) = mpsc::channel(1024);
+    let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
+    pack_encoder.disable_prefilter = true;
+
+    let now = Utc::now();
+    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();
+    let tmp_path = output_dir.join(format!("{}objects.pack.tmp", timestamp));
+    let mut pack_file = File::create(&tmp_path).await?;
+
+    let pack_writer = tokio::spawn(async move {
+        while let Some(chunk) = pack_rx.recv().await {
+            TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
+        }
+        TokioAsyncWriteExt::flush(&mut pack_file).await?;
+        Ok::<(), GitError>(())
+    });
+
+    pack_encoder.encode_with_rabin(raw_entries_rx).await?;
+
+    let pack_write_result = pack_writer
+        .await
+        .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
+    pack_write_result?;
+
+    let final_pack_name =
+        output_dir.join(format!("pack-{}.pack", pack_encoder.final_hash.unwrap()));
+    let final_idx_name = output_dir.join(format!("pack-{}.idx", pack_encoder.final_hash.unwrap()));
+    tokio::fs::rename(tmp_path, &final_pack_name).await?;
+
+    let mut idx_file = File::create(&final_idx_name).await?;
+    let idx_writer = tokio::spawn(async move {
+        while let Some(chunk) = idx_rx.recv().await {
+            TokioAsyncWriteExt::write_all(&mut idx_file, &chunk).await?;
+        }
+        TokioAsyncWriteExt::flush(&mut idx_file).await?;
+        Ok::<(), GitError>(())
+    });
+
     pack_encoder.encode_idx_file().await?;
 
     let idx_write_result = idx_writer
@@ -398,6 +463,7 @@ impl PackEncoder {
             inner_hash: HashAlgorithm::new(), // introduce different hash algorithm
             final_hash: None,
             start_encoding: false,
+            disable_prefilter: false,
         }
     }
 
@@ -420,6 +486,7 @@ impl PackEncoder {
             inner_hash: HashAlgorithm::new(), // introduce different hash algorithm
             final_hash: None,
             start_encoding: false,
+            disable_prefilter: false,
         }
     }
 
@@ -452,7 +519,7 @@ impl PackEncoder {
         if self.window_size == 0 {
             self.parallel_encode(entry_rx).await
         } else {
-            self.inner_encode(entry_rx, false, false).await
+            self.inner_encode(entry_rx, false, false, self.disable_prefilter).await
         }
     }
 
@@ -461,7 +528,7 @@ impl PackEncoder {
         &mut self,
         entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
     ) -> Result<(), GitError> {
-        self.inner_encode(entry_rx, true, false).await
+        self.inner_encode(entry_rx, true, false, self.disable_prefilter).await
     }
 
     /// Encode with Rabin fingerprint delta (requires `diff_rabin` feature).
@@ -473,7 +540,7 @@ impl PackEncoder {
         if self.window_size == 0 {
             self.parallel_encode(entry_rx).await
         } else {
-            self.inner_encode(entry_rx, false, true).await
+            self.inner_encode(entry_rx, false, true, self.disable_prefilter).await
         }
     }
 
@@ -484,6 +551,7 @@ impl PackEncoder {
         mut entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
         enable_zstdelta: bool,
         enable_rabin: bool,
+        disable_prefilter: bool,
     ) -> Result<(), GitError> {
         let head = encode_header(self.object_number);
         self.send_data(head.clone()).await;
@@ -546,6 +614,7 @@ impl PackEncoder {
                     10,
                     enable_zstdelta,
                     enable_rabin,
+                    disable_prefilter,
                 )
             }),
             tokio::task::spawn_blocking(move || {
@@ -557,6 +626,7 @@ impl PackEncoder {
                     10,
                     enable_zstdelta,
                     enable_rabin,
+                    disable_prefilter,
                 )
             }),
             tokio::task::spawn_blocking(move || {
@@ -568,6 +638,7 @@ impl PackEncoder {
                     10,
                     enable_zstdelta,
                     enable_rabin,
+                    disable_prefilter,
                 )
             }),
             tokio::task::spawn_blocking(move || {
@@ -578,6 +649,7 @@ impl PackEncoder {
                     10,
                     enable_zstdelta,
                     enable_rabin,
+                    disable_prefilter,
                 )
             }),
         )
@@ -623,6 +695,7 @@ impl PackEncoder {
         window_size: usize,
         enable_zstdelta: bool,
         enable_rabin: bool,
+        disable_prefilter: bool,
     ) -> Result<Vec<(Vec<u8>, IndexEntry)>, GitError> {
         let mut current_offset = 0usize;
         let mut window: VecDeque<DeltaWindowEntry> = VecDeque::with_capacity(window_size);
@@ -662,7 +735,8 @@ impl PackEncoder {
                             // Multi-point similarity: check head AND tail
                             // to catch files that share content after
                             // different headers.
-                            && multi_point_similar(&try_base.entry.data, &entry.data)
+                            && (disable_prefilter
+                                || multi_point_similar(&try_base.entry.data, &entry.data))
                     })
                     .map(|(i, _)| i)
                     .collect();
@@ -735,8 +809,10 @@ impl PackEncoder {
                         }
                         let sym_ratio = (try_base.entry.data.len().min(entry.data.len()) as f64)
                             / (try_base.entry.data.len().max(entry.data.len()) as f64);
+                        let no_prefilter = disable_prefilter;
                         if sym_ratio < 0.5
-                            || !cheap_similar(&try_base.entry.data, &entry.data)
+                            || (!no_prefilter
+                                && !cheap_similar(&try_base.entry.data, &entry.data))
                         {
                             return None;
                         }

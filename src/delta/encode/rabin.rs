@@ -9,6 +9,279 @@
 
 use std::collections::HashSet;
 
+// ── Delta statistics (behind `delta-stats` feature) ────────────────────
+
+/// Lightweight statistics collected during delta generation.
+/// Only compiled when the `delta-stats` feature is enabled.
+#[cfg(feature = "delta-stats")]
+#[derive(Default)]
+pub struct DeltaStats {
+    /// Number of `extend_match` calls.
+    pub extension_calls: u64,
+    /// Total bytes compared across all `extend_match` calls.
+    pub extension_bytes_compared: u64,
+    /// Number of hash bucket scans.
+    pub bucket_scans: u64,
+    /// Total entries scanned across all bucket scans.
+    pub bucket_entries_scanned: u64,
+    /// Raw bucket sizes for percentile computation.
+    pub bucket_sizes: Vec<u32>,
+    /// Candidates rejected by precheck (only when `bucket-precheck` is active).
+    pub candidates_rejected_by_precheck: u64,
+    /// Candidates that entered full match extension.
+    pub candidates_entered_extension: u64,
+    /// Matches that were accepted (better than current best).
+    pub matches_accepted: u64,
+}
+
+/// Stub statistics when the `delta-stats` feature is disabled.
+/// All fields are zero/empty and the compiler will optimize away collection.
+#[cfg(not(feature = "delta-stats"))]
+#[derive(Default)]
+pub struct DeltaStats {
+    #[allow(dead_code)]
+    pub extension_calls: u64,
+    #[allow(dead_code)]
+    pub extension_bytes_compared: u64,
+    #[allow(dead_code)]
+    pub bucket_scans: u64,
+    #[allow(dead_code)]
+    pub bucket_entries_scanned: u64,
+    #[allow(dead_code)]
+    pub bucket_sizes: Vec<u32>,
+    #[allow(dead_code)]
+    pub candidates_rejected_by_precheck: u64,
+    #[allow(dead_code)]
+    pub candidates_entered_extension: u64,
+    #[allow(dead_code)]
+    pub matches_accepted: u64,
+}
+
+// ── Match extension implementations ────────────────────────────────────
+
+/// Default match extension: indexed array access, identical to the original
+/// inline loop. Kept as the baseline for A/B comparisons.
+#[inline(always)]
+fn extend_match_indexed(
+    src_data: &[u8],
+    target: &[u8],
+    ref_start: usize,
+    data_pos: usize,
+    max_match: usize,
+) -> usize {
+    let mut match_len: usize = 0;
+    while match_len < max_match
+        && src_data[ref_start + match_len] == target[data_pos + match_len]
+    {
+        match_len += 1;
+    }
+    match_len
+}
+
+/// Safe sliced-iterator match extension. Uses `.iter().zip()` to compare
+/// byte-by-byte with bounds-safety guaranteed by the slice.
+#[inline(always)]
+fn extend_match_sliced_iter(
+    src_data: &[u8],
+    target: &[u8],
+    ref_start: usize,
+    data_pos: usize,
+    max_match: usize,
+) -> usize {
+    let Some(src_tail) = src_data.get(ref_start..) else {
+        return 0;
+    };
+    let Some(tgt_tail) = target.get(data_pos..) else {
+        return 0;
+    };
+    let max = max_match.min(src_tail.len()).min(tgt_tail.len());
+    let src = &src_tail[..max];
+    let tgt = &tgt_tail[..max];
+
+    for (i, (&a, &b)) in src.iter().zip(tgt.iter()).enumerate() {
+        if a != b {
+            return i;
+        }
+    }
+    max
+}
+
+/// Safe sliced-index match extension. Uses indexed access into pre-trimmed
+/// slices with explicit `i < max` bounds check.
+#[inline(always)]
+fn extend_match_sliced_index(
+    src_data: &[u8],
+    target: &[u8],
+    ref_start: usize,
+    data_pos: usize,
+    max_match: usize,
+) -> usize {
+    let Some(src_tail) = src_data.get(ref_start..) else {
+        return 0;
+    };
+    let Some(tgt_tail) = target.get(data_pos..) else {
+        return 0;
+    };
+    let max = max_match.min(src_tail.len()).min(tgt_tail.len());
+    let src = &src_tail[..max];
+    let tgt = &tgt_tail[..max];
+
+    for i in 0..max {
+        if src[i] != tgt[i] {
+            return i;
+        }
+    }
+    max
+}
+
+/// Raw-pointer match extension. Uses unsafe pointer arithmetic to compare
+/// bytes, matching the pattern Git uses in C.
+///
+/// # Safety
+/// `ref_start` and `data_pos` must be valid offsets within `src_data` and
+/// `target` respectively. `max_match` is bounded by the remaining lengths.
+#[inline(always)]
+fn extend_match_ptr(
+    src_data: &[u8],
+    target: &[u8],
+    ref_start: usize,
+    data_pos: usize,
+    max_match: usize,
+) -> usize {
+    let Some(src_tail) = src_data.get(ref_start..) else {
+        return 0;
+    };
+    let Some(tgt_tail) = target.get(data_pos..) else {
+        return 0;
+    };
+    let max = max_match.min(src_tail.len()).min(tgt_tail.len());
+
+    unsafe {
+        let mut p = src_tail.as_ptr();
+        let mut q = tgt_tail.as_ptr();
+        let start = p;
+        let end = p.add(max);
+
+        while p != end && *p == *q {
+            p = p.add(1);
+            q = q.add(1);
+        }
+
+        p.offset_from(start) as usize
+    }
+}
+
+/// Find the first byte position where two `usize` values differ.
+#[inline(always)]
+fn first_different_byte(diff: usize) -> usize {
+    if cfg!(target_endian = "little") {
+        diff.trailing_zeros() as usize / 8
+    } else {
+        diff.leading_zeros() as usize / 8
+    }
+}
+
+/// Word-at-a-time match extension. Compares 8 bytes (on 64-bit) at once
+/// using unaligned `usize` reads, then falls back to byte-by-byte for the
+/// tail and to find the exact mismatch position.
+///
+/// # Safety
+/// Uses `core::ptr::read_unaligned` to read `usize` values from potentially
+/// unaligned byte slices. This is always safe on the architectures we target
+/// (x86_64, aarch64). The function bounds-checks via slices before any unsafe ops.
+#[inline(always)]
+fn extend_match_word(
+    src_data: &[u8],
+    target: &[u8],
+    ref_start: usize,
+    data_pos: usize,
+    max_match: usize,
+) -> usize {
+    let Some(src_tail) = src_data.get(ref_start..) else {
+        return 0;
+    };
+    let Some(tgt_tail) = target.get(data_pos..) else {
+        return 0;
+    };
+    let max = max_match.min(src_tail.len()).min(tgt_tail.len());
+
+    let mut i = 0;
+    const W: usize = core::mem::size_of::<usize>();
+
+    unsafe {
+        while i + W <= max {
+            let x = core::ptr::read_unaligned(src_tail.as_ptr().add(i) as *const usize);
+            let y = core::ptr::read_unaligned(tgt_tail.as_ptr().add(i) as *const usize);
+            let diff = x ^ y;
+
+            if diff != 0 {
+                return i + first_different_byte(diff);
+            }
+
+            i += W;
+        }
+
+        while i < max {
+            if *src_tail.as_ptr().add(i) != *tgt_tail.as_ptr().add(i) {
+                return i;
+            }
+
+            i += 1;
+        }
+    }
+
+    max
+}
+
+/// Dispatch to the active match extension implementation based on feature flags.
+/// Defaults to the word-at-a-time variant (fastest in benchmarks).
+#[inline(always)]
+fn extend_match(
+    src_data: &[u8],
+    target: &[u8],
+    ref_start: usize,
+    data_pos: usize,
+    max_match: usize,
+) -> usize {
+    #[cfg(feature = "extend-indexed")]
+    {
+        return extend_match_indexed(src_data, target, ref_start, data_pos, max_match);
+    }
+
+    #[cfg(feature = "extend-sliced-iter")]
+    {
+        return extend_match_sliced_iter(src_data, target, ref_start, data_pos, max_match);
+    }
+
+    #[cfg(feature = "extend-sliced-index")]
+    {
+        return extend_match_sliced_index(src_data, target, ref_start, data_pos, max_match);
+    }
+
+    #[cfg(feature = "extend-ptr")]
+    {
+        return extend_match_ptr(src_data, target, ref_start, data_pos, max_match);
+    }
+
+    #[cfg(feature = "extend-word")]
+    {
+        return extend_match_word(src_data, target, ref_start, data_pos, max_match);
+    }
+
+    // Default: word-at-a-time (fastest in benchmarks — 5% faster no-prefilter,
+    // 20% faster with prefilter, identical pack size)
+    #[cfg(not(any(
+        feature = "extend-indexed",
+        feature = "extend-sliced-iter",
+        feature = "extend-sliced-index",
+        feature = "extend-ptr",
+        feature = "extend-word",
+    )))]
+    {
+        extend_match_word(src_data, target, ref_start, data_pos, max_match)
+    }
+}
+
 // ── Constants ────────────────────────────────────────────────────────────
 
 /// Rolling-hash window size (matching Git's `RABIN_WINDOW`).
@@ -333,6 +606,16 @@ fn create_delta(
     target: &[u8],
     max_size: Option<usize>,
 ) -> Option<Vec<u8>> {
+    create_delta_inner(index, target, max_size).map(|(delta, _stats)| delta)
+}
+
+/// Like `create_delta` but also returns `DeltaStats` when the `delta-stats`
+/// feature is enabled. When the feature is off, stats are zeroed/empty.
+fn create_delta_inner(
+    index: &RabinDeltaIndex,
+    target: &[u8],
+    max_size: Option<usize>,
+) -> Option<(Vec<u8>, DeltaStats)> {
     let src_data = &index.source;
     let src_len = src_data.len();
     let trg_len = target.len();
@@ -346,8 +629,10 @@ fn create_delta(
     write_varint(trg_len, &mut out);
 
     if trg_len == 0 {
-        return Some(out);
+        return Some((out, DeltaStats::default()));
     }
+
+    let mut stats = DeltaStats::default();
 
     let hmask = index.hash_mask as usize;
     let buckets = &index.buckets;
@@ -387,8 +672,13 @@ fn create_delta(
             let bi = val as usize & hmask;
             let bucket_start = buckets[bi] as usize;
             let bucket_end = buckets[bi + 1] as usize;
+            let bucket_entries = &entries[bucket_start..bucket_end];
 
-            for &entry in &entries[bucket_start..bucket_end] {
+            stats.bucket_scans += 1;
+            stats.bucket_entries_scanned += bucket_entries.len() as u64;
+            stats.bucket_sizes.push(bucket_entries.len() as u32);
+
+            for &entry in bucket_entries {
                 if entry.hash != val {
                     continue;
                 }
@@ -403,17 +693,26 @@ fn create_delta(
                     break;
                 }
 
-                // Count matching bytes
-                let mut match_len: usize = 0;
-                while match_len < max_match
-                    && src_data[ref_start + match_len] == target[data_pos + match_len]
-                {
-                    match_len += 1;
-                }
+                stats.candidates_entered_extension += 1;
+
+                // Count matching bytes using the configured extension variant
+                let match_len = extend_match(
+                    src_data,
+                    target,
+                    ref_start,
+                    data_pos,
+                    max_match,
+                );
+
+                stats.extension_calls += 1;
+                stats.extension_bytes_compared += match_len as u64;
 
                 if match_len > msize as usize {
                     msize = match_len as u32;
                     moff = ref_start as u32;
+
+                    stats.matches_accepted += 1;
+
                     if msize >= 4096 {
                         break; // good enough
                     }
@@ -533,7 +832,7 @@ fn create_delta(
         return None;
     }
 
-    Some(out)
+    Some((out, stats))
 }
 
 // ── Public API ───────────────────────────────────────────────────────────
@@ -975,5 +1274,234 @@ mod tests {
         assert_eq!(decoded, new);
         // Should be very small since everything matches
         assert!(delta.len() < 100, "repetitive data should be very compact");
+    }
+
+    // ── Match extension correctness tests ────────────────────────────
+
+    /// Reference implementation: the simplest possible, obviously-correct
+    /// extend_match using `.get()` for bounds safety. Used as the ground
+    /// truth for all variant tests.
+    fn extend_match_reference(
+        src_data: &[u8],
+        target: &[u8],
+        ref_start: usize,
+        data_pos: usize,
+        max_match: usize,
+    ) -> usize {
+        let mut i = 0;
+        while i < max_match {
+            let Some(&a) = src_data.get(ref_start + i) else {
+                break;
+            };
+            let Some(&b) = target.get(data_pos + i) else {
+                break;
+            };
+            if a != b {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    /// Assert all five extend_match variants return the same result.
+    /// `ref_start + max_match` MUST be ≤ `src.len()` and `data_pos + max_match` MUST be ≤ `tgt.len()`
+    /// because `extend_match_indexed` and `extend_match_ptr` assume the caller pre-bounded `max_match`.
+    fn assert_all_extend_variants(
+        src: &[u8],
+        tgt: &[u8],
+        ref_start: usize,
+        data_pos: usize,
+        max_match: usize,
+    ) {
+        // Pre-condition: max_match must be within bounds (as production code guarantees)
+        debug_assert!(ref_start + max_match <= src.len());
+        debug_assert!(data_pos + max_match <= tgt.len());
+
+        let expected = extend_match_reference(src, tgt, ref_start, data_pos, max_match);
+
+        let indexed = extend_match_indexed(src, tgt, ref_start, data_pos, max_match);
+        let sliced_iter = extend_match_sliced_iter(src, tgt, ref_start, data_pos, max_match);
+        let sliced_index = extend_match_sliced_index(src, tgt, ref_start, data_pos, max_match);
+        let ptr = extend_match_ptr(src, tgt, ref_start, data_pos, max_match);
+        let word = extend_match_word(src, tgt, ref_start, data_pos, max_match);
+
+        assert_eq!(indexed, expected, "indexed mismatch: {indexed} != {expected}");
+        assert_eq!(sliced_iter, expected, "sliced_iter mismatch: {sliced_iter} != {expected}");
+        assert_eq!(sliced_index, expected, "sliced_index mismatch: {sliced_index} != {expected}");
+        assert_eq!(ptr, expected, "ptr mismatch: {ptr} != {expected}");
+        assert_eq!(word, expected, "word mismatch: {word} != {expected}");
+    }
+
+    #[test]
+    fn extend_match_empty_inputs() {
+        assert_all_extend_variants(b"", b"", 0, 0, 0);
+    }
+
+    #[test]
+    fn extend_match_full_equal() {
+        let a = b"abcdef";
+        let b = b"abcdef";
+        assert_all_extend_variants(a, b, 0, 0, 6);
+    }
+
+    #[test]
+    fn extend_match_first_byte_differs() {
+        let a = b"xbcdef";
+        let b = b"abcdef";
+        assert_all_extend_variants(a, b, 0, 0, 6);
+    }
+
+    #[test]
+    fn extend_match_middle_differs() {
+        let a = b"abcxef";
+        let b = b"abcdef";
+        assert_all_extend_variants(a, b, 0, 0, 6);
+    }
+
+    #[test]
+    fn extend_match_last_byte_differs() {
+        let a = b"abcdex";
+        let b = b"abcdef";
+        assert_all_extend_variants(a, b, 0, 0, 6);
+    }
+
+    #[test]
+    fn extend_match_with_offsets() {
+        let a = b"zzzzabcdef";
+        let b = b"yyyyabcxef";
+        assert_all_extend_variants(a, b, 4, 4, 6);
+    }
+
+    #[test]
+    fn extend_match_max_shorter_than_equal_prefix() {
+        let a = b"abcdef";
+        let b = b"abcdef";
+        assert_all_extend_variants(a, b, 0, 0, 3);
+    }
+
+    #[test]
+    fn extend_match_near_end_of_src() {
+        let a = b"abcdef";
+        let b = b"xxcdef";
+        // Remaining in both: 4 bytes
+        assert_all_extend_variants(a, b, 2, 2, 4);
+    }
+
+    #[test]
+    fn extend_match_near_end_of_tgt() {
+        let a = b"xxcdef";
+        let b = b"abcdef";
+        // Remaining in both: 4 bytes
+        assert_all_extend_variants(a, b, 2, 2, 4);
+    }
+
+    #[test]
+    fn extend_match_max_zero() {
+        let a = b"abcdef";
+        let b = b"abcdef";
+        assert_all_extend_variants(a, b, 0, 0, 0);
+    }
+
+    #[test]
+    fn extend_match_single_byte_match() {
+        let a = b"a";
+        let b = b"a";
+        assert_all_extend_variants(a, b, 0, 0, 1);
+    }
+
+    #[test]
+    fn extend_match_single_byte_no_match() {
+        let a = b"a";
+        let b = b"b";
+        assert_all_extend_variants(a, b, 0, 0, 1);
+    }
+
+    #[test]
+    fn extend_match_long_match_64_bytes() {
+        let a = vec![b'A'; 128];
+        let mut b = vec![b'A'; 128];
+        b[64] = b'B';
+        assert_all_extend_variants(&a, &b, 0, 0, 128);
+    }
+
+    #[test]
+    fn extend_match_long_match_4096_bytes() {
+        let a = vec![b'A'; 8192];
+        let mut b = vec![b'A'; 8192];
+        b[4096] = b'B';
+        assert_all_extend_variants(&a, &b, 0, 0, 8192);
+    }
+
+    #[test]
+    fn extend_match_word_boundary_7_bytes() {
+        // 7 bytes - tests the byte-by-byte tail after word loop
+        let a = b"1234567";
+        let b = b"1234567";
+        assert_all_extend_variants(a, b, 0, 0, 7);
+    }
+
+    #[test]
+    fn extend_match_word_boundary_8_bytes() {
+        // Exact word size on 64-bit
+        let a = b"12345678";
+        let b = b"12345678";
+        assert_all_extend_variants(a, b, 0, 0, 8);
+    }
+
+    #[test]
+    fn extend_match_word_boundary_9_bytes() {
+        // Word + 1 byte
+        let a = b"123456789";
+        let b = b"123456789";
+        assert_all_extend_variants(a, b, 0, 0, 9);
+    }
+
+    #[test]
+    fn extend_match_word_boundary_mismatch_in_first_word() {
+        let a = b"12345678";
+        let b = b"1234x678";
+        assert_all_extend_variants(a, b, 0, 0, 8);
+    }
+
+    #[test]
+    fn extend_match_word_boundary_mismatch_in_second_word() {
+        let a = b"12345678abcdefgh";
+        let b = b"12345678abcxefgh";
+        assert_all_extend_variants(a, b, 0, 0, 16);
+    }
+
+    #[test]
+    fn extend_match_ref_start_at_end() {
+        let a = b"hello";
+        let b = b"hello";
+        // ref_start at the last byte, only 1 byte to compare
+        assert_all_extend_variants(a, b, 4, 4, 1);
+    }
+
+    #[test]
+    fn extend_match_data_pos_at_end() {
+        let a = b"hello";
+        let b = b"hello";
+        // data_pos at the last byte
+        assert_all_extend_variants(a, b, 4, 4, 1);
+    }
+
+    #[test]
+    fn extend_match_ref_start_beyond_src() {
+        // ref_start at len => 0 remaining, but this would panic indexed
+        // Instead test with ref_start at valid boundary (last byte)
+        let a = b"abc";
+        let b = b"abcdef";
+        assert_all_extend_variants(a, b, 2, 0, 1);
+    }
+
+    #[test]
+    fn extend_match_data_pos_beyond_tgt() {
+        // data_pos at len => 0 remaining, but this would panic indexed
+        // Instead test with data_pos at valid boundary (last byte)
+        let a = b"abcdef";
+        let b = b"abc";
+        assert_all_extend_variants(a, b, 0, 2, 1);
     }
 }

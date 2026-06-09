@@ -70,3 +70,15 @@ ureq = "3"
 default = ["diff_mydrs"]
 diff_mydrs = []
 diff_rabin = []
+
+# Match extension implementation variants (only one should be active at a time;
+# default is word-at-a-time, the fastest in benchmarks)
+delta-stats = []
+extend-indexed = []
+extend-sliced-iter = []
+extend-sliced-index = []
+extend-ptr = []
+extend-word = []
+
+# Hash bucket scan optimizations
+bucket-precheck = []
