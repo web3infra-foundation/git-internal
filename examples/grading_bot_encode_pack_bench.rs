@@ -28,6 +28,8 @@ use std::{
 use flate2::read::ZlibDecoder;
 #[cfg(feature = "diff_rabin")]
 use git_internal::internal::pack::encode::encode_and_output_to_files_with_rabin;
+#[cfg(feature = "diff_rabin")]
+use git_internal::internal::pack::encode::encode_and_output_to_files_with_rabin_no_prefilter;
 use git_internal::{
     hash::{HashKind, ObjectHash, set_hash_kind},
     internal::{
@@ -120,9 +122,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse flags and positional args
     let mut positional: Vec<&str> = Vec::new();
     let mut use_rabin = false;
+    let mut no_prefilter = false;
     for arg in args.iter().skip(1) {
         if arg == "--rabin" {
             use_rabin = true;
+        } else if arg == "--no-prefilter" {
+            no_prefilter = true;
         } else if arg.starts_with("--") {
             eprintln!("unknown flag: {arg}");
             std::process::exit(2);
@@ -133,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if positional.is_empty() || positional.len() > 2 {
         eprintln!(
-            "usage: {} [--rabin] <path-to-.git> [window_size]\n  --rabin  Use Rabin fingerprint delta (requires diff_rabin feature)",
+            "usage: {} [--rabin] [--no-prefilter] <path-to-.git> [window_size]\n  --rabin         Use Rabin fingerprint delta (requires diff_rabin feature)\n  --no-prefilter  Disable similarity pre-filter (only with --rabin)",
             args.first().map(String::as_str).unwrap_or("grading_bot_encode_pack_bench")
         );
         std::process::exit(2);
@@ -208,9 +213,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n = unique;
     let win = window_size;
     let out_path_for_task = out_path.clone();
-    let algorithm_name = if use_rabin { "rabin" } else { "myers" };
+    let algorithm_name = if use_rabin && no_prefilter {
+        "rabin-no-prefilter"
+    } else if use_rabin {
+        "rabin"
+    } else {
+        "myers"
+    };
+    let no_pf = no_prefilter;
     let encode_handle = tokio::spawn(async move {
-        if use_rabin {
+        if use_rabin && no_pf {
+            #[cfg(feature = "diff_rabin")]
+            {
+                encode_and_output_to_files_with_rabin_no_prefilter(rx, n, out_path_for_task, win).await
+            }
+            #[cfg(not(feature = "diff_rabin"))]
+            {
+                let _ = (rx, n, out_path_for_task, win);
+                unreachable!("--rabin --no-prefilter requires diff_rabin feature")
+            }
+        } else if use_rabin {
             #[cfg(feature = "diff_rabin")]
             {
                 encode_and_output_to_files_with_rabin(rx, n, out_path_for_task, win).await
