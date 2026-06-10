@@ -517,6 +517,15 @@ impl PackEncoder {
     /// # Arguments
     /// - `rx` - A receiver channel (`mpsc::Receiver<Entry>`) from which entries to be encoded are received.
     /// # Returns
+    /// Encode entries into a pack using the default delta algorithm
+    /// (Rabin fingerprint when `diff_rabin` feature is enabled, Myers otherwise).
+    /// No pre-filter is applied — all candidates within the delta window are
+    /// considered, matching git's default behavior.
+    ///
+    /// # Arguments
+    /// * `entry_rx` - Channel receiver for entries to encode.
+    ///
+    /// # Returns
     /// Returns `Ok(())` if encoding is successful, or a `GitError` in case of failure.
     /// - Returns a `GitError` if there is a failure during the encoding process.
     /// - Returns `PackEncodeError` if an encoding operation is already in progress.
@@ -527,7 +536,14 @@ impl PackEncoder {
         if self.window_size == 0 {
             self.parallel_encode(entry_rx).await
         } else {
-            self.inner_encode(entry_rx, false, false, self.disable_prefilter).await
+            #[cfg(feature = "diff_rabin")]
+            {
+                self.inner_encode(entry_rx, false, true, true).await
+            }
+            #[cfg(not(feature = "diff_rabin"))]
+            {
+                self.inner_encode(entry_rx, false, false, self.disable_prefilter).await
+            }
         }
     }
 
@@ -539,7 +555,11 @@ impl PackEncoder {
         self.inner_encode(entry_rx, true, false, self.disable_prefilter).await
     }
 
-    /// Encode with Rabin fingerprint delta (requires `diff_rabin` feature).
+    /// Encode with Rabin fingerprint delta, no pre-filter (requires `diff_rabin` feature).
+    ///
+    /// All candidates within the delta window are considered — matching git's default
+    /// behavior. This is the recommended path for best compression. Delegates to
+    /// `inner_encode` with `enable_rabin=true, disable_prefilter=true`.
     #[cfg(feature = "diff_rabin")]
     pub async fn encode_with_rabin(
         &mut self,
@@ -548,7 +568,7 @@ impl PackEncoder {
         if self.window_size == 0 {
             self.parallel_encode(entry_rx).await
         } else {
-            self.inner_encode(entry_rx, false, true, self.disable_prefilter).await
+            self.inner_encode(entry_rx, false, true, true).await
         }
     }
 
@@ -619,9 +639,14 @@ impl PackEncoder {
         // commits, trees, and tags are each processed in their own thread. This
         // yields near-linear speedup from 1 → N threads on multi-core machines.
 
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
+        let num_threads = std::env::var("PACK_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            });
 
         // Extract inner Entry from MetaAttached wrappers
         let commit_entries: Vec<Entry> =

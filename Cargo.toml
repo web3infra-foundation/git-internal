@@ -67,7 +67,7 @@ chacha20 = "0.10.0"
 ureq = "3"
 
 [features]
-default = ["diff_mydrs"]
+default = ["diff_mydrs", "diff_rabin"]
 diff_mydrs = []
 diff_rabin = []
 

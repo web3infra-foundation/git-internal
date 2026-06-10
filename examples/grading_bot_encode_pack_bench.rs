@@ -218,7 +218,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if use_rabin {
         "rabin"
     } else {
-        "myers"
+        // Default path: encode_and_output_to_files() uses rabin-no-prefilter
+        // when diff_rabin is enabled, myers otherwise.
+        #[cfg(feature = "diff_rabin")]
+        { "rabin-no-prefilter" }
+        #[cfg(not(feature = "diff_rabin"))]
+        { "myers" }
     };
     let no_pf = no_prefilter;
     let encode_handle = tokio::spawn(async move {
