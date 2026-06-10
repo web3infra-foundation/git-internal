@@ -7,7 +7,7 @@
 //!
 //! Available behind the `diff_rabin` feature flag.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 // ── Delta statistics (behind `delta-stats` feature) ────────────────────
 
@@ -414,8 +414,10 @@ pub struct IndexEntry {
 /// the same source — matching git's approach where `delta_index` is created
 /// once per source and reused for all target candidates in the window.
 pub struct RabinDeltaIndex {
-    /// Copy of the source data for match extension.
-    pub source: Vec<u8>,
+    /// Shared reference to the source buffer for match extension.
+    /// Uses `Arc<[u8]>` to allow zero-copy sharing with the window entry —
+    /// matching git's approach where `delta_index` stores a `const void *` pointer.
+    pub source: Arc<[u8]>,
     /// All index entries packed consecutively, grouped by bucket.
     pub entries: Box<[IndexEntry]>,
     /// Start indices into `entries` per bucket; `buckets.len() == hash_mask + 2`
@@ -430,7 +432,21 @@ pub struct RabinDeltaIndex {
 /// Build a Rabin fingerprint index over `source`, following Git's `create_delta_index`.
 ///
 /// Returns `None` if the source is too short to index (< RABIN_WINDOW bytes).
+/// Delegates to `create_delta_index_arc` internally, cloning the data into an `Arc`.
 pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
+    // Convert to Arc — this is the one-and-only copy for legacy callers.
+    // Hot-path callers should use `create_delta_index_arc` with a pre-existing Arc.
+    create_delta_index_arc(Arc::from(source))
+}
+
+/// Build a Rabin fingerprint index, taking ownership of the source data via `Arc<[u8]>`.
+///
+/// This is the preferred entry point when the caller already holds an `Arc<[u8]>` to the
+/// source buffer (e.g., from a window entry). It avoids an extra copy compared to
+/// `create_delta_index`, which must clone the data into an Arc internally.
+///
+/// Returns `None` if the source is too short to index (< RABIN_WINDOW bytes).
+pub fn create_delta_index_arc(source: Arc<[u8]>) -> Option<RabinDeltaIndex> {
     let src_len = source.len();
     if src_len == 0 {
         return None;
@@ -454,10 +470,8 @@ pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
     let mut prev_val: u32 = !0u32;
 
     // Walk source from end toward start, stepping by RABIN_WINDOW.
-    // Git starts at: buf + entries * RABIN_WINDOW - RABIN_WINDOW
     let mut pos = entries_count * RABIN_WINDOW - RABIN_WINDOW;
     loop {
-        // Compute hash over source[pos+1 .. pos+1+RABIN_WINDOW]
         let window_start = pos + 1;
         let window_end = window_start + RABIN_WINDOW;
         if window_end > src_len {
@@ -474,8 +488,6 @@ pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
         }
 
         if val == prev_val {
-            // Keep the lowest offset of consecutive identical blocks.
-            // The existing last entry gets its offset updated.
             let h = val as usize & hmask;
             if let Some(last) = bucket_lists[h].last_mut() {
                 last.offset = (pos + RABIN_WINDOW) as u32;
@@ -495,7 +507,7 @@ pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
         pos = pos.saturating_sub(RABIN_WINDOW);
     }
 
-    // Cull overfull buckets to HASH_LIMIT (uniform sampling, matching Git).
+    // Cull overfull buckets to HASH_LIMIT
     let mut total_entries = 0usize;
     for bucket in bucket_lists.iter_mut() {
         if bucket.len() > HASH_LIMIT {
@@ -515,7 +527,7 @@ pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
     buckets.push(entries_vec.len() as u32); // sentinel
 
     Some(RabinDeltaIndex {
-        source: source.to_vec(),
+        source,
         entries: entries_vec.into_boxed_slice(),
         buckets: buckets.into_boxed_slice(),
         hash_mask: hmask as u32,

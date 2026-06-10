@@ -7,6 +7,8 @@ use std::{
     hash::{Hash, Hasher},
     io::Write,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread,
 };
 
 use ahash::AHasher;
@@ -428,6 +430,10 @@ fn cheap_similar(a: &[u8], b: &[u8]) -> bool {
 struct DeltaWindowEntry {
     entry: Entry,
     offset: usize,
+    /// `Arc<[u8]>` shared between the entry and its rabin index.
+    /// Populated lazily on first index creation; subsequent index
+    /// creations reuse this Arc via `Arc::clone` (refcount bump, no copy).
+    data_arc: Option<Arc<[u8]>>,
     rabin_index: Option<delta::RabinDeltaIndex>,
 }
 
@@ -443,6 +449,8 @@ impl DeltaWindowEntry {
         Self {
             entry,
             offset,
+            #[cfg(feature = "diff_rabin")]
+            data_arc: None,
             #[cfg(feature = "diff_rabin")]
             rabin_index: None,
         }
@@ -603,64 +611,173 @@ impl PackEncoder {
             tags.len()
         );
 
-        // parallel encoding vec with different object_type
-        let (commit_results, tree_results, blob_results, tag_results) = tokio::try_join!(
+        // ── Multi-threaded delta search ──
+        //
+        // Git splits the sorted object list across `online_cpus()` threads, each
+        // maintaining its own sliding window. We follow the same strategy: blob
+        // objects (which dominate the count) are split into contiguous chunks while
+        // commits, trees, and tags are each processed in their own thread. This
+        // yields near-linear speedup from 1 → N threads on multi-core machines.
+
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        // Extract inner Entry from MetaAttached wrappers
+        let commit_entries: Vec<Entry> =
+            commits.into_iter().map(|e| e.inner).collect();
+        let tree_entries: Vec<Entry> = trees.into_iter().map(|e| e.inner).collect();
+        let tag_entries: Vec<Entry> = tags.into_iter().map(|e| e.inner).collect();
+        let mut blob_entries: Vec<Entry> = blobs.into_iter().map(|e| e.inner).collect();
+
+        tracing::info!(
+            blobs = blob_entries.len(),
+            threads = num_threads,
+            "splitting blob delta search"
+        );
+
+        // Spawn non-blob types as before
+        let mk_blk = |entries: Vec<Entry>,
+                      ez: bool,
+                      er: bool,
+                      dp: bool|
+         -> tokio::task::JoinHandle<
+            Result<Vec<(Vec<u8>, IndexEntry)>, GitError>,
+        > {
             tokio::task::spawn_blocking(move || {
-                Self::try_as_offset_delta(
-                    commits
-                        .into_iter()
-                        .map(|entry_with_meta| entry_with_meta.inner)
-                        .collect(),
-                    10,
-                    enable_zstdelta,
-                    enable_rabin,
-                    disable_prefilter,
-                )
-            }),
-            tokio::task::spawn_blocking(move || {
-                Self::try_as_offset_delta(
-                    trees
-                        .into_iter()
-                        .map(|entry_with_meta| entry_with_meta.inner)
-                        .collect(),
-                    10,
-                    enable_zstdelta,
-                    enable_rabin,
-                    disable_prefilter,
-                )
-            }),
-            tokio::task::spawn_blocking(move || {
-                Self::try_as_offset_delta(
-                    blobs
-                        .into_iter()
-                        .map(|entry_with_meta| entry_with_meta.inner)
-                        .collect(),
-                    10,
-                    enable_zstdelta,
-                    enable_rabin,
-                    disable_prefilter,
-                )
-            }),
-            tokio::task::spawn_blocking(move || {
-                Self::try_as_offset_delta(
-                    tags.into_iter()
-                        .map(|entry_with_meta| entry_with_meta.inner)
-                        .collect(),
-                    10,
-                    enable_zstdelta,
-                    enable_rabin,
-                    disable_prefilter,
-                )
-            }),
+                Self::try_as_offset_delta(entries, 10, ez, er, dp)
+            })
+        };
+
+        let commit_handle = mk_blk(commit_entries, enable_zstdelta, enable_rabin, disable_prefilter);
+        let tree_handle = mk_blk(tree_entries, enable_zstdelta, enable_rabin, disable_prefilter);
+        let tag_handle = mk_blk(tag_entries, enable_zstdelta, enable_rabin, disable_prefilter);
+
+        // ── Multi-threaded blob delta search (git-style contiguous split) ──
+        //
+        // Git splits the sorted blob list into N contiguous segments (one per
+        // thread), preserving name-hash clustering within each segment for good
+        // delta quality. Count-balanced chunks preserve the sort order but cause
+        // load imbalance because entries are sorted by size (descending).
+        //
+        // We use count-balanced splitting with 3× over-subscription (3× more
+        // chunks than threads). A shared work queue lets fast threads grab
+        // additional chunks, providing load balancing while keeping chunks large
+        // enough for quality delta windows. Threads pop from the back (small
+        // files first), so all 10 threads eventually process the 10 largest
+        // chunks — bounding the worst-case wall time to the largest chunk.
+        let total_blob_entries = blob_entries.len();
+        let chunks_per_thread: usize = 20;
+        let blob_chunk_count = if num_threads > 1 && total_blob_entries > (num_threads * 20) {
+            num_threads * chunks_per_thread
+        } else {
+            1
+        };
+        let entries_per_chunk = total_blob_entries.div_ceil(blob_chunk_count);
+
+        struct BlobChunk {
+            index: usize,
+            entries: Vec<Entry>,
+        }
+
+        // Build count-balanced chunks from the end (O(1) split_off).
+        // Chunks are contiguous segments of the sorted list, preserving
+        // name-hash clustering within each chunk.
+        let mut chunks: Vec<BlobChunk> = Vec::with_capacity(blob_chunk_count);
+        for i in 0..blob_chunk_count {
+            let take = entries_per_chunk.min(blob_entries.len());
+            if take == 0 {
+                break;
+            }
+            let entries = blob_entries.split_off(blob_entries.len() - take);
+            chunks.push(BlobChunk { index: i, entries });
+        }
+        chunks.reverse(); // restore original sort order (largest files first)
+        for (i, c) in chunks.iter_mut().enumerate() {
+            c.index = i;
+        }
+        let actual_chunks = chunks.len();
+
+        // Work queue: threads pop from back (small files first) → fast
+        // threads grab many small chunks; all threads share the 10 largest
+        // chunks at the end.
+        type ChunkResult = (usize, Result<Vec<(Vec<u8>, IndexEntry)>, GitError>);
+        let chunk_queue: Arc<Mutex<Vec<BlobChunk>>> =
+            Arc::new(Mutex::new(chunks));
+        let results: Arc<Mutex<Vec<ChunkResult>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let blob_thread_count = num_threads.min(actual_chunks);
+        tracing::info!(
+            total_entries = total_blob_entries,
+            chunks = actual_chunks,
+            entries_per_chunk = entries_per_chunk,
+            threads = blob_thread_count,
+            "splitting blob delta search",
+        );
+        let mut blob_handles: Vec<std::thread::JoinHandle<()>> =
+            Vec::with_capacity(blob_thread_count);
+        for _ in 0..blob_thread_count {
+            let q = Arc::clone(&chunk_queue);
+            let r = Arc::clone(&results);
+            let ez = enable_zstdelta;
+            let er = enable_rabin;
+            let dp = disable_prefilter;
+            blob_handles.push(thread::spawn(move || {
+                loop {
+                    let chunk = q.lock().unwrap().pop();
+                    match chunk {
+                        None => break,
+                        Some(BlobChunk { index: chunk_idx, entries }) => {
+                            let res = Self::try_as_offset_delta(
+                                entries, 10, ez, er, dp,
+                            );
+                            r.lock().unwrap().push((chunk_idx, res));
+                        }
+                    }
+                }
+            }));
+        }
+
+        // Await commit/tree/tag
+        let (commit_results, tree_results, tag_results) = tokio::try_join!(
+            commit_handle, tree_handle, tag_handle
         )
         .map_err(|e| GitError::PackEncodeError(format!("Task join error: {e}")))?;
 
         let commit_res = commit_results?;
         let tree_res = tree_results?;
-        let blob_res = blob_results?;
         let tag_res = tag_results?;
 
-        let mut all_res = vec![commit_res, tree_res, blob_res, tag_res];
+        // Join blob threads
+        for handle in blob_handles {
+            handle
+                .join()
+                .map_err(|_| {
+                    GitError::PackEncodeError(
+                        "blob delta thread panicked".to_string(),
+                    )
+                })?;
+        }
+        let mut chunk_results = Arc::into_inner(results)
+            .ok_or_else(|| {
+                GitError::PackEncodeError(
+                    "blob chunk results still referenced".to_string(),
+                )
+            })?
+            .into_inner()
+            .map_err(|e| {
+                GitError::PackEncodeError(format!("blob results poisoned: {e}"))
+            })?;
+        chunk_results.sort_by_key(|(i, _)| *i);
+        let mut blob_res_list: Vec<Vec<(Vec<u8>, IndexEntry)>> =
+            Vec::with_capacity(chunk_results.len());
+        for (_idx, res) in chunk_results {
+            blob_res_list.push(res?);
+        }
+
+        let mut all_res = vec![commit_res, tree_res];
+        all_res.extend(blob_res_list);
+        all_res.push(tag_res);
 
         let mut idx_entries = Vec::new();
         for res in &mut all_res {
@@ -756,12 +873,28 @@ impl PackEncoder {
                         // Small objects (< RABIN_WINDOW+1 bytes) can't be indexed;
                         // skip them as they won't produce useful deltas anyway.
                         if window[idx].rabin_index.is_none() {
-                            match delta::create_delta_index(&window[idx].entry.data) {
+                            // Build (or reuse) the shared Arc<[u8]> for this window
+                            // entry. The Arc is cloned (refcount bump, no copy) for
+                            // the index, avoiding a duplicate allocation of the source
+                            // buffer for each delta against this base.
+                            let data_arc = match window[idx].data_arc.take() {
+                                Some(arc) => arc,
+                                None => {
+                                    let arc: Arc<[u8]> =
+                                        window[idx].entry.data.clone().into();
+                                    arc
+                                }
+                            };
+                            match delta::create_delta_index_arc(
+                                Arc::clone(&data_arc),
+                            ) {
                                 Some(new_index) => {
+                                    window[idx].data_arc = Some(data_arc);
                                     window[idx].rabin_index = Some(new_index);
                                 }
                                 None => {
-                                    // Source too small to index — skip this candidate
+                                    // Restore data_arc for future use
+                                    window[idx].data_arc = Some(data_arc);
                                     continue;
                                 }
                             }
@@ -873,11 +1006,17 @@ impl PackEncoder {
                         })
                         .unwrap()
                 } else {
-                    // Rabin branch gated behind diff_rabin feature
+                    // Rabin branch gated behind diff_rabin feature.
+                    // Reuses the cached index to skip index construction — this
+                    // saves a full copy of the source buffer compared to calling
+                    // `encode_rabin`, which would rebuild the index from scratch.
                     #[cfg(feature = "diff_rabin")]
                     if enable_rabin {
                         entry.obj_type = ObjectType::OffsetDelta;
-                        delta::encode_rabin(&best_base.entry.data, &entry.data)
+                        delta::encode_rabin_with_index(
+                            best_base.rabin_index.as_ref().unwrap(),
+                            &entry.data,
+                        )
                     } else {
                         entry.obj_type = ObjectType::OffsetDelta;
                         delta::encode(&best_base.entry.data, &entry.data)

@@ -147,6 +147,16 @@ pub fn create_delta_index(source: &[u8]) -> Option<RabinDeltaIndex> {
     encode::rabin::create_delta_index(source)
 }
 
+/// Build a Rabin fingerprint index from an `Arc<[u8]>` (available with `diff_rabin`).
+///
+/// This avoids copying the source buffer — the index shares ownership via `Arc`
+/// reference counting. Preferred when the caller already holds an `Arc<[u8]>`,
+/// e.g., from a delta window entry that can share the buffer with the index.
+#[cfg(feature = "diff_rabin")]
+pub fn create_delta_index_arc(source: std::sync::Arc<[u8]>) -> Option<RabinDeltaIndex> {
+    encode::rabin::create_delta_index_arc(source)
+}
+
 /// Produce a delta using a pre-built index (available with `diff_rabin`).
 ///
 /// Skips index construction — the caller supplies a cached `RabinDeltaIndex`.
