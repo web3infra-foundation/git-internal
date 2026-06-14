@@ -131,7 +131,7 @@ Full AI object lifecycle, field-level docs, and usage examples: `docs/ai.md`.
 - Validates PACK header → loops objects → inflates zlib → resolves delta chains via waitlist → emits `MetaAttached<Entry, EntryMeta>`
 
 **Pack Encode**: `PackEncoder::encode()` or `encode_and_output_to_files()`
-- Accepts Entry+Meta → optional delta compression within window → zlib compress → async write pack/idx → rename by hash
+- Accepts Entry+Meta → `window_size == 0` uses non-delta parallel encoding; otherwise defaults to Rabin via `diff_rabin`, with Myers/Patience as the feature-gated fallback → zlib compress → async write pack/idx → rename by hash
 
 **Protocol**: `SmartProtocol` handles Git smart protocol
 - upload-pack: parse want/have → `PackGenerator` builds pack stream

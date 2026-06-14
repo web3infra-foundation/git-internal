@@ -71,7 +71,9 @@ pub struct PackEncoder {
 /// generated as `pack-<checksum>.idx`.
 ///
 /// `object_number` must equal the number of entries received. A `window_size` of
-/// zero disables delta compression and enables batch-parallel encoding.
+/// zero disables delta compression and enables batch-parallel encoding. With
+/// the default `diff_rabin` feature, delta windows use Rabin fingerprints;
+/// builds without that feature fall back to Myers/Patience delta encoding.
 pub async fn encode_and_output_to_files(
     raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
     object_number: usize,
@@ -96,6 +98,10 @@ pub async fn encode_and_output_to_files(
         Ok::<(), GitError>(())
     });
 
+    #[cfg(feature = "diff_rabin")]
+    pack_encoder.encode_with_rabin(raw_entries_rx).await?;
+
+    #[cfg(not(feature = "diff_rabin"))]
     pack_encoder.encode(raw_entries_rx).await?;
 
     // Closing the sender lets the writer drain all queued pack chunks.
@@ -119,129 +125,6 @@ pub async fn encode_and_output_to_files(
     });
 
     // Index generation requires the final pack checksum and object offsets.
-    pack_encoder.encode_idx_file().await?;
-
-    let idx_write_result = idx_writer
-        .await
-        .map_err(|e| GitError::PackEncodeError(format!("idx writer task join error: {e}")))?;
-    idx_write_result?;
-
-    Ok(())
-}
-
-/// Rabin-delta variant of [`encode_and_output_to_files`].
-///
-/// Requires the `diff_rabin` feature. All eligible bases in the delta window
-/// are scored; no similarity prefilter is applied.
-#[cfg(feature = "diff_rabin")]
-pub async fn encode_and_output_to_files_with_rabin(
-    raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
-    object_number: usize,
-    output_dir: PathBuf,
-    window_size: usize,
-) -> Result<(), GitError> {
-    let (pack_tx, mut pack_rx) = mpsc::channel(1024);
-    let (idx_tx, mut idx_rx) = mpsc::channel(1024);
-    let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
-
-    // The checksum-based final name is unavailable until encoding completes.
-    let now = Utc::now();
-    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();
-    let tmp_path = output_dir.join(format!("{}objects.pack.tmp", timestamp));
-    let mut pack_file = File::create(&tmp_path).await?;
-
-    let pack_writer = tokio::spawn(async move {
-        while let Some(chunk) = pack_rx.recv().await {
-            TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
-        }
-        TokioAsyncWriteExt::flush(&mut pack_file).await?;
-        Ok::<(), GitError>(())
-    });
-
-    pack_encoder.encode_with_rabin(raw_entries_rx).await?;
-
-    // Closing the sender lets the writer drain all queued pack chunks.
-    let pack_write_result = pack_writer
-        .await
-        .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
-    pack_write_result?;
-
-    let final_pack_name =
-        output_dir.join(format!("pack-{}.pack", pack_encoder.final_hash.unwrap()));
-    let final_idx_name = output_dir.join(format!("pack-{}.idx", pack_encoder.final_hash.unwrap()));
-    tokio::fs::rename(tmp_path, &final_pack_name).await?;
-
-    let mut idx_file = File::create(&final_idx_name).await?;
-    let idx_writer = tokio::spawn(async move {
-        while let Some(chunk) = idx_rx.recv().await {
-            TokioAsyncWriteExt::write_all(&mut idx_file, &chunk).await?;
-        }
-        TokioAsyncWriteExt::flush(&mut idx_file).await?;
-        Ok::<(), GitError>(())
-    });
-
-    // Index generation requires the final pack checksum and object offsets.
-    pack_encoder.encode_idx_file().await?;
-
-    let idx_write_result = idx_writer
-        .await
-        .map_err(|e| GitError::PackEncodeError(format!("idx writer task join error: {e}")))?;
-    idx_write_result?;
-
-    Ok(())
-}
-
-/// Rabin-delta encoder that explicitly disables the similarity prefilter.
-///
-/// This entry point is retained for callers that want the behavior stated in
-/// the function name. [`encode_and_output_to_files_with_rabin`] currently uses
-/// the same candidate-selection policy.
-#[cfg(feature = "diff_rabin")]
-pub async fn encode_and_output_to_files_with_rabin_no_prefilter(
-    raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
-    object_number: usize,
-    output_dir: PathBuf,
-    window_size: usize,
-) -> Result<(), GitError> {
-    let (pack_tx, mut pack_rx) = mpsc::channel(1024);
-    let (idx_tx, mut idx_rx) = mpsc::channel(1024);
-    let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
-    pack_encoder.disable_prefilter = true;
-
-    let now = Utc::now();
-    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();
-    let tmp_path = output_dir.join(format!("{}objects.pack.tmp", timestamp));
-    let mut pack_file = File::create(&tmp_path).await?;
-
-    let pack_writer = tokio::spawn(async move {
-        while let Some(chunk) = pack_rx.recv().await {
-            TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
-        }
-        TokioAsyncWriteExt::flush(&mut pack_file).await?;
-        Ok::<(), GitError>(())
-    });
-
-    pack_encoder.encode_with_rabin(raw_entries_rx).await?;
-
-    let pack_write_result = pack_writer
-        .await
-        .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
-    pack_write_result?;
-
-    let final_pack_name =
-        output_dir.join(format!("pack-{}.pack", pack_encoder.final_hash.unwrap()));
-    let final_idx_name = output_dir.join(format!("pack-{}.idx", pack_encoder.final_hash.unwrap()));
-    tokio::fs::rename(tmp_path, &final_pack_name).await?;
-
-    let mut idx_file = File::create(&final_idx_name).await?;
-    let idx_writer = tokio::spawn(async move {
-        while let Some(chunk) = idx_rx.recv().await {
-            TokioAsyncWriteExt::write_all(&mut idx_file, &chunk).await?;
-        }
-        TokioAsyncWriteExt::flush(&mut idx_file).await?;
-        Ok::<(), GitError>(())
-    });
-
     pack_encoder.encode_idx_file().await?;
 
     let idx_write_result = idx_writer

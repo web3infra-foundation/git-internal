@@ -7,8 +7,6 @@
 //! cargo run --release --example grading_bot_encode_pack_bench -- /data/rk8s-dev/rk8s/.git
 //! # Optional second arg: delta window size (default: 10, 0 disables delta).
 //! cargo run --release --example grading_bot_encode_pack_bench -- /data/rk8s-dev/rk8s/.git 50
-//! # Optional --rabin flag: use Rabin fingerprint delta (requires diff_rabin feature).
-//! cargo run --release --features diff_rabin --example grading_bot_encode_pack_bench -- --rabin /data/rk8s-dev/rk8s/.git
 //! ```
 //!
 //! The example walks both loose objects (`.git/objects/<aa>/<38-hex>`) and
@@ -26,10 +24,6 @@ use std::{
 };
 
 use flate2::read::ZlibDecoder;
-#[cfg(feature = "diff_rabin")]
-use git_internal::internal::pack::encode::encode_and_output_to_files_with_rabin;
-#[cfg(feature = "diff_rabin")]
-use git_internal::internal::pack::encode::encode_and_output_to_files_with_rabin_no_prefilter;
 use git_internal::{
     hash::{HashKind, ObjectHash, set_hash_kind},
     internal::{
@@ -119,26 +113,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 1. Parse arguments -------------------------------------------------
     let args: Vec<String> = std::env::args().collect();
 
-    // Parse flags and positional args
-    let mut positional: Vec<&str> = Vec::new();
-    let mut use_rabin = false;
-    let mut no_prefilter = false;
-    for arg in args.iter().skip(1) {
-        if arg == "--rabin" {
-            use_rabin = true;
-        } else if arg == "--no-prefilter" {
-            no_prefilter = true;
-        } else if arg.starts_with("--") {
-            eprintln!("unknown flag: {arg}");
-            std::process::exit(2);
-        } else {
-            positional.push(arg.as_str());
-        }
-    }
+    let positional: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
 
     if positional.is_empty() || positional.len() > 2 {
         eprintln!(
-            "usage: {} [--rabin] [--no-prefilter] <path-to-.git> [window_size]\n  --rabin         Use Rabin fingerprint delta (requires diff_rabin feature)\n  --no-prefilter  Disable similarity pre-filter (only with --rabin)",
+            "usage: {} <path-to-.git> [window_size]",
             args.first().map(String::as_str).unwrap_or("grading_bot_encode_pack_bench")
         );
         std::process::exit(2);
@@ -151,12 +130,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         10
     };
-
-    #[cfg(not(feature = "diff_rabin"))]
-    if use_rabin {
-        eprintln!("warning: --rabin requires the `diff_rabin` feature; falling back to default delta");
-        use_rabin = false;
-    }
 
     if !git_dir.join("objects").is_dir() {
         return Err(format!(
@@ -213,43 +186,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n = unique;
     let win = window_size;
     let out_path_for_task = out_path.clone();
-    let algorithm_name = if use_rabin && no_prefilter {
-        "rabin-no-prefilter"
-    } else if use_rabin {
-        "rabin"
-    } else {
-        // Default path: encode_and_output_to_files() uses rabin-no-prefilter
-        // when diff_rabin is enabled, myers otherwise.
+    let algorithm_name = {
         #[cfg(feature = "diff_rabin")]
-        { "rabin-no-prefilter" }
-        #[cfg(not(feature = "diff_rabin"))]
-        { "myers" }
-    };
-    let no_pf = no_prefilter;
-    let encode_handle = tokio::spawn(async move {
-        if use_rabin && no_pf {
-            #[cfg(feature = "diff_rabin")]
-            {
-                encode_and_output_to_files_with_rabin_no_prefilter(rx, n, out_path_for_task, win).await
-            }
-            #[cfg(not(feature = "diff_rabin"))]
-            {
-                let _ = (rx, n, out_path_for_task, win);
-                unreachable!("--rabin --no-prefilter requires diff_rabin feature")
-            }
-        } else if use_rabin {
-            #[cfg(feature = "diff_rabin")]
-            {
-                encode_and_output_to_files_with_rabin(rx, n, out_path_for_task, win).await
-            }
-            #[cfg(not(feature = "diff_rabin"))]
-            {
-                let _ = (rx, n, out_path_for_task, win);
-                unreachable!("--rabin requires diff_rabin feature")
-            }
-        } else {
-            encode_and_output_to_files(rx, n, out_path_for_task, win).await
+        {
+            "rabin"
         }
+        #[cfg(all(not(feature = "diff_rabin"), feature = "diff_mydrs"))]
+        {
+            "myers"
+        }
+        #[cfg(all(not(feature = "diff_rabin"), not(feature = "diff_mydrs")))]
+        {
+            "patience"
+        }
+    };
+    let encode_handle = tokio::spawn(async move {
+        encode_and_output_to_files(rx, n, out_path_for_task, win).await
     });
 
     println!();
