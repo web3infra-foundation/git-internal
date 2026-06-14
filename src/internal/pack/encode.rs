@@ -1,5 +1,9 @@
-//! Pack encoder capable of building streamed `.pack`/`.idx` pairs with optional delta compression,
-//! windowing, and asynchronous writers.
+//! Streaming encoder for Git packfiles and their companion index files.
+//!
+//! Entries are emitted through bounded channels so compression and file I/O can
+//! proceed independently. A zero-sized delta window encodes objects in parallel
+//! without delta compression; a non-zero window sorts objects into likely delta
+//! families and searches recent objects for an offset-delta base.
 
 use std::{
     cmp::Ordering,
@@ -12,15 +16,12 @@ use std::{
 };
 
 use ahash::AHasher;
-// use libc::ungetc;
 use chrono::Utc;
 use flate2::write::ZlibEncoder;
 use rayon::prelude::*;
-//use tokio::io::AsyncWriteExt;
 use tokio::io::AsyncWriteExt as TokioAsyncWriteExt;
 use tokio::{fs::File, sync::mpsc, task::JoinHandle};
 
-//use std::io as stdio;
 use crate::delta;
 use crate::{
     errors::GitError,
@@ -36,40 +37,41 @@ use crate::{
 };
 
 const MAX_CHAIN_LEN: usize = 50;
-const MIN_DELTA_RATE: f64 = 0.5; // minimum delta rate
-//const MAX_ZSTDELTA_CHAIN_LEN: usize = 50;
+const MIN_DELTA_RATE: f64 = 0.5;
 
-/// A encoder for generating pack files with delta objects.
+/// Stateful encoder for one Git packfile.
+///
+/// The encoder hashes the pack header and object entries, records each object's
+/// pack offset for the index, and appends the resulting checksum as the pack
+/// trailer.
 pub struct PackEncoder {
-    //path: Option<PathBuf>,
     object_number: usize,
     process_index: usize,
     window_size: usize,
-    // window: VecDeque<(Entry, usize)>, // entry and offset
     pack_sender: Option<mpsc::Sender<Vec<u8>>>,
     idx_sender: Option<mpsc::Sender<Vec<u8>>>,
-    //idx_sender: Option<mpsc::Sender<Vec<u8>>>,
     idx_entries: Option<Vec<IndexEntry>>,
-    inner_offset: usize,       // offset of current entry
-    inner_hash: HashAlgorithm, // introduce different hash algorithm
+    /// Offset at which the next encoded object will begin.
+    inner_offset: usize,
+    /// Incremental checksum over the pack header and encoded objects.
+    inner_hash: HashAlgorithm,
     final_hash: Option<ObjectHash>,
     start_encoding: bool,
-    /// Profiling toggle: when true, skips the similarity pre-filter
-    /// (`multi_point_similar` / `cheap_similar`) so all candidates
-    /// within the delta window are considered — matching git's behavior.
+    /// Whether to score every eligible object in the delta window.
+    ///
+    /// When false, a cheap content-similarity check removes unlikely bases
+    /// before the more expensive delta calculation.
     pub disable_prefilter: bool,
 }
 
-/// Encode entries into a pack, write `.pack`/`.idx` files to `output_dir`.
-/// - Spawns background writers to consume pack/idx channels to avoid back-pressure.
-/// - Uses `window_size` to control delta: `0` means no delta (parallel encode), otherwise enable delta window.
-/// # Arguments
-/// * `raw_entries_rx` - receiver providing entries with metadata
-/// * `object_number` - expected total object count for the pack header
-/// * `output_dir` - target directory to place the generated files
-/// * `window_size` - delta window size; `0` disables delta
-/// # Returns
-/// * `Ok(())` on success, `GitError` on failure
+/// Encodes entries and writes a content-addressed `.pack`/`.idx` pair.
+///
+/// Pack bytes are first written to a temporary file. After the pack checksum is
+/// known, the file is renamed to `pack-<checksum>.pack` and the matching index is
+/// generated as `pack-<checksum>.idx`.
+///
+/// `object_number` must equal the number of entries received. A `window_size` of
+/// zero disables delta compression and enables batch-parallel encoding.
 pub async fn encode_and_output_to_files(
     raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
     object_number: usize,
@@ -80,9 +82,9 @@ pub async fn encode_and_output_to_files(
     let (idx_tx, mut idx_rx) = mpsc::channel(1024);
     let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
 
-    // timestamp for temp filename
+    // The checksum-based final name is unavailable until encoding completes.
     let now = Utc::now();
-    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string(); // 例如 20251209235959.123
+    let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();
     let tmp_path = output_dir.join(format!("{}objects.pack.tmp", timestamp));
     let mut pack_file = File::create(&tmp_path).await?;
 
@@ -90,14 +92,13 @@ pub async fn encode_and_output_to_files(
         while let Some(chunk) = pack_rx.recv().await {
             TokioAsyncWriteExt::write_all(&mut pack_file, &chunk).await?;
         }
-        //pack_file.flush().await?;
         TokioAsyncWriteExt::flush(&mut pack_file).await?;
         Ok::<(), GitError>(())
     });
 
     pack_encoder.encode(raw_entries_rx).await?;
 
-    // 等待 pack 写入完成
+    // Closing the sender lets the writer drain all queued pack chunks.
     let pack_write_result = pack_writer
         .await
         .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
@@ -111,15 +112,13 @@ pub async fn encode_and_output_to_files(
     let mut idx_file = File::create(&final_idx_name).await?;
     let idx_writer = tokio::spawn(async move {
         while let Some(chunk) = idx_rx.recv().await {
-            //idx_file.write_all(&chunk).await?;
             TokioAsyncWriteExt::write_all(&mut idx_file, &chunk).await?;
         }
-        //idx_file.flush().await?;
         TokioAsyncWriteExt::flush(&mut idx_file).await?;
         Ok::<(), GitError>(())
     });
 
-    //build idx
+    // Index generation requires the final pack checksum and object offsets.
     pack_encoder.encode_idx_file().await?;
 
     let idx_write_result = idx_writer
@@ -130,8 +129,10 @@ pub async fn encode_and_output_to_files(
     Ok(())
 }
 
-/// Encode entries into a pack using Rabin fingerprint delta (requires `diff_rabin` feature).
-/// Same as `encode_and_output_to_files` but uses the Rabin algorithm instead of Myers/Patience.
+/// Rabin-delta variant of [`encode_and_output_to_files`].
+///
+/// Requires the `diff_rabin` feature. All eligible bases in the delta window
+/// are scored; no similarity prefilter is applied.
 #[cfg(feature = "diff_rabin")]
 pub async fn encode_and_output_to_files_with_rabin(
     raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -143,7 +144,7 @@ pub async fn encode_and_output_to_files_with_rabin(
     let (idx_tx, mut idx_rx) = mpsc::channel(1024);
     let mut pack_encoder = PackEncoder::new_with_idx(object_number, window_size, pack_tx, idx_tx);
 
-    // timestamp for temp filename
+    // The checksum-based final name is unavailable until encoding completes.
     let now = Utc::now();
     let timestamp = now.format("%Y%m%d%H%M%S%.3f").to_string();
     let tmp_path = output_dir.join(format!("{}objects.pack.tmp", timestamp));
@@ -159,7 +160,7 @@ pub async fn encode_and_output_to_files_with_rabin(
 
     pack_encoder.encode_with_rabin(raw_entries_rx).await?;
 
-    // wait for pack write to finish
+    // Closing the sender lets the writer drain all queued pack chunks.
     let pack_write_result = pack_writer
         .await
         .map_err(|e| GitError::PackEncodeError(format!("pack writer task join error: {e}")))?;
@@ -179,7 +180,7 @@ pub async fn encode_and_output_to_files_with_rabin(
         Ok::<(), GitError>(())
     });
 
-    // build idx
+    // Index generation requires the final pack checksum and object offsets.
     pack_encoder.encode_idx_file().await?;
 
     let idx_write_result = idx_writer
@@ -190,11 +191,11 @@ pub async fn encode_and_output_to_files_with_rabin(
     Ok(())
 }
 
-/// Encode entries into a pack using Rabin fingerprint delta WITHOUT the
-/// similarity pre-filter (requires `diff_rabin` feature). This skips
-/// `multi_point_similar` / `cheap_similar` so all candidates in the
-/// delta window are considered — matching git's behavior exactly, at
-/// the cost of increased delta computation time.
+/// Rabin-delta encoder that explicitly disables the similarity prefilter.
+///
+/// This entry point is retained for callers that want the behavior stated in
+/// the function name. [`encode_and_output_to_files_with_rabin`] currently uses
+/// the same candidate-selection policy.
 #[cfg(feature = "diff_rabin")]
 pub async fn encode_and_output_to_files_with_rabin_no_prefilter(
     raw_entries_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -251,21 +252,22 @@ pub async fn encode_and_output_to_files_with_rabin_no_prefilter(
     Ok(())
 }
 
-/// Encode header of pack file (12 byte)<br>
-/// Content: 'PACK', Version(2), number of objects
+/// Encodes the 12-byte pack header.
+///
+/// The header consists of the `PACK` signature, version 2, and a big-endian
+/// 32-bit object count.
 fn encode_header(object_number: usize) -> Vec<u8> {
-    let mut result: Vec<u8> = vec![
-        b'P', b'A', b'C', b'K', // The logotype of the Pack File
-        0, 0, 0, 2, // generates version 2 only.
-    ];
-    assert_ne!(object_number, 0); // guarantee self.number_of_objects!=0
+    let mut result: Vec<u8> = vec![b'P', b'A', b'C', b'K', 0, 0, 0, 2];
+    assert_ne!(object_number, 0);
     assert!(object_number <= u32::MAX as usize);
-    //TODO: GitError:numbers of objects should < 4G ,
-    result.append((object_number as u32).to_be_bytes().to_vec().as_mut()); // to 4 bytes (network byte order aka. big-endian)
+    result.append((object_number as u32).to_be_bytes().to_vec().as_mut());
     result
 }
 
-/// Encode offset of delta object
+/// Encodes an OFS_DELTA base distance using Git's variable-length format.
+///
+/// `value` is the positive distance from the delta object's offset back to its
+/// base object's offset, not an absolute pack offset.
 fn encode_offset(mut value: usize) -> Vec<u8> {
     assert_ne!(value, 0, "offset can't be zero");
     let mut bytes = Vec::new();
@@ -274,7 +276,7 @@ fn encode_offset(mut value: usize) -> Vec<u8> {
     value >>= 7;
     while value != 0 {
         value -= 1;
-        let byte = (value & 0x7F) as u8 | 0x80; // set first bit one
+        let byte = (value & 0x7F) as u8 | 0x80;
         value >>= 7;
         bytes.push(byte);
     }
@@ -282,19 +284,21 @@ fn encode_offset(mut value: usize) -> Vec<u8> {
     bytes
 }
 
-/// Encode one object, and update the hash
-/// @offset: offset of this object if it's a delta object. For other object, it's None
+/// Encodes one complete pack entry, excluding its absolute pack offset.
+///
+/// `offset` is required for OFS_DELTA entries and contains the backward
+/// distance to the selected base. Object data, including delta instructions,
+/// is zlib-compressed after the entry header and optional base reference.
 fn encode_one_object(entry: &Entry, offset: Option<usize>) -> Result<Vec<u8>, GitError> {
-    // try encode as delta
     let obj_data = &entry.data;
     let obj_data_len = obj_data.len();
     let obj_type_number = entry.obj_type.to_pack_type_u8()?;
 
     let mut encoded_data = Vec::new();
 
-    // **header** encoding
+    // The first byte stores four size bits and the three-bit pack object type.
     let mut header_data = vec![(0x80 | (obj_type_number << 4)) + (obj_data_len & 0x0f) as u8];
-    let mut size = obj_data_len >> 4; // 4 bit has been used in first byte
+    let mut size = obj_data_len >> 4;
     if size > 0 {
         while size > 0 {
             if size >> 7 > 0 {
@@ -310,7 +314,7 @@ fn encode_one_object(entry: &Entry, offset: Option<usize>) -> Result<Vec<u8>, Gi
     }
     encoded_data.extend(header_data);
 
-    // **offset** encoding
+    // OFS_DELTA places its backward base distance immediately after the header.
     if entry.obj_type == ObjectType::OffsetDelta || entry.obj_type == ObjectType::OffsetZstdelta {
         let offset_data = encode_offset(offset.unwrap());
         encoded_data.extend(offset_data);
@@ -318,76 +322,72 @@ fn encode_one_object(entry: &Entry, offset: Option<usize>) -> Result<Vec<u8>, Gi
         unreachable!("unsupported type")
     }
 
-    // **data** encoding, need zlib compress
+    // Every pack entry payload is a separate zlib stream.
     let mut inflate = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     inflate
         .write_all(obj_data)
         .expect("zlib compress should never failed");
     inflate.flush().expect("zlib flush should never failed");
     let compressed_data = inflate.finish().expect("zlib compress should never failed");
-    // self.write_all_and_update(&compressed_data).await;
     encoded_data.extend(compressed_data);
     Ok(encoded_data)
 }
 
-/// Magic sort function for entries.
+/// Orders entries so likely delta families remain close in the sliding window.
 ///
-/// Sorts by: path existence → dir → name_hash (desc) → size (desc) → pointer.
-/// The name_hash (git's `pack_name_hash`) clusters files with similar names
-/// together, maximizing delta opportunities within the sliding window.
+/// Entries with paths come first, grouped by parent directory and Git's
+/// `pack_name_hash`; larger objects then precede smaller objects so they can
+/// serve as bases. Pointer order provides a total order for the current sort
+/// invocation when all semantic keys compare equal.
 fn magic_sort(a: &MetaAttached<Entry, EntryMeta>, b: &MetaAttached<Entry, EntryMeta>) -> Ordering {
     let path_a = a.meta.file_path.as_ref();
     let path_b = b.meta.file_path.as_ref();
 
-    // 1. Handle path existence: entries with paths sort first
+    // Path metadata provides the strongest signal that two blobs are related.
     match (path_a, path_b) {
         (Some(pa), Some(pb)) => {
             let pa = Path::new(pa);
             let pb = Path::new(pb);
 
-            // 1a. Compare parent directory paths
             let dir_ord = pa.parent().cmp(&pb.parent());
             if dir_ord != Ordering::Equal {
                 return dir_ord;
             }
 
-            // 1b. Compare by name hash (descending).
-            // Uses raw bytes for zero-allocation comparison.
+            // Raw path bytes avoid allocating a temporary UTF-8 string.
             let hash_a = delta::pack_name_hash(pa.as_os_str().as_encoded_bytes());
             let hash_b = delta::pack_name_hash(pb.as_os_str().as_encoded_bytes());
             if hash_a != hash_b {
-                return hash_b.cmp(&hash_a); // descending
+                return hash_b.cmp(&hash_a);
             }
         }
-        (Some(_), None) => return Ordering::Less, // entries with paths sort first
-        (None, Some(_)) => return Ordering::Greater, // entries without paths sort last
+        (Some(_), None) => return Ordering::Less,
+        (None, Some(_)) => return Ordering::Greater,
         (None, None) => {}
     }
 
-    // 2. Sort by size descending (larger objects first — better as delta bases)
+    // Larger objects are generally more useful as delta bases.
     let ord = b.inner.data.len().cmp(&a.inner.data.len());
     if ord != Ordering::Equal {
         return ord;
     }
 
-    // 3. Fallback pointer order (newest first)
+    // Preserve a total order when all content-derived keys match.
     (a as *const MetaAttached<Entry, EntryMeta>).cmp(&(b as *const MetaAttached<Entry, EntryMeta>))
 }
 
-/// Calculate hash of data (used for fast similarity checks).
+/// Computes a fast, non-cryptographic fingerprint for similarity filtering.
 fn calc_hash(data: &[u8]) -> u64 {
     let mut hasher = AHasher::default();
     data.hash(&mut hasher);
     hasher.finish()
 }
 
-/// Multi-point similarity check: compares hashes at the beginning and end
-/// of both buffers. If either region matches, the buffers are likely similar
-/// enough to be worth delta computation.
+/// Checks whether two buffers share an identical prefix or suffix sample.
 ///
-/// This is more lenient than the original `cheap_similar` (which only checked
-/// the first 128 bytes), catching cases where files share content after
-/// different headers (e.g., different license headers but identical code).
+/// Matching either 128-byte sample is enough to retain the candidate for Rabin
+/// delta scoring. This catches related files whose generated or license headers
+/// differ while their trailing content remains the same.
 #[cfg(feature = "diff_rabin")]
 fn multi_point_similar(a: &[u8], b: &[u8]) -> bool {
     let min_len = a.len().min(b.len());
@@ -395,13 +395,11 @@ fn multi_point_similar(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
 
-    // Check beginning (first 128 bytes or whole buffer)
     let head_len = 128.min(min_len);
     if calc_hash(&a[..head_len]) == calc_hash(&b[..head_len]) {
         return true;
     }
 
-    // Check end (last 128 bytes)
     let tail_start = min_len.saturating_sub(128);
     if calc_hash(&a[tail_start..min_len]) == calc_hash(&b[tail_start..min_len]) {
         return true;
@@ -410,8 +408,7 @@ fn multi_point_similar(a: &[u8], b: &[u8]) -> bool {
     false
 }
 
-/// Cheap check if two byte slices are similar by comparing their hashes
-/// of the first 128 bytes. Used only in the non-rabin path.
+/// Retains non-Rabin candidates whose first 128 bytes have the same fingerprint.
 #[cfg(not(feature = "diff_rabin"))]
 fn cheap_similar(a: &[u8], b: &[u8]) -> bool {
     let k = a.len().min(b.len()).min(128);
@@ -421,23 +418,20 @@ fn cheap_similar(a: &[u8], b: &[u8]) -> bool {
     calc_hash(&a[..k]) == calc_hash(&b[..k])
 }
 
-/// A window entry for delta base selection with optional cached Rabin index.
+/// Candidate delta base retained in the sliding window.
 ///
-/// When `diff_rabin` is enabled, the index is built once per source entry
-/// and reused across all target candidates — matching git's approach where
-/// `delta_index` is cached in the window's `unpacked` struct.
+/// With `diff_rabin`, the source index is built lazily and reused for every
+/// later target that considers this entry as a base.
 #[cfg(feature = "diff_rabin")]
 struct DeltaWindowEntry {
     entry: Entry,
     offset: usize,
-    /// `Arc<[u8]>` shared between the entry and its rabin index.
-    /// Populated lazily on first index creation; subsequent index
-    /// creations reuse this Arc via `Arc::clone` (refcount bump, no copy).
+    /// Shared source storage used when constructing the cached Rabin index.
     data_arc: Option<Arc<[u8]>>,
     rabin_index: Option<delta::RabinDeltaIndex>,
 }
 
-/// Window entry without rabin support.
+/// Candidate delta base retained in the sliding window.
 #[cfg(not(feature = "diff_rabin"))]
 struct DeltaWindowEntry {
     entry: Entry,
@@ -463,12 +457,11 @@ impl PackEncoder {
             object_number,
             window_size,
             process_index: 0,
-            // window: VecDeque::with_capacity(window_size),
             pack_sender: Some(sender),
             idx_sender: None,
             idx_entries: None,
-            inner_offset: 12, // start  after 12 bytes pack header(signature + version + object count).
-            inner_hash: HashAlgorithm::new(), // introduce different hash algorithm
+            inner_offset: 12,
+            inner_hash: HashAlgorithm::new(),
             final_hash: None,
             start_encoding: false,
             disable_prefilter: false,
@@ -482,16 +475,14 @@ impl PackEncoder {
         idx_sender: mpsc::Sender<Vec<u8>>,
     ) -> Self {
         PackEncoder {
-            //path: Some(path),
             object_number,
             window_size,
             process_index: 0,
-            // window: VecDeque::with_capacity(window_size),
             pack_sender: Some(pack_sender),
             idx_sender: Some(idx_sender),
             idx_entries: None,
-            inner_offset: 12, // start  after 12 bytes pack header(signature + version + object count).
-            inner_hash: HashAlgorithm::new(), // introduce different hash algorithm
+            inner_offset: 12,
+            inner_hash: HashAlgorithm::new(),
             final_hash: None,
             start_encoding: false,
             disable_prefilter: false,
@@ -499,7 +490,7 @@ impl PackEncoder {
     }
 
     pub fn drop_sender(&mut self) {
-        self.pack_sender.take(); // Take the sender out, dropping it
+        self.pack_sender.take();
     }
 
     pub async fn send_data(&mut self, data: Vec<u8>) {
@@ -508,27 +499,19 @@ impl PackEncoder {
         }
     }
 
-    /// Get the hash of the pack file. if the pack file is not finished, return None
+    /// Returns the checksum appended to the completed packfile.
+    ///
+    /// The checksum is unavailable until all entries have been encoded.
     pub fn get_hash(&self) -> Option<ObjectHash> {
         self.final_hash
     }
 
-    /// Encodes entries into a pack file with delta objects and outputs them through the specified writer.
-    /// # Arguments
-    /// - `rx` - A receiver channel (`mpsc::Receiver<Entry>`) from which entries to be encoded are received.
-    /// # Returns
-    /// Encode entries into a pack using the default delta algorithm
-    /// (Rabin fingerprint when `diff_rabin` feature is enabled, Myers otherwise).
-    /// No pre-filter is applied — all candidates within the delta window are
-    /// considered, matching git's default behavior.
+    /// Encodes all received entries and streams the resulting pack bytes.
     ///
-    /// # Arguments
-    /// * `entry_rx` - Channel receiver for entries to encode.
-    ///
-    /// # Returns
-    /// Returns `Ok(())` if encoding is successful, or a `GitError` in case of failure.
-    /// - Returns a `GitError` if there is a failure during the encoding process.
-    /// - Returns `PackEncodeError` if an encoding operation is already in progress.
+    /// A zero-sized window uses batch-parallel, non-delta encoding. Otherwise,
+    /// entries are sorted by object type and path similarity before delta-base
+    /// selection. With `diff_rabin`, Rabin deltas are used; without it, the
+    /// standard delta implementation and optional similarity prefilter are used.
     pub async fn encode(
         &mut self,
         entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -547,7 +530,7 @@ impl PackEncoder {
         }
     }
 
-    /// Encode with zstdelta
+    /// Encodes entries using zstdelta payloads for selected offset deltas.
     pub async fn encode_with_zstdelta(
         &mut self,
         entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -555,11 +538,10 @@ impl PackEncoder {
         self.inner_encode(entry_rx, true, false, self.disable_prefilter).await
     }
 
-    /// Encode with Rabin fingerprint delta, no pre-filter (requires `diff_rabin` feature).
+    /// Encodes entries with Rabin deltas and no similarity prefilter.
     ///
-    /// All candidates within the delta window are considered — matching git's default
-    /// behavior. This is the recommended path for best compression. Delegates to
-    /// `inner_encode` with `enable_rabin=true, disable_prefilter=true`.
+    /// Requires the `diff_rabin` feature. A zero-sized window still selects the
+    /// non-delta parallel path.
     #[cfg(feature = "diff_rabin")]
     pub async fn encode_with_rabin(
         &mut self,
@@ -572,8 +554,10 @@ impl PackEncoder {
         }
     }
 
-    /// Delta selection heuristics are based on:
-    ///   https://github.com/git/git/blob/master/Documentation/technical/pack-heuristics.adoc
+    /// Sorts entries, runs delta-base searches, and emits objects in pack order.
+    ///
+    /// The candidate ordering and size constraints follow Git's documented
+    /// [pack heuristics](https://github.com/git/git/blob/master/Documentation/technical/pack-heuristics.adoc).
     async fn inner_encode(
         &mut self,
         mut entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -585,7 +569,6 @@ impl PackEncoder {
         self.send_data(head.clone()).await;
         self.inner_hash.update(&head);
 
-        // ensure only one decode can only invoke once
         if self.start_encoding {
             return Err(GitError::PackEncodeError(
                 "encoding operation is already in progress".to_string(),
@@ -631,13 +614,9 @@ impl PackEncoder {
             tags.len()
         );
 
-        // ── Multi-threaded delta search ──
-        //
-        // Git splits the sorted object list across `online_cpus()` threads, each
-        // maintaining its own sliding window. We follow the same strategy: blob
-        // objects (which dominate the count) are split into contiguous chunks while
-        // commits, trees, and tags are each processed in their own thread. This
-        // yields near-linear speedup from 1 → N threads on multi-core machines.
+        // Delta windows are independent by object type. Blobs, which normally
+        // dominate both count and CPU time, are further divided into contiguous
+        // sorted chunks and processed by a shared worker pool.
 
         let num_threads = std::env::var("PACK_THREADS")
             .ok()
@@ -648,7 +627,7 @@ impl PackEncoder {
                     .unwrap_or(4)
             });
 
-        // Extract inner Entry from MetaAttached wrappers
+        // Path metadata has served its sorting purpose and is not encoded.
         let commit_entries: Vec<Entry> =
             commits.into_iter().map(|e| e.inner).collect();
         let tree_entries: Vec<Entry> = trees.into_iter().map(|e| e.inner).collect();
@@ -661,7 +640,7 @@ impl PackEncoder {
             "splitting blob delta search"
         );
 
-        // Spawn non-blob types as before
+        // Commit, tree, and tag buckets are small enough for one task each.
         let mk_blk = |entries: Vec<Entry>,
                       ez: bool,
                       er: bool,
@@ -678,19 +657,9 @@ impl PackEncoder {
         let tree_handle = mk_blk(tree_entries, enable_zstdelta, enable_rabin, disable_prefilter);
         let tag_handle = mk_blk(tag_entries, enable_zstdelta, enable_rabin, disable_prefilter);
 
-        // ── Multi-threaded blob delta search (git-style contiguous split) ──
-        //
-        // Git splits the sorted blob list into N contiguous segments (one per
-        // thread), preserving name-hash clustering within each segment for good
-        // delta quality. Count-balanced chunks preserve the sort order but cause
-        // load imbalance because entries are sorted by size (descending).
-        //
-        // We use count-balanced splitting with 3× over-subscription (3× more
-        // chunks than threads). A shared work queue lets fast threads grab
-        // additional chunks, providing load balancing while keeping chunks large
-        // enough for quality delta windows. Threads pop from the back (small
-        // files first), so all 10 threads eventually process the 10 largest
-        // chunks — bounding the worst-case wall time to the largest chunk.
+        // Split the sorted blob list into contiguous, count-balanced chunks.
+        // Twenty chunks per worker provide load balancing without completely
+        // discarding the path/name clustering established by `magic_sort`.
         let total_blob_entries = blob_entries.len();
         let chunks_per_thread: usize = 20;
         let blob_chunk_count = if num_threads > 1 && total_blob_entries > (num_threads * 20) {
@@ -705,9 +674,7 @@ impl PackEncoder {
             entries: Vec<Entry>,
         }
 
-        // Build count-balanced chunks from the end (O(1) split_off).
-        // Chunks are contiguous segments of the sorted list, preserving
-        // name-hash clustering within each chunk.
+        // Build from the end so each split is O(1), then restore sort order.
         let mut chunks: Vec<BlobChunk> = Vec::with_capacity(blob_chunk_count);
         for i in 0..blob_chunk_count {
             let take = entries_per_chunk.min(blob_entries.len());
@@ -717,15 +684,14 @@ impl PackEncoder {
             let entries = blob_entries.split_off(blob_entries.len() - take);
             chunks.push(BlobChunk { index: i, entries });
         }
-        chunks.reverse(); // restore original sort order (largest files first)
+        chunks.reverse();
         for (i, c) in chunks.iter_mut().enumerate() {
             c.index = i;
         }
         let actual_chunks = chunks.len();
 
-        // Work queue: threads pop from back (small files first) → fast
-        // threads grab many small chunks; all threads share the 10 largest
-        // chunks at the end.
+        // Workers pop smaller-object chunks first. Faster workers can consume
+        // additional chunks before the largest-object work is reached.
         type ChunkResult = (usize, Result<Vec<(Vec<u8>, IndexEntry)>, GitError>);
         let chunk_queue: Arc<Mutex<Vec<BlobChunk>>> =
             Arc::new(Mutex::new(chunks));
@@ -763,7 +729,7 @@ impl PackEncoder {
             }));
         }
 
-        // Await commit/tree/tag
+        // These Tokio tasks run independently of the native blob workers.
         let (commit_results, tree_results, tag_results) = tokio::try_join!(
             commit_handle, tree_handle, tag_handle
         )
@@ -773,7 +739,8 @@ impl PackEncoder {
         let tree_res = tree_results?;
         let tag_res = tag_results?;
 
-        // Join blob threads
+        // Reassemble chunk results in original sorted order before assigning
+        // absolute pack offsets.
         for handle in blob_handles {
             handle
                 .join()
@@ -815,7 +782,8 @@ impl PackEncoder {
 
         self.idx_entries = Some(idx_entries);
 
-        // Hash signature
+        // The trailer is the checksum of the header and all encoded entries;
+        // the trailer bytes themselves are not included in that checksum.
         let hash_result = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result.to_vec()).await;
@@ -824,13 +792,16 @@ impl PackEncoder {
         Ok(())
     }
 
-    /// Try to encode as delta using objects in window
-    /// delta & zstdelta have been gathered here
-    /// Refs: https://sapling-scm.com/docs/dev/internals/zstdelta/
-    /// the sliding window was moved here
-    /// # Returns
-    /// - Return (Vec<Vec<u8>) if success make delta
-    /// - Return (None) if didn't delta,
+    /// Encodes one sorted bucket while selecting bases from a sliding window.
+    ///
+    /// Each returned tuple contains the encoded pack entry and its unfinished
+    /// index record. Offsets are relative to the start of this bucket and are
+    /// replaced with absolute pack offsets when the bucket results are emitted.
+    /// Selected bases produce OFS_DELTA entries; entries without a worthwhile
+    /// base are encoded in full.
+    ///
+    /// zstdelta format details:
+    /// <https://sapling-scm.com/docs/dev/internals/zstdelta/>
     #[cfg_attr(not(feature = "diff_rabin"), allow(unused_variables))]
     fn try_as_offset_delta(
         mut bucket: Vec<Entry>,
@@ -847,19 +818,15 @@ impl PackEncoder {
             let mut best_base: Option<&DeltaWindowEntry> = None;
             let mut best_rate: f64 = 0.0;
 
-            // Fast pre-filter using cheap_similar + size ratio + heuristic rate.
-            // When diff_rabin is available, we use actual rabin delta sizes for
-            // scoring (O(n), fast and accurate) with index caching and max_size
-            // early termination. Without it, we fall back to heuristic rate
-            // estimates (fast but less accurate).
+            // Rabin can cheaply measure actual delta output using a cached source
+            // index. The non-Rabin path estimates savings before paying for one
+            // final delta calculation against the selected base.
             #[cfg(feature = "diff_rabin")]
             {
                 let trg_size = entry.data.len();
 
-                // Collect indices of filtered candidates, iterating from
-                // most recent (back of window) to oldest (front). Most
-                // recent entries are more likely to be good delta bases
-                // when name_hash sorting clusters related files.
+                // Search newest to oldest because adjacent sorted entries are
+                // most likely to belong to the same file family.
                 let pre_filtered_idxs: Vec<usize> = window
                     .iter()
                     .enumerate()
@@ -869,14 +836,11 @@ impl PackEncoder {
                         try_base.entry.obj_type == entry.obj_type
                             && try_base.entry.chain_len < MAX_CHAIN_LEN
                             && try_base.entry.hash != entry.hash
-                            // Git's size filter: src_size / 32 <= trg_size
+                            // Reject a base more than 32 times larger than the target.
                             && trg_size >= src_size / 32
-                            // Sizediff must be less than half target size
+                            // A large positive size difference cannot yield enough savings.
                             && src_size.saturating_sub(trg_size.min(src_size))
                                 < trg_size / 2
-                            // Multi-point similarity: check head AND tail
-                            // to catch files that share content after
-                            // different headers.
                             && (disable_prefilter
                                 || multi_point_similar(&try_base.entry.data, &entry.data))
                     })
@@ -884,24 +848,18 @@ impl PackEncoder {
                     .collect();
 
                 if !pre_filtered_idxs.is_empty() {
-                    // Progressive max_size matching git's try_delta:
-                    //   max_size = trg_size/2 - hash_size
-                    // Deltas larger than this aren't worth the overhead.
+                    // Start with a threshold that requires roughly 50% savings.
+                    // Each successful candidate lowers the limit for later work.
                     let max_delta_size = trg_size.saturating_sub(trg_size / 2 + 20);
                     let mut best_delta_size = max_delta_size;
                     let mut best_idx: Option<usize> = None;
 
-                    // Score candidates with index caching and max_size early
-                    // termination — matching git's try_delta approach.
                     for &idx in &pre_filtered_idxs {
-                        // Ensure the rabin index is cached (built once per source).
-                        // Small objects (< RABIN_WINDOW+1 bytes) can't be indexed;
-                        // skip them as they won't produce useful deltas anyway.
+                        // Build the source index at most once while it remains in
+                        // the window. Very small sources cannot be indexed.
                         if window[idx].rabin_index.is_none() {
-                            // Build (or reuse) the shared Arc<[u8]> for this window
-                            // entry. The Arc is cloned (refcount bump, no copy) for
-                            // the index, avoiding a duplicate allocation of the source
-                            // buffer for each delta against this base.
+                            // The index and window entry share source bytes through
+                            // `Arc`, avoiding another source-buffer allocation.
                             let data_arc = match window[idx].data_arc.take() {
                                 Some(arc) => arc,
                                 None => {
@@ -918,15 +876,13 @@ impl PackEncoder {
                                     window[idx].rabin_index = Some(new_index);
                                 }
                                 None => {
-                                    // Restore data_arc for future use
                                     window[idx].data_arc = Some(data_arc);
                                     continue;
                                 }
                             }
                         }
 
-                        // Scope the index borrow so `best_base` can later
-                        // immutably borrow `window[idx]`.
+                        // End the index borrow before retaining the window entry.
                         let delta = {
                             let index = window[idx].rabin_index.as_ref().unwrap();
                             delta::encode_rabin_with_index_and_max_size(
@@ -951,8 +907,8 @@ impl PackEncoder {
                 }
             }
 
-            // Without diff_rabin: use heuristic rate estimation (fast, avoids
-            // expensive Myers deltas for every candidate).
+            // Estimate savings in parallel, then build a real delta only for
+            // the best candidate.
             #[cfg(not(feature = "diff_rabin"))]
             {
                 let candidates: Vec<_> = window
@@ -1015,7 +971,8 @@ impl PackEncoder {
                 }
             }
 
-            // Don't use delta if it wouldn't actually save space
+            // Require enough estimated savings to justify delta metadata and
+            // future reconstruction cost.
             if best_rate < MIN_DELTA_RATE {
                 best_base = None;
             }
@@ -1031,10 +988,7 @@ impl PackEncoder {
                         })
                         .unwrap()
                 } else {
-                    // Rabin branch gated behind diff_rabin feature.
-                    // Reuses the cached index to skip index construction — this
-                    // saves a full copy of the source buffer compared to calling
-                    // `encode_rabin`, which would rebuild the index from scratch.
+                    // Reuse the source index created during candidate scoring.
                     #[cfg(feature = "diff_rabin")]
                     if enable_rabin {
                         entry.obj_type = ObjectType::OffsetDelta;
@@ -1069,7 +1023,11 @@ impl PackEncoder {
         Ok(res)
     }
 
-    /// Parallel encode with rayon, only works when window_size == 0 (no delta)
+    /// Encodes full objects in ordered, Rayon-parallel batches.
+    ///
+    /// This path is valid only when `window_size == 0`; preserving input order
+    /// allows absolute pack offsets and index entries to be assigned as each
+    /// completed batch is streamed.
     pub async fn parallel_encode(
         &mut self,
         mut entry_rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -1084,7 +1042,6 @@ impl PackEncoder {
         self.send_data(head.clone()).await;
         self.inner_hash.update(&head);
 
-        // ensure only one decode can only invoke once
         if self.start_encoding {
             return Err(GitError::PackEncodeError(
                 "encoding operation is already in progress".to_string(),
@@ -1092,7 +1049,7 @@ impl PackEncoder {
         }
 
         let mut idx_entries = Vec::new();
-        let batch_size = usize::max(1000, entry_rx.max_capacity() / 10); // A temporary value, not optimized
+        let batch_size = usize::max(1000, entry_rx.max_capacity() / 10);
         tracing::info!("encode with batch size: {}", batch_size);
         loop {
             let mut batch_entries = Vec::with_capacity(batch_size);
@@ -1118,7 +1075,8 @@ impl PackEncoder {
                 break;
             }
 
-            // use `collect` will return result in order, refs: https://github.com/rayon-rs/rayon/issues/551#issuecomment-371657900
+            // Indexed parallel iteration preserves input order in `collect`, so
+            // offsets remain aligned with the receiver's object order.
             let batch_result: Vec<Result<(Vec<u8>, IndexEntry), GitError>> =
                 time_it!("parallel encode: encode batch", {
                     batch_entries
@@ -1148,7 +1106,7 @@ impl PackEncoder {
             );
         }
 
-        // hash signature
+        // Append the checksum after hashing the header and every object entry.
         let hash_result = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
         self.send_data(hash_result.to_vec()).await;
@@ -1158,7 +1116,7 @@ impl PackEncoder {
         Ok(())
     }
 
-    /// Write data to writer and update hash & offset
+    /// Accounts for one encoded chunk and forwards it to the pack writer.
     async fn write_all_and_update(&mut self, data: &[u8]) {
         self.inner_hash.update(data);
         self.inner_offset += data.len();
@@ -1180,11 +1138,12 @@ impl PackEncoder {
         Ok(())
     }
 
-    /// async version of encode, result data will be returned by JoinHandle.
-    /// It will consume PackEncoder, so you can't use it after calling this function.
-    /// when window_size = 0, it executes parallel_encode which retains stream transmission
-    /// when window_size = 0,it executes encode which uses magic sort and delta.
-    /// It seems that all other modules rely on this api
+    /// Spawns pack encoding and returns a handle for the background task.
+    ///
+    /// This consumes the encoder. A zero-sized window uses [`Self::parallel_encode`];
+    /// otherwise [`Self::encode`] performs sorted delta-window encoding.
+    ///
+    /// The task panics if encoding fails; callers should await the returned handle.
     pub async fn encode_async(
         mut self,
         rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
@@ -1198,18 +1157,24 @@ impl PackEncoder {
         }))
     }
 
-    /// async version of encode_with_zstdelta, result data will be returned by JoinHandle.
+    /// Spawns zstdelta encoding and returns a handle for the background task.
+    ///
+    /// This consumes the encoder. The task panics if encoding fails.
     pub async fn encode_async_with_zstdelta(
         mut self,
         rx: mpsc::Receiver<MetaAttached<Entry, EntryMeta>>,
     ) -> Result<JoinHandle<()>, GitError> {
         Ok(tokio::spawn(async move {
-            // Do not use parallel encode with zstdelta because it make no sense.
+            // zstdelta requires a base-selection window, so it has no full-object
+            // parallel fast path.
             self.encode_with_zstdelta(rx).await.unwrap()
         }))
     }
 
-    /// Generate idx file after pack file has been generated
+    /// Streams the companion index after pack encoding has completed.
+    ///
+    /// The pack checksum and collected object offsets are required, so calling
+    /// this method before successful pack encoding returns an error.
     pub async fn encode_idx_file(&mut self) -> Result<(), GitError> {
         if self.idx_sender.is_none() {
             return Err(GitError::PackEncodeError(String::from(
@@ -1217,7 +1182,7 @@ impl PackEncoder {
             )));
         }
         self.generate_idx_file().await?;
-        // drop sender so downstream consumer can finish
+        // Closing the channel signals that the index writer can flush and exit.
         self.idx_sender.take();
         Ok(())
     }
