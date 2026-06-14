@@ -26,11 +26,7 @@ pub use output::encode_and_output_to_files;
 #[cfg(test)]
 mod tests;
 
-use std::{
-    sync::{Arc, Mutex},
-    thread,
-};
-
+use rayon::prelude::*;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -248,17 +244,10 @@ impl PackEncoder {
         );
 
         // Delta search is CPU-bound, so it must not run on Tokio's async executor threads.
-        // Commits, trees, and tags each get one blocking task. Blobs usually dominate the workload,
-        // so their sorted sequence is divided into contiguous chunks served by a worker queue.
-
-        let num_threads = std::env::var("PACK_THREADS")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(4)
-            });
+        // All entries (commits, trees, tags, and contiguous blob chunks) are processed in a
+        // single Rayon batch inside one spawn_blocking task. Rayon's work-stealing balances
+        // load across heterogeneous work items without the manual-queue and mixed-thread-pool
+        // machinery used previously.
 
         // Paths are needed only for sorting. Delta generation works on the underlying entries.
         let commit_entries: Vec<Entry> = commits.into_iter().map(|e| e.inner).collect();
@@ -266,34 +255,24 @@ impl PackEncoder {
         let tag_entries: Vec<Entry> = tags.into_iter().map(|e| e.inner).collect();
         let mut blob_entries: Vec<Entry> = blobs.into_iter().map(|e| e.inner).collect();
 
-        tracing::info!(
-            blobs = blob_entries.len(),
-            threads = num_threads,
-            "splitting blob delta search"
-        );
+        // ── Build the work-item list ──────────────────────────────────────────
+        // Each item holds a contiguous segment of sorted entries. The `order` field
+        // determines final pack layout: commits → trees → blob chunks → tags.
+        struct WorkItem {
+            order: usize,
+            entries: Vec<Entry>,
+        }
 
-        // These object classes are generally small enough that one blocking task per class is
-        // sufficient. Each task owns an independent delta window.
-        let mk_blk = |entries: Vec<Entry>,
-                       ez: bool,
-                       er: bool,
-                       dp: bool|
-         -> tokio::task::JoinHandle<Result<Vec<(Vec<u8>, IndexEntry)>, GitError>> {
-            tokio::task::spawn_blocking(move || {
-                // The search window is currently fixed at 10 inside the parallel delta path.
-                Self::try_as_offset_delta(entries, 10, ez, er, dp)
-            })
-        };
+        let mut work_items: Vec<WorkItem> = Vec::new();
+        work_items.push(WorkItem { order: 0, entries: commit_entries });
+        work_items.push(WorkItem { order: 1, entries: tree_entries });
 
-        let commit_handle =
-            mk_blk(commit_entries, enable_zstdelta, enable_rabin, disable_prefilter);
-        let tree_handle = mk_blk(tree_entries, enable_zstdelta, enable_rabin, disable_prefilter);
-        let tag_handle = mk_blk(tag_entries, enable_zstdelta, enable_rabin, disable_prefilter);
-
-        // Preserve contiguous portions of the sorted blob list: splitting objects arbitrarily
-        // would destroy the locality created by magic_sort and reduce delta quality. Creating more
-        // chunks than workers improves load balancing because large blobs cost more to compare.
+        // Preserve contiguous portions of the sorted blob list: splitting objects
+        // arbitrarily would destroy the locality created by magic_sort and reduce
+        // delta quality. Creating many chunks exposes enough parallelism for
+        // Rayon's work-stealing scheduler.
         let total_blob_entries = blob_entries.len();
+        let num_threads = rayon::current_num_threads();
         let chunks_per_thread: usize = 20;
         let blob_chunk_count = if num_threads > 1 && total_blob_entries > (num_threads * 20) {
             num_threads * chunks_per_thread
@@ -302,99 +281,88 @@ impl PackEncoder {
         };
         let entries_per_chunk = total_blob_entries.div_ceil(blob_chunk_count);
 
-        struct BlobChunk {
-            index: usize,
-            entries: Vec<Entry>,
-        }
-
-        // split_off removes from the end in O(1). Reverse afterward to recover global sort order.
-        let mut chunks: Vec<BlobChunk> = Vec::with_capacity(blob_chunk_count);
-        for i in 0..blob_chunk_count {
+        // split_off removes from the end in O(1). Reverse afterward to recover
+        // global sort order.
+        let mut blob_chunks: Vec<Vec<Entry>> = Vec::with_capacity(blob_chunk_count);
+        for _ in 0..blob_chunk_count {
             let take = entries_per_chunk.min(blob_entries.len());
             if take == 0 {
                 break;
             }
-            let entries = blob_entries.split_off(blob_entries.len() - take);
-            chunks.push(BlobChunk { index: i, entries });
+            let chunk = blob_entries.split_off(blob_entries.len() - take);
+            blob_chunks.push(chunk);
         }
-        chunks.reverse(); // Restore original sort order, with larger entries first.
-        for (i, c) in chunks.iter_mut().enumerate() {
-            c.index = i;
-        }
-        let actual_chunks = chunks.len();
+        blob_chunks.reverse();
 
-        // Workers pop chunks from a shared queue. Results carry their original chunk index because
-        // completion order must not determine pack layout.
-        type ChunkResult = (usize, Result<Vec<(Vec<u8>, IndexEntry)>, GitError>);
-        let chunk_queue: Arc<Mutex<Vec<BlobChunk>>> = Arc::new(Mutex::new(chunks));
-        let results: Arc<Mutex<Vec<ChunkResult>>> = Arc::new(Mutex::new(Vec::new()));
-        let blob_thread_count = num_threads.min(actual_chunks);
+        let actual_blob_chunks = blob_chunks.len();
+        let blob_base_order = 2usize;
+        for (i, chunk) in blob_chunks.into_iter().enumerate() {
+            work_items.push(WorkItem { order: blob_base_order + i, entries: chunk });
+        }
+
+        let tag_order = blob_base_order + actual_blob_chunks;
+        work_items.push(WorkItem { order: tag_order, entries: tag_entries });
+
         tracing::info!(
-            total_entries = total_blob_entries,
-            chunks = actual_chunks,
-            entries_per_chunk = entries_per_chunk,
-            threads = blob_thread_count,
-            "splitting blob delta search",
+            total_work_items = work_items.len(),
+            blob_chunks = actual_blob_chunks,
+            threads = num_threads,
+            "dispatching delta search to Rayon"
         );
-        let mut blob_handles: Vec<std::thread::JoinHandle<()>> =
-            Vec::with_capacity(blob_thread_count);
-        for _ in 0..blob_thread_count {
-            let q = Arc::clone(&chunk_queue);
-            let r = Arc::clone(&results);
-            let ez = enable_zstdelta;
-            let er = enable_rabin;
-            let dp = disable_prefilter;
-            blob_handles.push(thread::spawn(move || {
-                loop {
-                    let chunk = q.lock().unwrap().pop();
-                    match chunk {
-                        None => break,
-                        Some(BlobChunk {
-                            index: chunk_idx,
-                            entries,
-                        }) => {
-                            // As above, the per-chunk delta window is currently fixed at 10.
-                            let res =
-                                Self::try_as_offset_delta(entries, 10, ez, er, dp);
-                            r.lock().unwrap().push((chunk_idx, res));
-                        }
-                    }
-                }
-            }));
-        }
 
-        // Join non-blob work and propagate both task failures and encoding failures.
-        let (commit_results, tree_results, tag_results) =
-            tokio::try_join!(commit_handle, tree_handle, tag_handle)
-                .map_err(|e| GitError::PackEncodeError(format!("Task join error: {e}")))?;
+        // Offload all delta search to Rayon inside a single spawn_blocking task.
+        // This keeps CPU work off the async runtime while Rayon's work-stealing
+        // balances load across the heterogeneous work items.
+        type ChunkResult = (usize, Result<Vec<(Vec<u8>, IndexEntry)>, GitError>);
 
-        let commit_res = commit_results?;
-        let tree_res = tree_results?;
-        let tag_res = tag_results?;
+        let ez = enable_zstdelta;
+        let er = enable_rabin;
+        let dp = disable_prefilter;
 
-        // All blob workers must finish before the result Arc can be uniquely unwrapped.
-        for handle in blob_handles {
-            handle.join().map_err(|_| {
-                GitError::PackEncodeError("blob delta thread panicked".to_string())
-            })?;
-        }
-        let mut chunk_results = Arc::into_inner(results)
-            .ok_or_else(|| {
-                GitError::PackEncodeError("blob chunk results still referenced".to_string())
-            })?
-            .into_inner()
-            .map_err(|e| GitError::PackEncodeError(format!("blob results poisoned: {e}")))?;
+        let run_delta_search = move || -> Vec<ChunkResult> {
+            work_items
+                .into_par_iter()
+                .map(|item| {
+                    (item.order, Self::try_as_offset_delta(item.entries, 10, ez, er, dp))
+                })
+                .collect()
+        };
+
+        let mut chunk_results: Vec<ChunkResult> =
+            // When PACK_THREADS is set, build a dedicated Rayon pool with the
+            // requested thread count and run the delta search on it. Otherwise
+            // use the global Rayon pool (which respects RAYON_NUM_THREADS).
+            if let Some(n) = std::env::var("PACK_THREADS")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(n)
+                    .build()
+                    .map_err(|e| GitError::PackEncodeError(format!(
+                        "failed to build Rayon thread pool: {e}"
+                    )))?;
+                tokio::task::spawn_blocking(move || pool.install(run_delta_search))
+                    .await
+                    .map_err(|e| GitError::PackEncodeError(format!(
+                        "delta search task panicked: {e}"
+                    )))?
+            } else {
+                tokio::task::spawn_blocking(run_delta_search)
+                    .await
+                    .map_err(|e| GitError::PackEncodeError(format!(
+                        "delta search task panicked: {e}"
+                    )))?
+            };
+
         // Parallel search may finish out of order; restore the chosen pack order.
-        chunk_results.sort_by_key(|(i, _)| *i);
-        let mut blob_res_list: Vec<Vec<(Vec<u8>, IndexEntry)>> =
-            Vec::with_capacity(chunk_results.len());
-        for (_idx, res) in chunk_results {
-            blob_res_list.push(res?);
-        }
+        chunk_results.sort_by_key(|(order, _)| *order);
 
-        let mut all_res = vec![commit_res, tree_res];
-        all_res.extend(blob_res_list);
-        all_res.push(tag_res);
+        let mut all_res: Vec<Vec<(Vec<u8>, IndexEntry)>> =
+            Vec::with_capacity(chunk_results.len());
+        for (_order, res) in chunk_results {
+            all_res.push(res?);
+        }
 
         // Writing is serialized so offsets, the running pack hash, and index records all describe
         // exactly the same byte order.
