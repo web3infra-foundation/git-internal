@@ -5,10 +5,11 @@
 //! target buffers starting at the given positions, returning the number of matching
 //! bytes up to `max_match`.
 //!
-//! The comparison uses unaligned `usize`-sized reads (8 bytes on 64-bit, 4 on 32-bit)
-//! to accelerate the common case where long runs of bytes are identical. When a word
-//! mismatch is found, `first_different_byte` pinpoints the exact byte offset within
-//! that word. Any remaining tail bytes are compared one at a time.
+//! The comparison reads `usize`-sized chunks (8 bytes on 64-bit, 4 on 32-bit) via
+//! safe `usize::from_ne_bytes` to accelerate the common case where long runs of bytes
+//! are identical. When a word mismatch is found, `first_different_byte` pinpoints the
+//! exact byte offset within that word. Any remaining tail bytes are compared one at
+//! a time.
 
 /// Locate the first byte position where two `usize` values differ.
 ///
@@ -27,15 +28,10 @@ fn first_different_byte(diff: usize) -> usize {
 /// Extend a match forward from `(ref_start, data_pos)`, returning the number of
 /// consecutive identical bytes.
 ///
-/// The function reads `usize` values from both buffers and compares them in one
-/// operation. On mismatch it finds the exact byte offset, then falls back to a
+/// The function reads `usize`-sized chunks from both buffers via
+/// [`usize::from_ne_bytes`] and compares them in one operation. On mismatch it
+/// finds the exact byte offset via `first_different_byte`, then falls back to a
 /// byte-by-byte loop for any remaining tail.
-///
-/// # Safety
-///
-/// Uses [`core::ptr::read_unaligned`] to read `usize` values from potentially
-/// unaligned byte slices. This is always safe on x86_64 and aarch64 — our target
-/// architectures — which support unaligned memory access natively.
 ///
 /// # Performance
 ///
@@ -62,30 +58,26 @@ pub(crate) fn extend_match(
     let mut i = 0;
     const WORD_SIZE: usize = core::mem::size_of::<usize>();
 
-    // Fast path: compare one word at a time.
-    unsafe {
-        while i + WORD_SIZE <= max {
-            let src_word =
-                core::ptr::read_unaligned(src_tail.as_ptr().add(i) as *const usize);
-            let tgt_word =
-                core::ptr::read_unaligned(tgt_tail.as_ptr().add(i) as *const usize);
-            let diff = src_word ^ tgt_word;
+    // Fast path: compare one `usize`-sized chunk at a time via safe `from_ne_bytes`.
+    while i + WORD_SIZE <= max {
+        let src_word = usize::from_ne_bytes(src_tail[i..i + WORD_SIZE].try_into().unwrap());
+        let tgt_word = usize::from_ne_bytes(tgt_tail[i..i + WORD_SIZE].try_into().unwrap());
+        let diff = src_word ^ tgt_word;
 
-            if diff != 0 {
-                // Found a mismatch — pinpoint the exact byte within this word.
-                return i + first_different_byte(diff);
-            }
-
-            i += WORD_SIZE;
+        if diff != 0 {
+            // Found a mismatch — pinpoint the exact byte within this word.
+            return i + first_different_byte(diff);
         }
 
-        // Slow path: byte-by-byte comparison for the remaining tail (< WORD_SIZE bytes).
-        while i < max {
-            if *src_tail.as_ptr().add(i) != *tgt_tail.as_ptr().add(i) {
-                return i;
-            }
-            i += 1;
+        i += WORD_SIZE;
+    }
+
+    // Slow path: byte-by-byte comparison for the remaining tail (< WORD_SIZE bytes).
+    while i < max {
+        if src_tail[i] != tgt_tail[i] {
+            return i;
         }
+        i += 1;
     }
 
     max

@@ -8,9 +8,9 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use tokio::io::AsyncWriteExt as TokioAsyncWriteExt;
-use tokio::{fs::File, sync::mpsc};
+use tokio::{fs::File, io::AsyncWriteExt as TokioAsyncWriteExt, sync::mpsc};
 
+use super::PackEncoder;
 use crate::{
     errors::GitError,
     internal::{
@@ -18,8 +18,6 @@ use crate::{
         pack::entry::Entry,
     },
 };
-
-use super::PackEncoder;
 
 /// Consume entries and write a matching `.pack`/`.idx` pair into `output_dir`.
 ///

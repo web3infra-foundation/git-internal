@@ -118,7 +118,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if positional.is_empty() || positional.len() > 2 {
         eprintln!(
             "usage: {} <path-to-.git> [window_size]",
-            args.first().map(String::as_str).unwrap_or("grading_bot_encode_pack_bench")
+            args.first()
+                .map(String::as_str)
+                .unwrap_or("grading_bot_encode_pack_bench")
         );
         std::process::exit(2);
     }
@@ -165,7 +167,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Sum of decompressed payload bytes — what the pack encoder has to compress.
     let raw_bytes: u64 = entries.values().map(|e| e.data.len() as u64).sum();
-    println!("Raw object bytes         : {}", format_bytes(raw_bytes as usize));
+    println!(
+        "Raw object bytes         : {}",
+        format_bytes(raw_bytes as usize)
+    );
 
     // Fingerprint of the *input* object set (what we feed the encoder), folded
     // before the entries are consumed below. The grading bot compares this
@@ -200,12 +205,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "patience"
         }
     };
-    let encode_handle = tokio::spawn(async move {
-        encode_and_output_to_files(rx, n, out_path_for_task, win).await
-    });
+    let encode_handle =
+        tokio::spawn(
+            async move { encode_and_output_to_files(rx, n, out_path_for_task, win).await },
+        );
 
     println!();
-    println!("Encoding pack ({} objects, window={window_size}, algorithm={algorithm_name}) ...", n);
+    println!(
+        "Encoding pack ({} objects, window={window_size}, algorithm={algorithm_name}) ...",
+        n
+    );
 
     // Capture baseline memory before encoding starts.
     let baseline_rss = read_proc_status_kib("VmRSS").unwrap_or(0);
@@ -240,7 +249,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("input:         {}", git_dir.display());
     println!("objects:       {unique}");
     println!("window:        {window_size}");
-    println!("raw bytes:     {} ({} bytes)", format_bytes(raw_bytes as usize), raw_bytes);
+    println!(
+        "raw bytes:     {} ({} bytes)",
+        format_bytes(raw_bytes as usize),
+        raw_bytes
+    );
     println!("wall:          {:.3} s", encode_elapsed.as_secs_f64());
     let throughput = if encode_elapsed.as_secs_f64() > 0.0 {
         raw_bytes as f64 / encode_elapsed.as_secs_f64() / (1024.0 * 1024.0)
@@ -256,7 +269,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         format_bytes(peak_hwm.saturating_sub(baseline_hwm))
     );
     println!("pack written:  {}", pack_path.display());
-    println!("pack size:     {} ({} bytes)", format_bytes(pack_bytes as usize), pack_bytes);
+    println!(
+        "pack size:     {} ({} bytes)",
+        format_bytes(pack_bytes as usize),
+        pack_bytes
+    );
 
     // --- 6. Compression ratio ----------------------------------------------
     let ratio_pct = if raw_bytes > 0 {
@@ -290,7 +307,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "GRADING_ENCODE_PACK: {}",
                 dst_dir.join("grading_encoded.pack").display()
             ),
-            Err(e) => eprintln!("warning: copying produced pack to {}: {e}", dst_dir.display()),
+            Err(e) => eprintln!(
+                "warning: copying produced pack to {}: {e}",
+                dst_dir.display()
+            ),
         }
     }
 
@@ -343,10 +363,9 @@ fn read_loose_objects(
                 continue;
             }
             let hex = format!("{name_str}{fname_str}");
-            let hash = ObjectHash::from_str(&hex)
-                .map_err(|e| format!("bad hash {hex}: {e}"))?;
+            let hash = ObjectHash::from_str(&hex).map_err(|e| format!("bad hash {hex}: {e}"))?;
 
-            let entry = match decode_loose_file(&file.path(), hash.clone()) {
+            let entry = match decode_loose_file(&file.path(), hash) {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!(
@@ -433,7 +452,7 @@ fn read_packed_objects(
             &mut reader,
             move |entry| {
                 let mut guard = cb_map.lock().expect("pack decode map poisoned");
-                guard.insert(entry.inner.hash.clone(), entry.inner);
+                guard.insert(entry.inner.hash, entry.inner);
             },
             None::<fn(ObjectHash)>,
         )?;
@@ -460,11 +479,7 @@ fn find_single_pack(dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let p = entry.path();
         if p.extension().and_then(|s| s.to_str()) == Some("pack") {
             if found.is_some() {
-                return Err(format!(
-                    "more than one .pack file in {}",
-                    dir.display()
-                )
-                .into());
+                return Err(format!("more than one .pack file in {}", dir.display()).into());
             }
             found = Some(p);
         }

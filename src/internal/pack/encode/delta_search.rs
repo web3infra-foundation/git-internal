@@ -16,6 +16,11 @@ use std::{collections::VecDeque, sync::Arc};
 #[cfg(not(feature = "diff_rabin"))]
 use rayon::prelude::*;
 
+use super::header::encode_one_object;
+#[cfg(feature = "diff_rabin")]
+use super::sort::multi_point_similar;
+#[cfg(not(feature = "diff_rabin"))]
+use super::sort::{calc_hash, cheap_similar};
 use crate::{
     delta,
     errors::GitError,
@@ -25,12 +30,6 @@ use crate::{
     },
     zstdelta,
 };
-
-use super::header::encode_one_object;
-#[cfg(not(feature = "diff_rabin"))]
-use super::sort::{cheap_similar, calc_hash};
-#[cfg(feature = "diff_rabin")]
-use super::sort::multi_point_similar;
 
 const MAX_CHAIN_LEN: usize = 50;
 /// A delta must save at least half of the target payload to be selected.
@@ -151,14 +150,11 @@ impl super::PackEncoder {
                             let data_arc = match window[idx].data_arc.take() {
                                 Some(arc) => arc,
                                 None => {
-                                    let arc: Arc<[u8]> =
-                                        window[idx].entry.data.clone().into();
+                                    let arc: Arc<[u8]> = window[idx].entry.data.clone().into();
                                     arc
                                 }
                             };
-                            match delta::create_delta_index_arc(
-                                Arc::clone(&data_arc),
-                            ) {
+                            match delta::create_delta_index_arc(Arc::clone(&data_arc)) {
                                 Some(new_index) => {
                                     window[idx].data_arc = Some(data_arc);
                                     window[idx].rabin_index = Some(new_index);
@@ -185,8 +181,7 @@ impl super::PackEncoder {
                             let delta_size = delta_data.len();
                             if delta_size < best_delta_size {
                                 best_delta_size = delta_size;
-                                best_rate = 1.0
-                                    - delta_size as f64 / entry.data.len() as f64;
+                                best_rate = 1.0 - delta_size as f64 / entry.data.len() as f64;
                                 best_idx = Some(idx);
                             }
                         }
@@ -214,16 +209,12 @@ impl super::PackEncoder {
                             / (try_base.entry.data.len().max(entry.data.len()) as f64);
                         let no_prefilter = disable_prefilter;
                         if sym_ratio < 0.5
-                            || (!no_prefilter
-                                && !cheap_similar(&try_base.entry.data, &entry.data))
+                            || (!no_prefilter && !cheap_similar(&try_base.entry.data, &entry.data))
                         {
                             return None;
                         }
                         let rate = if (try_base.entry.data.len() + entry.data.len()) / 2 > 64 {
-                            delta::heuristic_encode_rate_parallel(
-                                &try_base.entry.data,
-                                &entry.data,
-                            )
+                            delta::heuristic_encode_rate_parallel(&try_base.entry.data, &entry.data)
                         } else {
                             delta::encode_rate(&try_base.entry.data, &entry.data)
                         };

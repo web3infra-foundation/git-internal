@@ -9,6 +9,7 @@
 use rayon::prelude::*;
 use tokio::sync::mpsc;
 
+use super::header::{encode_header, encode_one_object};
 use crate::{
     errors::GitError,
     hash::ObjectHash,
@@ -18,8 +19,6 @@ use crate::{
     },
     time_it,
 };
-
-use super::header::{encode_header, encode_one_object};
 
 impl super::PackEncoder {
     /// Encode independent objects in parallel without delta compression.

@@ -26,7 +26,9 @@ pub use output::encode_and_output_to_files;
 #[cfg(test)]
 mod tests;
 
+use header::encode_header;
 use rayon::prelude::*;
+use sort::magic_sort;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -39,9 +41,6 @@ use crate::{
     },
     utils::HashAlgorithm,
 };
-
-use header::encode_header;
-use sort::magic_sort;
 
 /// Stateful encoder for one Git pack stream.
 ///
@@ -155,7 +154,8 @@ impl PackEncoder {
             }
             #[cfg(not(feature = "diff_rabin"))]
             {
-                self.inner_encode(entry_rx, false, false, self.disable_prefilter).await
+                self.inner_encode(entry_rx, false, false, self.disable_prefilter)
+                    .await
             }
         }
     }
@@ -264,8 +264,14 @@ impl PackEncoder {
         }
 
         let mut work_items: Vec<WorkItem> = Vec::new();
-        work_items.push(WorkItem { order: 0, entries: commit_entries });
-        work_items.push(WorkItem { order: 1, entries: tree_entries });
+        work_items.push(WorkItem {
+            order: 0,
+            entries: commit_entries,
+        });
+        work_items.push(WorkItem {
+            order: 1,
+            entries: tree_entries,
+        });
 
         // Preserve contiguous portions of the sorted blob list: splitting objects
         // arbitrarily would destroy the locality created by magic_sort and reduce
@@ -297,11 +303,17 @@ impl PackEncoder {
         let actual_blob_chunks = blob_chunks.len();
         let blob_base_order = 2usize;
         for (i, chunk) in blob_chunks.into_iter().enumerate() {
-            work_items.push(WorkItem { order: blob_base_order + i, entries: chunk });
+            work_items.push(WorkItem {
+                order: blob_base_order + i,
+                entries: chunk,
+            });
         }
 
         let tag_order = blob_base_order + actual_blob_chunks;
-        work_items.push(WorkItem { order: tag_order, entries: tag_entries });
+        work_items.push(WorkItem {
+            order: tag_order,
+            entries: tag_entries,
+        });
 
         tracing::info!(
             total_work_items = work_items.len(),
@@ -323,7 +335,10 @@ impl PackEncoder {
             work_items
                 .into_par_iter()
                 .map(|item| {
-                    (item.order, Self::try_as_offset_delta(item.entries, 10, ez, er, dp))
+                    (
+                        item.order,
+                        Self::try_as_offset_delta(item.entries, 10, ez, er, dp),
+                    )
                 })
                 .collect()
         };
@@ -358,8 +373,7 @@ impl PackEncoder {
         // Parallel search may finish out of order; restore the chosen pack order.
         chunk_results.sort_by_key(|(order, _)| *order);
 
-        let mut all_res: Vec<Vec<(Vec<u8>, IndexEntry)>> =
-            Vec::with_capacity(chunk_results.len());
+        let mut all_res: Vec<Vec<(Vec<u8>, IndexEntry)>> = Vec::with_capacity(chunk_results.len());
         for (_order, res) in chunk_results {
             all_res.push(res?);
         }

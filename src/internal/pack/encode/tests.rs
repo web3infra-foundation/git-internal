@@ -3,7 +3,11 @@ use std::{io::Cursor, path::PathBuf, sync::Arc, time::Instant};
 use tempfile::tempdir;
 use tokio::sync::Mutex;
 
-use super::*;
+use super::{
+    header::encode_offset,
+    sort::{magic_sort, multi_point_similar},
+    *,
+};
 use crate::{
     hash::{HashKind, ObjectHash, set_hash_kind_for_test},
     internal::{
@@ -17,8 +21,6 @@ use crate::{
     },
     time_it,
 };
-
-use super::header::encode_offset;
 
 /// Check if the given data is a valid pack file format by attempting to decode it.
 fn check_format(data: &Vec<u8>) {
@@ -502,10 +504,7 @@ async fn test_pack_encoder_with_zstdelta() {
     let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(100_000);
 
     let encoder = PackEncoder::new(entries_number, 10, tx);
-    encoder
-        .encode_async_with_zstdelta(entry_rx)
-        .await
-        .unwrap();
+    encoder.encode_async_with_zstdelta(entry_rx).await.unwrap();
 
     // spawn a task to send entries
     tokio::spawn(async move {
@@ -567,10 +566,7 @@ async fn test_pack_encoder_with_zstdelta_sha256() {
     let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(100_000);
 
     let encoder = PackEncoder::new(entries_number, 10, tx);
-    encoder
-        .encode_async_with_zstdelta(entry_rx)
-        .await
-        .unwrap();
+    encoder.encode_async_with_zstdelta(entry_rx).await.unwrap();
 
     // spawn a task to send entries
     tokio::spawn(async move {
@@ -884,4 +880,89 @@ async fn test_pack_encoder_output_to_files_with_delta() {
     let duration = start.elapsed();
     tracing::info!("test executed in: {:.2?}", duration);
     tracing::info!("original total size: {}", total_original_size);
+}
+
+// ── Sort / similarity tests ────────────────────────────────────────────
+
+fn sort_entry(path: Option<&str>, size: usize) -> MetaAttached<Entry, EntryMeta> {
+    let content = "x".repeat(size);
+    let mut entry: Entry = crate::internal::object::blob::Blob::from_content(&content).into();
+    entry.data = vec![0u8; size];
+    MetaAttached {
+        inner: entry,
+        meta: EntryMeta {
+            file_path: path.map(|s| s.to_string()),
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn test_magic_sort_path_ordering() {
+    // Different parent directories: "dir_a" < "dir_b"
+    let a = sort_entry(Some("dir_a/file.rs"), 100);
+    let b = sort_entry(Some("dir_b/file.rs"), 200);
+    assert!(matches!(magic_sort(&a, &b), std::cmp::Ordering::Less));
+
+    // Same parent, different name hashes → non-Equal
+    let a = sort_entry(Some("shared/alpha.rs"), 100);
+    let b = sort_entry(Some("shared/beta.rs"), 200);
+    assert_ne!(magic_sort(&a, &b), std::cmp::Ordering::Equal);
+
+    // Same path → size tiebreaker (larger first)
+    let a = sort_entry(Some("same/path.rs"), 100);
+    let b = sort_entry(Some("same/path.rs"), 200);
+    assert_eq!(magic_sort(&a, &b), std::cmp::Ordering::Greater);
+
+    // Only first has path
+    let a = sort_entry(Some("path.rs"), 100);
+    let b = sort_entry(None, 200);
+    assert_eq!(magic_sort(&a, &b), std::cmp::Ordering::Less);
+
+    // Only second has path
+    let a = sort_entry(None, 100);
+    let b = sort_entry(Some("path.rs"), 200);
+    assert_eq!(magic_sort(&a, &b), std::cmp::Ordering::Greater);
+
+    // No path on either — size ordering
+    let a = sort_entry(None, 50);
+    let b = sort_entry(None, 100);
+    assert_eq!(magic_sort(&a, &b), std::cmp::Ordering::Greater);
+
+    // No path, equal size — pointer tiebreaker
+    let a = sort_entry(None, 100);
+    let b = sort_entry(None, 100);
+    assert_ne!(magic_sort(&a, &b), std::cmp::Ordering::Equal);
+}
+
+#[test]
+fn test_multi_point_similar_head_match() {
+    // First 128 bytes identical, tails differ.
+    let mut a = vec![0u8; 200];
+    a[128..].fill(1);
+    let mut b = vec![0u8; 200];
+    b[128..].fill(2);
+    assert!(multi_point_similar(&a, &b));
+}
+
+#[test]
+fn test_multi_point_similar_tail_match() {
+    // Bytes 72..200 (tail of 128) identical; bytes 0..72 differ (so head check fails).
+    let mut a = vec![0u8; 200];
+    let mut b = vec![0u8; 200];
+    a[..72].fill(1);
+    b[..72].fill(2);
+    assert!(multi_point_similar(&a, &b));
+}
+
+#[test]
+fn test_multi_point_similar_no_match() {
+    let a = vec![1u8; 256];
+    let b = vec![2u8; 256];
+    assert!(!multi_point_similar(&a, &b));
+}
+
+#[test]
+fn test_multi_point_similar_too_small() {
+    assert!(!multi_point_similar(&[1u8, 2, 3], &[4u8, 5, 6]));
 }

@@ -77,8 +77,6 @@ pub struct DeltaStats {
     pub bucket_entries_scanned: u64,
     /// Raw bucket sizes for percentile computation.
     pub bucket_sizes: Vec<u32>,
-    /// Candidates rejected by the precheck (only when `bucket-precheck` is active).
-    pub candidates_rejected_by_precheck: u64,
     /// Candidates that entered full match extension.
     pub candidates_entered_extension: u64,
     /// Matches that were accepted (better than the current best).
@@ -92,22 +90,36 @@ pub struct DeltaStats {
 #[cfg(not(feature = "delta-stats"))]
 #[derive(Default)]
 pub struct DeltaStats {
-    #[allow(dead_code)]
+    /// Number of [`extend_match`] calls.
     pub extension_calls: u64,
-    #[allow(dead_code)]
+    /// Total bytes compared across all extend-match calls.
     pub extension_bytes_compared: u64,
-    #[allow(dead_code)]
+    /// Number of hash bucket lookups.
     pub bucket_scans: u64,
-    #[allow(dead_code)]
+    /// Total index entries examined across all bucket scans.
     pub bucket_entries_scanned: u64,
-    #[allow(dead_code)]
+    /// Raw bucket sizes for percentile computation.
     pub bucket_sizes: Vec<u32>,
-    #[allow(dead_code)]
-    pub candidates_rejected_by_precheck: u64,
-    #[allow(dead_code)]
+    /// Candidates that entered full match extension.
     pub candidates_entered_extension: u64,
-    #[allow(dead_code)]
+    /// Matches that were accepted (better than the current best).
     pub matches_accepted: u64,
+}
+
+#[cfg(not(feature = "delta-stats"))]
+impl DeltaStats {
+    /// Consume self, reading all fields so the compiler does not flag them as
+    /// unused when `delta-stats` is disabled.
+    #[inline(always)]
+    fn sink(self) {
+        let _ = self.extension_calls;
+        let _ = self.extension_bytes_compared;
+        let _ = self.bucket_scans;
+        let _ = self.bucket_entries_scanned;
+        let _ = self.bucket_sizes;
+        let _ = self.candidates_entered_extension;
+        let _ = self.matches_accepted;
+    }
 }
 
 // ── Index structures ─────────────────────────────────────────────────────
@@ -351,7 +363,10 @@ fn create_delta(
     target: &[u8],
     max_size: Option<usize>,
 ) -> Option<Vec<u8>> {
-    create_delta_inner(index, target, max_size).map(|(delta, _stats)| delta)
+    create_delta_inner(index, target, max_size).map(|(delta, stats)| {
+        stats.sink();
+        delta
+    })
 }
 
 /// Core delta generation with optional stats collection.
@@ -474,8 +489,7 @@ fn create_delta_inner(
 
                 stats.candidates_entered_extension += 1;
 
-                let match_len =
-                    extend_match(src_data, target, ref_start, data_pos, max_match);
+                let match_len = extend_match(src_data, target, ref_start, data_pos, max_match);
 
                 stats.extension_calls += 1;
                 stats.extension_bytes_compared += match_len as u64;
@@ -526,8 +540,7 @@ fn create_delta_inner(
             let back_extend: usize = {
                 let max_back = inscnt.min(match_off);
                 let mut cnt = 0usize;
-                while cnt < max_back
-                    && src_data[match_off - 1 - cnt] == target[data_pos - 1 - cnt]
+                while cnt < max_back && src_data[match_off - 1 - cnt] == target[data_pos - 1 - cnt]
                 {
                     cnt += 1;
                 }
@@ -654,8 +667,7 @@ pub fn encode_rabin(old_data: &[u8], new_data: &[u8]) -> Vec<u8> {
 /// index across multiple target objects. This is the primary entry point used
 /// by the pack encoder's delta search.
 pub fn encode_rabin_with_index(index: &RabinDeltaIndex, target: &[u8]) -> Vec<u8> {
-    create_delta(index, target, None)
-        .expect("delta should always succeed when max_size is None")
+    create_delta(index, target, None).expect("delta should always succeed when max_size is None")
 }
 
 /// Encode `target` as a delta against a pre-built index, aborting early if
@@ -792,7 +804,11 @@ pub fn heuristic_encode_rate_rabin(old_data: &[u8], new_data: &[u8]) -> f64 {
     }
 
     // Use wider sampling step for very large buffers to bound the hash set size.
-    let step = if old_len > 1_000_000 { 256 } else { RABIN_WINDOW };
+    let step = if old_len > 1_000_000 {
+        256
+    } else {
+        RABIN_WINDOW
+    };
 
     let old_samples = if old_len >= RABIN_WINDOW {
         (old_len - RABIN_WINDOW) / step + 1
@@ -1002,7 +1018,10 @@ mod tests {
     fn test_heuristic_identical() {
         let data = b"hello world, this is a test for rabin heuristic";
         let rate = heuristic_encode_rate_rabin(data, data);
-        assert!((rate - 1.0).abs() < 1e-6, "identical data should give rate 1.0");
+        assert!(
+            (rate - 1.0).abs() < 1e-6,
+            "identical data should give rate 1.0"
+        );
     }
 
     /// Heuristic rate must be near-zero for completely different buffers.
@@ -1011,7 +1030,10 @@ mod tests {
         let old = vec![0xABu8; 1000];
         let new = vec![0xCDu8; 1000];
         let rate = heuristic_encode_rate_rabin(&old, &new);
-        assert!(rate < 0.2, "different data should give low rate, got {rate}");
+        assert!(
+            rate < 0.2,
+            "different data should give low rate, got {rate}"
+        );
     }
 
     /// Exact similarity rate must be 1.0 for identical data.
@@ -1078,6 +1100,10 @@ mod tests {
         let delta = encode_rabin(&old, &new);
         let decoded = delta_decode(&mut Cursor::new(&delta), &old).unwrap();
         assert_eq!(decoded, new);
-        assert!(delta.len() < 100, "repetitive data should be very compact: got {}", delta.len());
+        assert!(
+            delta.len() < 100,
+            "repetitive data should be very compact: got {}",
+            delta.len()
+        );
     }
 }
