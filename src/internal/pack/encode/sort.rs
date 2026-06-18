@@ -20,11 +20,30 @@ use crate::{
     },
 };
 
+/// Compute a deterministic content fingerprint for sorting entries that lack
+/// path metadata.
+///
+/// Reads the first 8 bytes as a big-endian `u64` type signature. Files that
+/// share a common header prefix (e.g. all Kubernetes YAML starting with
+/// `apiVersi`) receive the same key, clustering structurally-similar objects
+/// together for the delta window.
+#[inline]
+fn content_sort_key(data: &[u8]) -> u64 {
+    let len = data.len().min(8);
+    let mut key: u64 = 0;
+    for &byte in &data[..len] {
+        key = (key << 8) | byte as u64;
+    }
+    key <<= (8 - len) * 8;
+    key
+}
+
 /// Order entries so likely delta pairs become neighbors.
 ///
 /// Entries with path metadata come first. They are clustered by parent directory and Git's
 /// `pack_name_hash`, then ordered by decreasing payload size so a larger object can serve as the
-/// base for following smaller objects. Entries without paths still benefit from size ordering.
+/// base for following smaller objects. Entries without paths are grouped by the first 8 bytes
+/// (type signature) so structurally-similar files sit close, then by decreasing size.
 ///
 /// The final pointer comparison is only a tie-breaker; it gives `sort_by` a total ordering when all
 /// semantic keys are equal.
@@ -56,7 +75,17 @@ pub(crate) fn magic_sort(
         }
         (Some(_), None) => return Ordering::Less,
         (None, Some(_)) => return Ordering::Greater,
-        (None, None) => {}
+        (None, None) => {
+            // Cluster by the first 8 bytes (type signature) so files with the
+            // same header prefix sit together. Within each cluster, larger
+            // entries come first as potential delta bases.
+            let key_a = content_sort_key(&a.inner.data);
+            let key_b = content_sort_key(&b.inner.data);
+            let ord = key_a.cmp(&key_b);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
     }
 
     // Larger entries appear first because later entries can refer backwards to them as bases.
