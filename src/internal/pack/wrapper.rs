@@ -20,7 +20,7 @@ use crate::{
 ///
 pub struct Wrapper<R> {
     inner: R,
-    hash: HashAlgorithm,
+    hash: Option<HashAlgorithm>,
     bytes_read: usize,
 }
 
@@ -36,10 +36,19 @@ where
     pub fn new(inner: R) -> Self {
         Self {
             inner,
-            hash: match get_hash_kind() {
+            hash: Some(match get_hash_kind() {
                 HashKind::Sha1 => HashAlgorithm::Sha1(Sha1::new()),
                 HashKind::Sha256 => HashAlgorithm::Sha256(sha2::Sha256::new()),
-            }, // Initialize a new SHA1/ SHA256 hasher
+            }), // Initialize a new SHA1/ SHA256 hasher
+            bytes_read: 0,
+        }
+    }
+
+    /// Constructs a wrapper that only tracks bytes read, skipping the running hash.
+    pub fn new_without_hash(inner: R) -> Self {
+        Self {
+            inner,
+            hash: None,
             bytes_read: 0,
         }
     }
@@ -53,7 +62,11 @@ where
     ///
     /// This is a clone of the internal hash state finalized into a SHA1/ SHA256 hash.
     pub fn final_hash(&self) -> ObjectHash {
-        match &self.hash.clone() {
+        match &self
+            .hash
+            .clone()
+            .expect("Wrapper::final_hash called while hash tracking is disabled")
+        {
             HashAlgorithm::Sha1(hasher) => {
                 let re: [u8; 20] = hasher.clone().finalize().into(); // Clone, finalize, and convert the hash into bytes
                 ObjectHash::from_bytes(&re).unwrap()
@@ -81,9 +94,11 @@ where
     /// * `amt`: The amount of data to consume from the buffer.
     fn consume(&mut self, amt: usize) {
         let buffer = self.inner.fill_buf().expect("Failed to fill buffer");
-        match &mut self.hash {
-            HashAlgorithm::Sha1(hasher) => hasher.update(&buffer[..amt]), // Update SHA1 hash with the data being consumed
-            HashAlgorithm::Sha256(hasher) => hasher.update(&buffer[..amt]), // Update SHA256 hash with the data being consumed
+        if let Some(hash) = &mut self.hash {
+            match hash {
+                HashAlgorithm::Sha1(hasher) => hasher.update(&buffer[..amt]), // Update SHA1 hash with the data being consumed
+                HashAlgorithm::Sha256(hasher) => hasher.update(&buffer[..amt]), // Update SHA256 hash with the data being consumed
+            }
         }
         self.inner.consume(amt); // Consume the data from the inner reader
         self.bytes_read += amt;
@@ -104,9 +119,11 @@ where
     /// Returns the number of bytes read.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let o = self.inner.read(buf)?; // Read data into the buffer
-        match &mut self.hash {
-            HashAlgorithm::Sha1(hasher) => hasher.update(&buf[..o]), // Update SHA1 hash with the data being read
-            HashAlgorithm::Sha256(hasher) => hasher.update(&buf[..o]), // Update SHA256 hash with the data being read
+        if let Some(hash) = &mut self.hash {
+            match hash {
+                HashAlgorithm::Sha1(hasher) => hasher.update(&buf[..o]), // Update SHA1 hash with the data being read
+                HashAlgorithm::Sha256(hasher) => hasher.update(&buf[..o]), // Update SHA256 hash with the data being read
+            }
         }
         self.bytes_read += o;
         Ok(o) // Return the number of bytes read
