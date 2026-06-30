@@ -2543,6 +2543,7 @@ mod tests {
     const LARGE_PACK_TEST_MEM_LIMIT: usize = super::UNBOUNDED_CACHE_THRESHOLD_BYTES;
 
     #[cfg_attr(coverage, ignore)]
+    #[ignore = "requires large remote pack fixture"]
     #[tokio::test]
     async fn test_pack_check_header() {
         let (source, _guard) = download_pack_file("medium-sha1.pack");
@@ -3530,6 +3531,7 @@ mod tests {
         }
     }
     #[cfg_attr(coverage, ignore)]
+    #[ignore = "requires large remote pack fixture"]
     #[tokio::test]
     async fn test_pack_decode_with_large_file_with_delta_without_ref() {
         run_decode_large_with_delta("medium-sha1.pack", HashKind::Sha1).await;
@@ -3571,6 +3573,7 @@ mod tests {
         assert_eq!(p.number, 35031);
     }
     #[cfg_attr(coverage, ignore)]
+    #[ignore = "requires large remote pack fixture"]
     #[tokio::test]
     async fn test_decode_large_file_stream() {
         run_decode_large_stream("medium-sha1.pack", HashKind::Sha1).await;
@@ -3602,6 +3605,7 @@ mod tests {
         assert_eq!(cnt, p.number);
     }
     #[cfg_attr(coverage, ignore)]
+    #[ignore = "requires large remote pack fixture"]
     #[tokio::test]
     async fn test_decode_large_file_async() {
         run_decode_large_file_async("medium-sha1.pack", HashKind::Sha1).await;
@@ -3622,6 +3626,7 @@ mod tests {
             .unwrap();
     }
     #[cfg_attr(coverage, ignore)]
+    #[ignore = "requires large remote pack fixture"]
     #[test]
     fn test_pack_decode_with_delta_without_ref() {
         run_decode_with_delta_no_ref("medium-sha1.pack", HashKind::Sha1);
@@ -3629,6 +3634,7 @@ mod tests {
     }
 
     #[cfg_attr(coverage, ignore)]
+    #[ignore = "requires large remote pack fixture"]
     #[test] // Take too long time
     fn test_pack_decode_multi_task_with_large_file_with_delta_without_ref() {
         let rt = tokio::runtime::Builder::new_current_thread()

@@ -67,8 +67,21 @@ chacha20 = "0.10.0"
 ureq = "3"
 
 [features]
-default = ["diff_mydrs"]
+default = ["diff_rabin"]
 diff_mydrs = []
+diff_rabin = []
+
+# Match extension implementation variants (only one should be active at a time;
+# default is word-at-a-time, the fastest in benchmarks)
+delta-stats = []
+extend-indexed = []
+extend-sliced-iter = []
+extend-sliced-index = []
+extend-ptr = []
+extend-word = []
+
+# Hash bucket scan optimizations
+bucket-precheck = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
