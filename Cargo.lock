@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "git-internal"
-version = "0.7.6"
+version = "0.8.0"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
