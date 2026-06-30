@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    fs,
     io::Read,
     path::{Path, PathBuf},
     sync::{
@@ -45,13 +46,27 @@ fn release_ref(path: &Path) -> bool {
 
 static DOWNLOAD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn ensure_downloaded(filename: &str) -> PathBuf {
-    let path = download_dir().join(filename);
-    if path.exists() {
-        return path;
+fn is_valid_pack_file(path: &Path, filename: &str) -> bool {
+    if !filename.ends_with(".pack") && !filename.ends_with(".idx") {
+        return true;
     }
-    let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if path.exists() {
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0; 4];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    if filename.ends_with(".pack") {
+        header == *b"PACK"
+    } else {
+        header == [0xff, 0x74, 0x4f, 0x63]
+    }
+}
+
+fn ensure_downloaded_locked(filename: &str) -> PathBuf {
+    let path = download_dir().join(filename);
+    if path.exists() && is_valid_pack_file(&path, filename) {
         return path;
     }
     let url = format!("{BASE_URL}/{filename}");
@@ -75,21 +90,22 @@ pub struct PackFileGuard {
 
 impl Drop for PackFileGuard {
     fn drop(&mut self) {
+        let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if release_ref(&self.path) {
             let _ = std::fs::remove_file(&self.path);
         }
     }
 }
 
-#[allow(dead_code)]
 pub fn download_pack_file(filename: &str) -> (PathBuf, PackFileGuard) {
-    let path = ensure_downloaded(filename);
+    let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = ensure_downloaded_locked(filename);
     if filename.ends_with(".pack") {
         let idx = filename.replace(".pack", ".idx");
-        let _ = ensure_downloaded(&idx);
+        let _ = ensure_downloaded_locked(&idx);
     } else if filename.ends_with(".idx") {
         let pack = filename.replace(".idx", ".pack");
-        let _ = ensure_downloaded(&pack);
+        let _ = ensure_downloaded_locked(&pack);
     }
     acquire_ref(&path);
     let guard = PackFileGuard { path: path.clone() };
