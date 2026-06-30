@@ -8,6 +8,8 @@ usage: examples/git_pack_objects_bench.sh <path-to-.git> [window_size]
 Bench Git's own pack encoder against all objects in a repository object
 database. The ratio uses the same raw-object payload-size denominator as
 examples/grading_bot_encode_pack_bench.rs.
+
+Git depth is fixed at 50 to match the current Rust encoder chain limit.
 USAGE
 }
 
@@ -18,6 +20,7 @@ fi
 
 git_dir=$1
 window_size=${2:-10}
+git_depth=50
 
 if [[ ! -d "$git_dir/objects" ]]; then
   echo "$git_dir does not look like a .git directory (no objects/ subdir)" >&2
@@ -56,8 +59,17 @@ format_bytes() {
   '
 }
 
+file_size_bytes() {
+  if stat -c '%s' "$1" >/dev/null 2>&1; then
+    stat -c '%s' "$1"
+  else
+    stat -f '%z' "$1"
+  fi
+}
+
 echo "Repository : $git_dir"
 echo "Window     : $window_size"
+echo "Depth      : $git_depth"
 echo
 
 git --git-dir="$git_dir" cat-file \
@@ -91,6 +103,7 @@ echo "Encoding pack with git pack-objects ($objects objects, window=$window_size
 if ! /usr/bin/time -p git --git-dir="$git_dir" pack-objects \
   --stdout \
   --window="$window_size" \
+  --depth="$git_depth" \
   --no-reuse-delta \
   --no-reuse-object \
   <"$oids_file" >"$pack_path" 2>"$time_file"; then
@@ -98,7 +111,7 @@ if ! /usr/bin/time -p git --git-dir="$git_dir" pack-objects \
   exit 1
 fi
 
-pack_bytes=$(stat -f '%z' "$pack_path" 2>/dev/null || stat -c '%s' "$pack_path")
+pack_bytes=$(file_size_bytes "$pack_path")
 wall=$(awk '$1 == "real" { print $2 }' "$time_file")
 
 throughput=$(awk -v raw="$raw_bytes" -v sec="$wall" 'BEGIN {
@@ -128,6 +141,7 @@ echo "mode:          git-pack-objects"
 echo "input:         $git_dir"
 echo "objects:       $objects"
 echo "window:        $window_size"
+echo "depth:         $git_depth"
 echo "raw bytes:     $(format_bytes "$raw_bytes") ($raw_bytes bytes)"
 printf 'wall:          %.3f s\n' "$wall"
 echo "throughput:    $throughput MiB/s (raw input)"

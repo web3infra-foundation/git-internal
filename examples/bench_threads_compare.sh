@@ -10,6 +10,7 @@ set -euo pipefail
 #
 # Default thread_list: "1,8"
 # Default window_size: 10
+# Git depth is fixed at 50 to match the current Rust encoder chain limit.
 
 usage() {
   cat >&2 <<'USAGE'
@@ -31,6 +32,7 @@ fi
 git_dir=$1
 thread_list=${2:-"1,8"}
 window_size=${3:-10}
+git_depth=50
 
 if [[ ! -d "$git_dir/objects" ]]; then
   echo "$git_dir does not look like a .git directory (no objects/ subdir)" >&2
@@ -68,8 +70,17 @@ format_bytes() {
   '
 }
 
+file_size_bytes() {
+  if stat -c '%s' "$1" >/dev/null 2>&1; then
+    stat -c '%s' "$1"
+  else
+    stat -f '%z' "$1"
+  fi
+}
+
 echo "Repository : $git_dir"
 echo "Window     : $window_size"
+echo "Depth      : $git_depth"
 echo "Thread(s)  : ${thread_list}"
 echo
 
@@ -114,7 +125,7 @@ for n in "${THREADS[@]}"; do
   if ! /usr/bin/time -p git --git-dir="$git_dir" pack-objects \
     --stdout \
     --window="$window_size" \
-    --depth=10 \
+    --depth="$git_depth" \
     --threads="$n" \
     --no-reuse-delta \
     --no-reuse-object \
@@ -124,7 +135,7 @@ for n in "${THREADS[@]}"; do
     continue
   fi
 
-  pack_bytes=$(stat -f '%z' "$pack_path" 2>/dev/null || stat -c '%s' "$pack_path")
+  pack_bytes=$(file_size_bytes "$pack_path")
   wall=$(awk '$1 == "real" { print $2 }' "$time_file")
   ratio_pct=$(awk -v pack="$pack_bytes" -v raw="$raw_bytes" 'BEGIN {
     if (raw > 0) printf "%.2f", pack / raw * 100
@@ -138,7 +149,7 @@ done
 # ── Rust impl for each thread count ──────────────────────────────────────────
 echo
 echo "============================================================"
-echo "  RUST git-internal (rabin, no-prefilter)"
+echo "  RUST git-internal (default Rabin, no-prefilter)"
 echo "============================================================"
 
 # Ensure binary is up to date
@@ -148,12 +159,12 @@ cargo build --release --features diff_rabin --example grading_bot_encode_pack_be
 
 for n in "${THREADS[@]}"; do
   echo
-  echo "--- rust rabin no-prefilter PACK_THREADS=$n (window=$window_size) ---"
+  echo "--- rust default rabin/no-prefilter PACK_THREADS=$n (window=$window_size) ---"
 
   rust_start=$(date +%s.%N 2>/dev/null || echo 0)
   PACK_THREADS="$n" cargo run --release --features diff_rabin --quiet \
     --example grading_bot_encode_pack_bench -- \
-    --rabin --no-prefilter "$git_dir" "$window_size" 2>&1
+    "$git_dir" "$window_size" 2>&1
   rust_end=$(date +%s.%N 2>/dev/null || echo 0)
 done
 
