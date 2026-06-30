@@ -27,6 +27,7 @@ use threadpool::ThreadPool;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
+pub use crate::internal::pack::stats::PackStats;
 use crate::{
     errors::GitError,
     hash::{HashKind, ObjectHash, get_hash_kind, set_hash_kind},
@@ -2499,6 +2500,33 @@ impl Pack {
     }
 }
 
+impl Pack {
+    /// Scans a pack file and returns statistics about the object types it contains.
+    ///
+    /// This is a lightweight read-only utility that parses the pack header and every
+    /// object header without fully reconstructing delta chains.  It therefore runs
+    /// much faster than a full [`Pack::decode`] call for large packs.
+    ///
+    /// # Parameters
+    /// * `path` - Path to the `.pack` file on disk.
+    ///
+    /// # Returns
+    /// * `Ok(PackStats)` – breakdown of object counts by type.
+    /// * `Err(GitError)` – if the file cannot be opened or the pack header is invalid.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use git_internal::internal::pack::{Pack, decode::PackStats};
+    ///
+    /// let stats = Pack::stats_pack(PathBuf::from("repo.pack")).unwrap();
+    /// println!("total={}, commits={}, blobs={}", stats.total, stats.commits, stats.blobs);
+    /// ```
+    pub fn stats_pack(path: PathBuf) -> Result<PackStats, crate::errors::GitError> {
+        PackStats::analyze(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -3652,5 +3680,100 @@ mod tests {
                 let _ = futures::future::join(f1, f2).await;
             }
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // PackStats tests (Experiment 3, Task 3)
+    // -----------------------------------------------------------------------
+
+    /// Normal-path test: stats_pack on a small SHA-1 pack (no deltas).
+    ///
+    /// We download the same "small-sha1.pack" used by other decode tests,
+    /// run stats_pack on it, and verify:
+    ///  - total matches the header object count
+    ///  - commits + trees + blobs + tags + deltas == total
+    ///  - at least one commit and one blob exist (the pack is a real git repo extract)
+    #[test]
+    fn test_stats_pack_small_sha1() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (source, _dl_guard) = download_pack_file("small-sha1.pack");
+
+        let stats = Pack::stats_pack(source).expect("stats_pack should succeed");
+
+        eprintln!(
+            "small-sha1 stats: total={}, commits={}, trees={}, blobs={}, tags={}, deltas={}",
+            stats.total, stats.commits, stats.trees, stats.blobs, stats.tags, stats.deltas
+        );
+
+        let sum = stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas;
+        assert_eq!(
+            sum, stats.total,
+            "per-type counts should sum to total ({} vs {})",
+            sum, stats.total
+        );
+
+        assert!(stats.commits > 0, "expected at least one commit");
+        assert!(stats.blobs > 0, "expected at least one blob");
+    }
+
+    /// Normal-path test: stats_pack on a medium SHA-1 pack that contains offset-delta objects.
+    ///
+    /// "medium-sha1.pack" is used by the existing decode tests and is known to contain
+    /// both base objects and offset-delta objects, so deltas > 0.
+    #[test]
+    fn test_stats_pack_medium_sha1_has_deltas() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let (source, _dl_guard) = download_pack_file("medium-sha1.pack");
+
+        let stats = Pack::stats_pack(source).expect("stats_pack should succeed on medium pack");
+
+        eprintln!(
+            "medium-sha1 stats: total={}, commits={}, trees={}, blobs={}, tags={}, deltas={}",
+            stats.total, stats.commits, stats.trees, stats.blobs, stats.tags, stats.deltas
+        );
+
+        let sum = stats.commits + stats.trees + stats.blobs + stats.tags + stats.deltas;
+        assert_eq!(sum, stats.total, "per-type counts must equal total");
+
+        assert!(
+            stats.deltas > 0,
+            "expected delta objects in medium-sha1 pack"
+        );
+
+        assert!(stats.total > 1000, "expected a sizeable medium pack");
+    }
+
+    /// Error-path test: stats_pack on a path that does not exist.
+    ///
+    /// Must return Err, not panic.
+    #[test]
+    fn test_stats_pack_file_not_found() {
+        let result = Pack::stats_pack(PathBuf::from("/nonexistent/path/to/fake.pack"));
+        assert!(
+            result.is_err(),
+            "stats_pack should return Err for a missing file"
+        );
+    }
+
+    /// Error-path test: stats_pack on a file whose content is not a valid pack.
+    ///
+    /// We construct an in-memory byte sequence that starts with wrong magic bytes
+    /// and write it to a temp file, then verify that stats_pack returns an error.
+    #[test]
+    fn test_stats_pack_invalid_pack_magic() {
+        use std::io::Write;
+
+        use tempfile::NamedTempFile;
+
+        let mut tmp = NamedTempFile::new().expect("create temp file");
+        tmp.write_all(b"FAKE\x00\x00\x00\x02\x00\x00\x00\x05")
+            .expect("write temp bytes");
+        let path = tmp.path().to_path_buf();
+
+        let result = Pack::stats_pack(path);
+        assert!(
+            result.is_err(),
+            "stats_pack should return Err for invalid pack magic"
+        );
     }
 }
