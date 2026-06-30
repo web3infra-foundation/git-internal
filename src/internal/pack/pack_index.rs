@@ -83,7 +83,7 @@ impl IdxBuilder {
 
     /// Write the fanout table for the index.
     async fn write_fanout(&mut self, entries: &mut [IndexEntry]) -> Result<(), GitError> {
-        entries.sort_by(|a, b| a.hash.cmp(&b.hash));
+        entries.sort_by_key(|entry| entry.hash);
         let mut fanout = [0u32; 256];
         for entry in entries.iter() {
             fanout[entry.hash.to_data()[0] as usize] += 1;

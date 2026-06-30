@@ -3,7 +3,10 @@ use std::{
     fs::File,
     io::BufReader,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use tempfile::TempDir;
@@ -35,22 +38,6 @@ impl fmt::Display for PackStats {
 }
 
 impl PackStats {
-    fn count_object_type(&mut self, obj_type: ObjectType, is_delta_in_pack: bool) {
-        self.total += 1;
-        if is_delta_in_pack {
-            self.deltas += 1;
-            return;
-        }
-
-        match obj_type {
-            ObjectType::Commit => self.commits += 1,
-            ObjectType::Tree => self.trees += 1,
-            ObjectType::Blob => self.blobs += 1,
-            ObjectType::Tag => self.tags += 1,
-            _ => {}
-        }
-    }
-
     pub fn analyze<P: AsRef<Path>>(pack_path: P) -> Result<PackStats, GitError> {
         let pack_path = pack_path.as_ref();
         if !pack_path.exists() {
@@ -68,7 +55,7 @@ impl PackStats {
             .map_err(|e| GitError::InvalidPackFile(format!("Failed to create temp dir: {e}")))?;
         let mut pack = Pack::new(None, None, Some(temp_dir.path().to_path_buf()), true);
 
-        let stats = Arc::new(Mutex::new(PackStats::default()));
+        let stats = Arc::new(AtomicPackStats::default());
         let stats_cloned = Arc::clone(&stats);
 
         pack.decode(
@@ -76,20 +63,12 @@ impl PackStats {
             move |entry| {
                 let obj_type = entry.inner.obj_type;
                 let is_delta_in_pack = entry.meta.is_delta.unwrap_or(false);
-                let mut guard = match stats_cloned.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                guard.count_object_type(obj_type, is_delta_in_pack);
+                stats_cloned.count_object_type(obj_type, is_delta_in_pack);
             },
             None::<fn(ObjectHash)>,
         )?;
 
-        let result = match stats.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
-        Ok(result)
+        Ok(stats.snapshot())
     }
 
     pub fn validate_header<P: AsRef<Path>>(pack_path: P) -> Result<u32, GitError> {
@@ -110,11 +89,60 @@ impl PackStats {
     }
 }
 
+#[derive(Default)]
+struct AtomicPackStats {
+    total: AtomicUsize,
+    commits: AtomicUsize,
+    trees: AtomicUsize,
+    blobs: AtomicUsize,
+    tags: AtomicUsize,
+    deltas: AtomicUsize,
+}
+
+impl AtomicPackStats {
+    fn count_object_type(&self, obj_type: ObjectType, is_delta_in_pack: bool) {
+        self.total.fetch_add(1, Ordering::Relaxed);
+        if is_delta_in_pack {
+            self.deltas.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+
+        match obj_type {
+            ObjectType::Commit => {
+                self.commits.fetch_add(1, Ordering::Relaxed);
+            }
+            ObjectType::Tree => {
+                self.trees.fetch_add(1, Ordering::Relaxed);
+            }
+            ObjectType::Blob => {
+                self.blobs.fetch_add(1, Ordering::Relaxed);
+            }
+            ObjectType::Tag => {
+                self.tags.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    fn snapshot(&self) -> PackStats {
+        PackStats {
+            total: self.total.load(Ordering::Relaxed),
+            commits: self.commits.load(Ordering::Relaxed),
+            trees: self.trees.load(Ordering::Relaxed),
+            blobs: self.blobs.load(Ordering::Relaxed),
+            tags: self.tags.load(Ordering::Relaxed),
+            deltas: self.deltas.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::{HashKind, set_hash_kind_for_test};
-    use crate::internal::pack::test_pack_download::download_pack_file;
+    use crate::{
+        hash::{HashKind, set_hash_kind_for_test},
+        internal::pack::test_pack_download::download_pack_file,
+    };
 
     #[test]
     fn test_analyze_small_pack_sha1() {
@@ -178,6 +206,7 @@ mod tests {
     #[test]
     fn test_invalid_pack_file() {
         use std::io::Write;
+
         use tempfile::NamedTempFile;
 
         let mut temp = NamedTempFile::new().expect("create temp file");
@@ -206,6 +235,7 @@ mod tests {
     #[test]
     fn test_validate_header_invalid_file() {
         use std::io::Write;
+
         use tempfile::NamedTempFile;
 
         let mut temp = NamedTempFile::new().expect("create temp file");

@@ -90,20 +90,25 @@ impl Tag {
         tagger: Signature,
         message: String,
     ) -> Self {
-        // Serialize the tag data to calculate its hash
-        let data = format!(
-            "object {object_hash}\ntype {object_type}\ntag {tag_name}\ntagger {tagger}\n\n{message}"
-        );
-        let id = ObjectHash::from_type_and_data(ObjectType::Tag, data.as_bytes());
-
-        Self {
-            id,
+        let mut tag = Self {
+            id: ObjectHash::default(),
             object_hash,
             object_type,
             tag_name,
             tagger,
             message,
-        }
+        };
+        // The id is the canonical git object hash of the *serialized* tag
+        // (`to_data()`), computed exactly like `Commit::new`. Previously this
+        // hashed a hand-written `format!` string that interpolated the tagger via
+        // `Signature`'s `Display` (a human-readable `"<name> <<email>>\nDate: …"`
+        // form) rather than `Signature::to_data()` (`"tagger <name> <<email>>
+        // <timestamp> <tz>"`). That made `id != hash(to_data())`, so the bytes
+        // libra stores/packs hash to a *different* OID than the ref points at —
+        // breaking every packfile round-trip (fetch/push/repack) of annotated
+        // tags. Hashing `to_data()` keeps the id canonical.
+        tag.id = ObjectHash::from_type_and_data(ObjectType::Tag, &tag.to_data().unwrap());
+        tag
     }
 }
 
@@ -272,6 +277,42 @@ mod tests {
     async fn tag_round_trip() {
         round_trip(HashKind::Sha1);
         round_trip(HashKind::Sha256);
+    }
+
+    /// Regression: a tag's `id` MUST equal the canonical git object hash of its
+    /// serialized (`to_data()`) form. Before the fix, `Tag::new` hashed a
+    /// `Display`-based string (which renders the tagger as a human-readable
+    /// `"<name> <<email>>\nDate: <chrono-date> <tz>"`) instead of `to_data()`
+    /// (`"tagger <name> <<email>> <timestamp> <tz>"`), so `id != hash(to_data())`.
+    /// The object was then stored/packed under different bytes than its id —
+    /// breaking every packfile round-trip (fetch/push/repack) of annotated tags.
+    #[test]
+    fn tag_id_is_canonical_hash_of_to_data() {
+        for kind in [HashKind::Sha1, HashKind::Sha256] {
+            let _guard = set_hash_kind_for_test(kind);
+            let target = match kind {
+                HashKind::Sha1 => {
+                    ObjectHash::from_str("1234567890abcdef1234567890abcdef12345678").unwrap()
+                }
+                HashKind::Sha256 => ObjectHash::from_str(
+                    "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                )
+                .unwrap(),
+            };
+            let tag = Tag::new(
+                target,
+                ObjectType::Commit,
+                "v1.0.0".to_string(),
+                make_sig(),
+                "release".to_string(),
+            );
+            let canonical =
+                ObjectHash::from_type_and_data(ObjectType::Tag, &tag.to_data().unwrap());
+            assert_eq!(
+                tag.id, canonical,
+                "tag id must be the canonical hash of its to_data() bytes ({kind:?})"
+            );
+        }
     }
 
     /// Invalid tag missing required fields should error.
