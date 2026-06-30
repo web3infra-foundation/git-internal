@@ -391,12 +391,13 @@ impl PackEncoder {
 
         // Writing is serialized so offsets, the running pack hash, and index records all describe
         // exactly the same byte order.
-        let mut idx_entries = Vec::new();
+        let total_entries = all_res.iter().map(Vec::len).sum();
+        let mut idx_entries = Vec::with_capacity(total_entries);
         for res in &mut all_res {
-            for data in res {
-                data.1.offset = self.inner_offset as u64;
-                self.write_all_and_update(&data.0).await;
-                idx_entries.push(data.1.clone());
+            for (encoded_bytes, mut idx_entry) in res.drain(..) {
+                idx_entry.offset = self.inner_offset as u64;
+                self.write_owned_and_update(encoded_bytes).await;
+                idx_entries.push(idx_entry);
             }
         }
 
@@ -405,7 +406,7 @@ impl PackEncoder {
         // The checksum is both the pack trailer and the identifier used in pack-<hash>.pack.
         let hash_result = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
-        self.send_data(hash_result.to_vec()).await;
+        self.send_data(hash_result).await;
 
         self.drop_sender();
         Ok(())
@@ -415,10 +416,10 @@ impl PackEncoder {
     ///
     /// The caller must invoke this in final pack order because both `inner_offset` and `inner_hash`
     /// are order-sensitive.
-    async fn write_all_and_update(&mut self, data: &[u8]) {
-        self.inner_hash.update(data);
+    async fn write_owned_and_update(&mut self, data: Vec<u8>) {
+        self.inner_hash.update(&data);
         self.inner_offset += data.len();
-        self.send_data(data.to_vec()).await;
+        self.send_data(data).await;
     }
 
     /// Build the `.idx` stream from metadata captured during pack encoding.

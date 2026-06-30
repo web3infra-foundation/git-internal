@@ -96,7 +96,7 @@ impl super::PackEncoder {
         // the whole bucket is later placed at any absolute pack position.
         let mut current_offset = 0usize;
         let mut window: VecDeque<DeltaWindowEntry> = VecDeque::with_capacity(window_size);
-        let mut res: Vec<(Vec<u8>, IndexEntry)> = Vec::new();
+        let mut res: Vec<(Vec<u8>, IndexEntry)> = Vec::with_capacity(bucket.len());
 
         for entry in bucket.iter_mut() {
             // best_rate is the estimated fraction of target bytes saved by delta encoding.
@@ -303,8 +303,9 @@ impl super::PackEncoder {
             if window.len() > window_size {
                 window.pop_front();
             }
-            res.push((obj_data.clone(), IndexEntry::new(entry, 0)));
-            current_offset += obj_data.len();
+            let obj_data_len = obj_data.len();
+            res.push((obj_data, IndexEntry::new(entry, 0)));
+            current_offset += obj_data_len;
         }
         Ok(res)
     }

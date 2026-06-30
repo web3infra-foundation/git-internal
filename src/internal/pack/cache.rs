@@ -12,7 +12,7 @@ use std::{
 };
 
 use dashmap::{DashMap, DashSet};
-use lru_mem::LruCache;
+use lru_mem::{LruCache, entry_size};
 use threadpool::ThreadPool;
 
 use crate::{
@@ -54,11 +54,14 @@ impl lru_mem::HeapSize for ObjectHash {
 pub struct Caches {
     map_offset: DashMap<usize, ObjectHash>, // offset to hash
     hash_set: DashSet<ObjectHash>,          // item in the cache
+    resident_hash_set: DashSet<ObjectHash>, // item currently held in the in-memory LRU
     // dropping large lru cache will take a long time on Windows without multi-thread IO
     // because "multi-thread IO" clone Arc<CacheObject>, so it won't be dropped in the main thread,
     // and `CacheObjects` will be killed by OS after Process ends abnormally
     // Solution: use `mimalloc`
     lru_cache: Mutex<LruCache<ObjectHash, ArcWrapper<CacheObject>>>,
+    unbounded_cache: Option<DashMap<ObjectHash, Arc<CacheObject>>>,
+    unbounded_offset_cache: Option<DashMap<usize, Arc<CacheObject>>>,
     mem_size: Option<usize>,
     tmp_path: PathBuf,
     path_prefixes: [Once; 256],
@@ -71,6 +74,30 @@ impl Caches {
     fn try_get(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
         let mut map = self.lru_cache.lock().unwrap();
         map.get(&hash).map(|x| x.data.clone())
+    }
+
+    fn insert_lru_resident(
+        &self,
+        map: &mut LruCache<ObjectHash, ArcWrapper<CacheObject>>,
+        hash: ObjectHash,
+        obj: ArcWrapper<CacheObject>,
+    ) {
+        let size = entry_size(&hash, &obj);
+        if size <= map.max_size() {
+            while map.current_size() + size > map.max_size() {
+                if let Some((evicted_hash, _)) = map.remove_lru() {
+                    self.resident_hash_set.remove(&evicted_hash);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if map.insert(hash, obj).is_ok() {
+            self.resident_hash_set.insert(hash);
+        } else {
+            self.resident_hash_set.remove(&hash);
+        }
     }
 
     /// !IMPORTANT: because of the process of pack, the file must be written / be writing before, so it won't be dead lock
@@ -99,7 +126,7 @@ impl Caches {
             Some(self.pool.clone()),
         );
         x.set_store_path(path);
-        let _ = map.insert(hash, x); // handle the error
+        self.insert_lru_resident(&mut map, hash, x);
         Ok(obj)
     }
 
@@ -136,19 +163,63 @@ impl Caches {
         self.pool.queued_count()
     }
 
+    pub(crate) fn is_unbounded(&self) -> bool {
+        self.mem_size.is_none()
+    }
+
     /// memory used by the index (exclude lru_cache which is contained in CacheObject::get_mem_size())
     pub fn memory_used_index(&self) -> usize {
-        self.map_offset.capacity()
-            * (std::mem::size_of::<usize>() + std::mem::size_of::<ObjectHash>())
-            + self.hash_set.capacity() * (std::mem::size_of::<ObjectHash>())
+        let hash_cache_size = if let Some(cache) = &self.unbounded_cache {
+            cache.capacity()
+                * (std::mem::size_of::<ObjectHash>() + std::mem::size_of::<Arc<CacheObject>>())
+        } else {
+            self.hash_set.capacity() * std::mem::size_of::<ObjectHash>()
+        };
+        let offset_cache_size = if let Some(cache) = &self.unbounded_offset_cache {
+            cache.capacity()
+                * (std::mem::size_of::<usize>() + std::mem::size_of::<Arc<CacheObject>>())
+        } else {
+            self.map_offset.capacity()
+                * (std::mem::size_of::<usize>() + std::mem::size_of::<ObjectHash>())
+        };
+        hash_cache_size + offset_cache_size
+    }
+
+    pub(crate) fn shutdown(&self) {
+        time_it!("Caches clear", {
+            self.complete_signal.store(true, Ordering::Release);
+            self.pool.join();
+            self.lru_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            if let Some(cache) = &self.unbounded_cache {
+                cache.clear();
+                cache.shrink_to_fit();
+            }
+            if let Some(cache) = &self.unbounded_offset_cache {
+                cache.clear();
+                cache.shrink_to_fit();
+            }
+            self.hash_set.clear();
+            self.hash_set.shrink_to_fit();
+            self.resident_hash_set.clear();
+            self.resident_hash_set.shrink_to_fit();
+            self.map_offset.clear();
+            self.map_offset.shrink_to_fit();
+        });
     }
 
     /// remove the tmp dir
-    pub fn remove_tmp_dir(&self) {
+    pub fn remove_tmp_dir(&self) -> io::Result<()> {
         time_it!("Remove tmp dir", {
             if self.tmp_path.exists() {
-                fs::remove_dir_all(&self.tmp_path).unwrap(); //very slow
-                // Try to remove parent .cache_temp directory if it's empty
+                match fs::remove_dir_all(&self.tmp_path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+
                 if let Some(parent) = self.tmp_path.parent() {
                     let is_cache_temp = parent
                         .file_name()
@@ -156,13 +227,34 @@ impl Caches {
                         .map(|n| n == ".cache_temp")
                         .unwrap_or(false);
                     if is_cache_temp {
-                        // Attempt to remove the parent directory if empty
-                        // This will fail silently if the directory is not empty or doesn't exist
-                        let _ = fs::remove_dir(parent);
+                        match fs::remove_dir(parent) {
+                            Ok(()) => {}
+                            Err(e)
+                                if matches!(
+                                    e.kind(),
+                                    io::ErrorKind::DirectoryNotEmpty | io::ErrorKind::NotFound
+                                ) => {}
+                            Err(e) => return Err(e),
+                        }
                     }
                 }
             }
-        });
+
+            Ok(())
+        })
+    }
+
+    pub fn remove_unbounded(&self, offset: usize, hash: ObjectHash) {
+        if self.unbounded_cache.is_some() && self.lru_cache.lock().unwrap().remove(&hash).is_some()
+        {
+            self.resident_hash_set.remove(&hash);
+        }
+        if let Some(cache) = &self.unbounded_offset_cache {
+            cache.remove(&offset);
+        }
+        if let Some(cache) = &self.unbounded_cache {
+            cache.remove(&hash);
+        }
     }
 }
 
@@ -181,7 +273,10 @@ impl _Cache for Caches {
         Caches {
             map_offset: DashMap::new(),
             hash_set: DashSet::new(),
+            resident_hash_set: DashSet::new(),
             lru_cache: Mutex::new(LruCache::new(mem_size.unwrap_or(usize::MAX))),
+            unbounded_cache: mem_size.is_none().then(DashMap::new),
+            unbounded_offset_cache: mem_size.is_none().then(DashMap::new),
             mem_size,
             tmp_path,
             path_prefixes: [const { Once::new() }; 256],
@@ -191,12 +286,27 @@ impl _Cache for Caches {
     }
 
     fn get_hash(&self, offset: usize) -> Option<ObjectHash> {
+        if let Some(cache) = &self.unbounded_offset_cache {
+            return cache.get(&offset).and_then(|obj| obj.base_object_hash());
+        }
         self.map_offset.get(&offset).map(|x| *x)
     }
 
     fn insert(&self, offset: usize, hash: ObjectHash, obj: CacheObject) -> Arc<CacheObject> {
         let obj_arc = Arc::new(obj);
-        {
+        if let Some(cache) = &self.unbounded_cache {
+            cache.insert(hash, obj_arc.clone());
+            if let Some(offset_cache) = &self.unbounded_offset_cache {
+                offset_cache.insert(offset, obj_arc.clone());
+            }
+            let mut map = self.lru_cache.lock().unwrap();
+            let a_obj = ArcWrapper::new(
+                obj_arc.clone(),
+                self.complete_signal.clone(),
+                Some(self.pool.clone()),
+            );
+            self.insert_lru_resident(&mut map, hash, a_obj);
+        } else {
             // ? whether insert to cache directly or only write to tmp file
             let mut map = self.lru_cache.lock().unwrap();
             let mut a_obj = ArcWrapper::new(
@@ -207,17 +317,24 @@ impl _Cache for Caches {
             if self.mem_size.is_some() {
                 a_obj.set_store_path(self.generate_temp_path(&self.tmp_path, hash));
             }
-            let _ = map.insert(hash, a_obj);
+            self.insert_lru_resident(&mut map, hash, a_obj);
+            self.hash_set.insert(hash);
+            // order matters as for reading in 'get_by_offset()'
+            self.map_offset.insert(offset, hash);
         }
-        //order maters as for reading in 'get_by_offset()'
-        self.hash_set.insert(hash);
-        self.map_offset.insert(offset, hash);
 
         obj_arc
     }
 
     /// get object by offset, from memory or tmp file
     fn get_by_offset(&self, offset: usize) -> Option<Arc<CacheObject>> {
+        if let Some(cache) = &self.unbounded_offset_cache {
+            return cache
+                .get(&offset)
+                .and_then(|obj| obj.base_object_hash())
+                .and_then(|hash| self.try_get(hash));
+        }
+
         match self.map_offset.get(&offset) {
             Some(x) => self.get_by_hash(*x),
             None => None,
@@ -226,8 +343,20 @@ impl _Cache for Caches {
 
     /// get object by hash, from memory or tmp file
     fn get_by_hash(&self, hash: ObjectHash) -> Option<Arc<CacheObject>> {
+        if self.mem_size.is_none() {
+            if let Some(cache) = &self.unbounded_cache
+                && !cache.contains_key(&hash)
+            {
+                return None;
+            }
+            return self.try_get(hash);
+        }
+
         // check if the hash is in the cache( lru or tmp file)
         if self.hash_set.contains(&hash) {
+            if !self.resident_hash_set.contains(&hash) {
+                return self.get_fallback(hash).ok();
+            }
             match self.try_get(hash) {
                 Some(x) => Some(x),
                 None => {
@@ -243,21 +372,19 @@ impl _Cache for Caches {
     }
 
     fn total_inserted(&self) -> usize {
-        self.hash_set.len()
+        if self.mem_size.is_some() {
+            self.hash_set.len()
+        } else if let Some(cache) = &self.unbounded_offset_cache {
+            cache.len()
+        } else {
+            self.map_offset.len()
+        }
     }
     fn memory_used(&self) -> usize {
         self.lru_cache.lock().unwrap().current_size() + self.memory_used_index()
     }
     fn clear(&self) {
-        time_it!("Caches clear", {
-            self.complete_signal.store(true, Ordering::Release);
-            self.pool.join();
-            self.lru_cache.lock().unwrap().clear();
-            self.hash_set.clear();
-            self.hash_set.shrink_to_fit();
-            self.map_offset.clear();
-            self.map_offset.shrink_to_fit();
-        });
+        self.shutdown();
 
         assert_eq!(self.pool.queued_count(), 0);
         assert_eq!(self.pool.active_count(), 0);
@@ -284,6 +411,7 @@ mod test {
             offset: 0,
             crc32: 0,
             is_delta_in_pack: false,
+            known_hash: None,
         }
     }
 
@@ -364,6 +492,7 @@ mod test {
                 offset: 1,
                 crc32: 0,
                 is_delta_in_pack: false,
+                known_hash: None,
             };
             cache_sha1.insert(obj.offset, hash, obj.clone());
             assert!(cache_sha1.hash_set.contains(&hash));
@@ -381,6 +510,7 @@ mod test {
                 offset: 2,
                 crc32: 0,
                 is_delta_in_pack: false,
+                known_hash: None,
             };
             cache_sha256.insert(obj.offset, hash, obj.clone());
             assert!(cache_sha256.hash_set.contains(&hash));
@@ -391,5 +521,74 @@ mod test {
         handle_sha256.join().unwrap();
 
         assert_eq!(cache.total_inserted(), 2);
+    }
+
+    #[test]
+    fn test_remove_tmp_dir_does_not_panic_when_cleanup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_path = dir.path().join("not-a-directory");
+        fs::write(&tmp_path, b"cache marker").unwrap();
+        let cache = Caches::new(None, tmp_path, 1);
+
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cache.remove_tmp_dir()));
+
+        assert!(result.is_ok(), "cache cleanup should not panic");
+        assert!(
+            result.unwrap().is_err(),
+            "cleanup failure should be returned"
+        );
+    }
+
+    #[test]
+    fn test_unbounded_cache_skips_hash_set_index() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let base = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let tmp_path = base.join("tests/.cache_tmp_unbounded");
+        let cache = Caches::new(None, tmp_path, 1);
+        let hash = ObjectHash::new(b"unbounded-entry");
+        let obj = make_obj(64, hash);
+
+        cache.insert(obj.offset, hash, obj);
+
+        assert!(cache.hash_set.is_empty());
+        assert!(cache.resident_hash_set.contains(&hash));
+        assert_eq!(cache.total_inserted(), 1);
+        assert_eq!(cache.get_hash(0), Some(hash));
+        assert!(cache.try_get(hash).is_some());
+        assert!(cache.get_by_hash(hash).is_some());
+        assert!(
+            cache
+                .get_by_hash(ObjectHash::new(b"missing-entry"))
+                .is_none()
+        );
+        assert!(cache.get_by_offset(0).is_some());
+        assert!(cache.memory_used_index() > 0);
+    }
+
+    #[test]
+    fn test_bounded_cache_tracks_resident_entries() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let base = PathBuf::from(env::current_dir().unwrap().parent().unwrap());
+        let tmp_path = base.join("tests/.cache_tmp_resident");
+        if tmp_path.exists() {
+            fs::remove_dir_all(&tmp_path).unwrap();
+        }
+
+        let cache = Caches::new(Some(2048), tmp_path, 1);
+        let a_hash = ObjectHash::new(b"resident-a");
+        let b_hash = ObjectHash::new(b"resident-b");
+        let a = make_obj(1800, a_hash);
+        let b = make_obj(1800, b_hash);
+
+        cache.insert(a.offset, a_hash, a);
+        assert!(cache.hash_set.contains(&a_hash));
+        assert!(cache.resident_hash_set.contains(&a_hash));
+
+        cache.insert(b.offset + 1, b_hash, b);
+        assert!(cache.hash_set.contains(&a_hash));
+        assert!(cache.hash_set.contains(&b_hash));
+        assert!(!cache.resident_hash_set.contains(&a_hash));
+        assert!(cache.resident_hash_set.contains(&b_hash));
     }
 }

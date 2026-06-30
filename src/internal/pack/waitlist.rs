@@ -42,6 +42,10 @@ impl Waitlist {
         }
         res
     }
+
+    pub fn has_waiters(&self, offset: usize, hash: ObjectHash) -> bool {
+        self.map_offset.contains_key(&offset) || self.map_ref.contains_key(&hash)
+    }
 }
 
 #[cfg(test)]
@@ -58,6 +62,7 @@ mod tests {
             data_decompressed: vec![],
             mem_recorder: None,
             is_delta_in_pack: false,
+            known_hash: None,
         }
     }
 

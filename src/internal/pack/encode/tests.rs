@@ -142,6 +142,111 @@ async fn test_pack_encoder() {
     assert!(pack_with_delta.len() <= pack_without_delta_size);
     check_format(&pack_with_delta);
 }
+
+#[test]
+fn test_try_as_offset_delta_keeps_one_result_per_input() {
+    let _guard = set_hash_kind_for_test(HashKind::Sha1);
+    let entries: Vec<Entry> = [
+        "alpha content",
+        "beta content",
+        "gamma content",
+        "delta content",
+    ]
+    .into_iter()
+    .map(|content| Blob::from_content(content).into())
+    .collect();
+    let expected_hashes: Vec<ObjectHash> = entries.iter().map(|entry| entry.hash).collect();
+
+    let results = PackEncoder::try_as_offset_delta(entries, 0, false, false, false)
+        .expect("offset delta encoding should succeed");
+
+    assert_eq!(results.len(), expected_hashes.len());
+    for ((encoded, idx_entry), expected_hash) in results.iter().zip(expected_hashes) {
+        assert!(!encoded.is_empty(), "encoded object should not be empty");
+        assert_eq!(idx_entry.hash, expected_hash);
+    }
+}
+
+#[test]
+fn test_try_as_offset_delta_accepts_empty_bucket() {
+    let _guard = set_hash_kind_for_test(HashKind::Sha1);
+    let entries = Vec::new();
+
+    let results = PackEncoder::try_as_offset_delta(entries, 0, false, false, false)
+        .expect("empty bucket should encode successfully");
+
+    assert!(results.is_empty());
+}
+
+#[tokio::test]
+async fn test_delta_window_encode_after_copy_optimization_roundtrips() {
+    let _guard = set_hash_kind_for_test(HashKind::Sha1);
+    let shared_prefix = "shared-prefix-".repeat(16);
+    let contents = vec![
+        format!("{shared_prefix}alpha-tail"),
+        format!("{shared_prefix}beta-tail"),
+        format!("{shared_prefix}gamma-tail"),
+        format!("{shared_prefix}delta-tail"),
+    ];
+    let (tx, mut rx) = mpsc::channel(16);
+    let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(16);
+    let encoder = PackEncoder::new(contents.len(), 4, tx);
+    encoder.encode_async(entry_rx).await.unwrap();
+
+    for content in contents {
+        let entry: Entry = Blob::from_content(&content).into();
+        entry_tx
+            .send(MetaAttached {
+                inner: entry,
+                meta: EntryMeta::new(),
+            })
+            .await
+            .unwrap();
+    }
+    drop(entry_tx);
+
+    let mut result = Vec::new();
+    while let Some(chunk) = rx.recv().await {
+        result.extend(chunk);
+    }
+
+    check_format(&result);
+}
+
+#[tokio::test]
+async fn test_parallel_encode_after_owned_write_roundtrips() {
+    let _guard = set_hash_kind_for_test(HashKind::Sha1);
+    let contents = vec![
+        "parallel alpha",
+        "parallel beta",
+        "parallel gamma",
+        "parallel delta",
+    ];
+    let (tx, mut rx) = mpsc::channel(16);
+    let (entry_tx, entry_rx) = mpsc::channel::<MetaAttached<Entry, EntryMeta>>(16);
+    let encoder = PackEncoder::new(contents.len(), 0, tx);
+    encoder.encode_async(entry_rx).await.unwrap();
+
+    for content in contents {
+        let entry: Entry = Blob::from_content(content).into();
+        entry_tx
+            .send(MetaAttached {
+                inner: entry,
+                meta: EntryMeta::new(),
+            })
+            .await
+            .unwrap();
+    }
+    drop(entry_tx);
+
+    let mut result = Vec::new();
+    while let Some(chunk) = rx.recv().await {
+        result.extend(chunk);
+    }
+
+    check_format(&result);
+}
+
 #[tokio::test]
 async fn test_pack_encoder_sha256() {
     let _guard = set_hash_kind_for_test(HashKind::Sha256);

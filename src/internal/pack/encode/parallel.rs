@@ -40,8 +40,8 @@ impl super::PackEncoder {
 
         // As in the delta path, the trailer checksum covers the header and all entries.
         let head = encode_header(self.object_number);
-        self.send_data(head.clone()).await;
         self.inner_hash.update(&head);
+        self.send_data(head).await;
 
         // Reusing the same encoder would corrupt its running offset and checksum state.
         if self.start_encoding {
@@ -50,7 +50,7 @@ impl super::PackEncoder {
             ));
         }
 
-        let mut idx_entries = Vec::new();
+        let mut idx_entries = Vec::with_capacity(self.object_number);
         // Batching bounds temporary memory while giving Rayon enough work to distribute.
         let batch_size = usize::max(1000, entry_rx.max_capacity() / 10); // Temporary heuristic.
         tracing::info!("encode with batch size: {}", batch_size);
@@ -93,10 +93,10 @@ impl super::PackEncoder {
 
             time_it!("parallel encode: write batch", {
                 for obj_data in batch_result {
-                    let mut obj_data = obj_data?;
-                    obj_data.1.offset = self.inner_offset as u64;
-                    self.write_all_and_update(&obj_data.0).await;
-                    idx_entries.push(obj_data.1);
+                    let (encoded_bytes, mut idx_entry) = obj_data?;
+                    idx_entry.offset = self.inner_offset as u64;
+                    self.write_owned_and_update(encoded_bytes).await;
+                    idx_entries.push(idx_entry);
                 }
             });
         }
@@ -112,7 +112,7 @@ impl super::PackEncoder {
         // Append the checksum trailer only after every encoded entry has updated the running hash.
         let hash_result = self.inner_hash.clone().finalize();
         self.final_hash = Some(ObjectHash::from_bytes(&hash_result).unwrap());
-        self.send_data(hash_result.to_vec()).await;
+        self.send_data(hash_result).await;
         self.drop_sender();
 
         self.idx_entries = Some(idx_entries);

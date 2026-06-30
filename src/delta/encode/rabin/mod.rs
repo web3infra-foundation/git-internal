@@ -83,6 +83,12 @@ pub struct DeltaStats {
     pub matches_accepted: u64,
 }
 
+#[cfg(feature = "delta-stats")]
+impl DeltaStats {
+    #[inline(always)]
+    fn sink(self) {}
+}
+
 /// Stub statistics when the `delta-stats` feature is disabled.
 ///
 /// All fields are zero/empty. The compiler will remove the `+= 1` increments
@@ -279,17 +285,9 @@ pub fn create_delta_index_arc(source: Arc<[u8]>) -> Option<RabinDeltaIndex> {
 fn cull_bucket(bucket: &mut Vec<IndexEntry>) {
     let total = bucket.len();
     let target = HASH_LIMIT;
-    let excess = total - target;
-
     let mut kept = Vec::with_capacity(target);
-    let mut acc: isize = 0;
-
-    for entry in bucket.drain(..) {
-        acc += excess as isize;
-        if acc > 0 {
-            acc -= target as isize;
-            // Skip this entry (uniformly distributed removal)
-        } else {
+    for (idx, entry) in bucket.drain(..).enumerate() {
+        if kept.len() < target && idx * target / total == kept.len() {
             kept.push(entry);
         }
     }
@@ -905,6 +903,24 @@ mod tests {
 
     use super::*;
     use crate::delta::decode::delta_decode;
+
+    #[test]
+    fn test_cull_bucket_keeps_hash_limit_entries() {
+        let mut bucket = (0..128)
+            .map(|offset| IndexEntry { hash: 0, offset })
+            .collect();
+
+        cull_bucket(&mut bucket);
+
+        assert_eq!(bucket.len(), HASH_LIMIT);
+        assert_eq!(bucket.first().map(|entry| entry.offset), Some(0));
+        assert_eq!(bucket.last().map(|entry| entry.offset), Some(126));
+        assert!(
+            bucket
+                .windows(2)
+                .all(|pair| pair[0].offset < pair[1].offset)
+        );
+    }
 
     /// Round-trip: identical data should produce a valid delta that decodes
     /// to the exact original.
