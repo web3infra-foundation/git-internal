@@ -90,10 +90,7 @@ pub struct PackFileGuard {
 
 impl Drop for PackFileGuard {
     fn drop(&mut self) {
-        let _lock = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        if release_ref(&self.path) {
-            let _ = std::fs::remove_file(&self.path);
-        }
+        let _ = release_ref(&self.path);
     }
 }
 
