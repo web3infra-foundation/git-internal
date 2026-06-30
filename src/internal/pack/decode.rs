@@ -1,11 +1,13 @@
 //! Streaming pack decoder that validates headers, inflates entries, rebuilds deltas (including zstd),
 //! and populates caches/metadata for downstream consumers.
 
+#[cfg(not(unix))]
+use std::io::{Seek, SeekFrom};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use std::{
     fs::File,
-    io::{self, BufRead, Cursor, ErrorKind, Read, Seek, SeekFrom, Write},
+    io::{self, BufRead, Cursor, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
@@ -52,6 +54,44 @@ struct CrcCountingReader<R> {
     bytes_read: u64,
     crc: Option<crc32fast::Hasher>,
 }
+
+struct HashingReader<R> {
+    inner: R,
+    hash: HashAlgorithm,
+}
+
+impl<R> HashingReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            hash: HashAlgorithm::new(),
+        }
+    }
+
+    fn current_hash(&self) -> Result<ObjectHash, GitError> {
+        ObjectHash::from_bytes(&self.hash.clone().finalize())
+            .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))
+    }
+}
+
+impl<R: Read> HashingReader<R> {
+    fn read_without_hash(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+
+    fn read_exact_without_hash(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.inner.read_exact(buf)
+    }
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.hash.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
 impl<R: Read> Read for CrcCountingReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
@@ -262,25 +302,29 @@ impl<R: BufRead, W: Write> BufRead for TeeReader<'_, R, W> {
     }
 
     fn consume(&mut self, amt: usize) {
+        let mut consumed = amt;
         if self.write_error.is_none() {
             match self.reader.fill_buf() {
                 Ok(buf) => {
-                    let amt = amt.min(buf.len());
-                    if let Err(err) = self.writer.write_all(&buf[..amt]) {
+                    consumed = amt.min(buf.len());
+                    if let Err(err) = self.writer.write_all(&buf[..consumed]) {
                         self.write_error = Some(err);
                     } else {
                         Self::record_pack_bytes(
                             &mut self.payload_hash,
                             &mut self.hash_tail,
                             self.hash_size,
-                            &buf[..amt],
+                            &buf[..consumed],
                         );
                     }
                 }
-                Err(err) => self.write_error = Some(err),
+                Err(err) => {
+                    consumed = 0;
+                    self.write_error = Some(err);
+                }
             }
         }
-        self.reader.consume(amt);
+        self.reader.consume(consumed);
     }
 }
 
@@ -655,11 +699,23 @@ impl Pack {
         Ok(u64::from_be_bytes(buf))
     }
 
+    fn discard_exact(reader: &mut impl Read, mut len: usize) -> Result<(), GitError> {
+        let mut scratch = [0; 8192];
+        while len != 0 {
+            let n = len.min(scratch.len());
+            reader
+                .read_exact(&mut scratch[..n])
+                .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))?;
+            len -= n;
+        }
+        Ok(())
+    }
+
     fn scan_decode_retention_from_index(pack_path: &Path) -> Result<DecodeScan, GitError> {
         let idx_path = pack_path.with_extension("idx");
         let idx_file = File::open(&idx_path)
             .map_err(|e| GitError::InvalidPackFile(format!("Open pack index file error: {e}")))?;
-        let mut idx = io::BufReader::new(idx_file);
+        let mut idx = HashingReader::new(io::BufReader::new(idx_file));
 
         let magic = Pack::read_be_u32(&mut idx)
             .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))?;
@@ -692,8 +748,7 @@ impl Pack {
         let crc_bytes = object_num
             .checked_mul(4)
             .ok_or_else(|| GitError::InvalidPackFile("Pack index is too large".to_string()))?;
-        idx.seek(SeekFrom::Current(crc_bytes as i64))
-            .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))?;
+        Self::discard_exact(&mut idx, crc_bytes)?;
 
         let mut large_offset_slots = Vec::new();
         for (pos, (object_offset, _)) in objects_by_offset.iter_mut().enumerate() {
@@ -737,6 +792,30 @@ impl Pack {
 
         let pack_hash = ObjectHash::from_stream(&mut idx)
             .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))?;
+        let expected_idx_hash = idx.current_hash()?;
+        let idx_hash = {
+            let mut hash_buf = vec![0; hash_size];
+            idx.read_exact_without_hash(&mut hash_buf)
+                .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))?;
+            ObjectHash::from_bytes(&hash_buf)
+                .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))?
+        };
+        if idx_hash != expected_idx_hash {
+            return Err(GitError::InvalidPackFile(format!(
+                "The pack index checksum {} does not match calculated checksum {}",
+                idx_hash, expected_idx_hash
+            )));
+        }
+        let mut trailing = [0; 1];
+        if idx
+            .read_without_hash(&mut trailing)
+            .map_err(|e| GitError::InvalidPackFile(format!("Read index error: {e}")))?
+            != 0
+        {
+            return Err(GitError::InvalidPackFile(
+                "Pack index has trailing data after checksum".to_string(),
+            ));
+        }
 
         let pack_file = File::open(pack_path)
             .map_err(|e| GitError::InvalidPackFile(format!("Open pack file error: {e}")))?;
@@ -1327,7 +1406,10 @@ impl Pack {
             if let Some(pack_path) = Self::single_open_pack_path_at_start()
                 && Self::reader_matches_pack_prefix(pack, &pack_path)
             {
-                return self.decode_file_inner_with_sync_base_callbacks(
+                let pack_len = std::fs::metadata(&pack_path)
+                    .map_err(|e| GitError::InvalidPackFile(format!("Read pack file error: {e}")))?
+                    .len();
+                self.decode_file_inner_with_sync_base_callbacks(
                     &pack_path,
                     Some(callback),
                     pack_id_callback,
@@ -1337,7 +1419,9 @@ impl Pack {
                         FileDecodeMode::RetainAll
                     },
                     true,
-                );
+                )?;
+                Self::consume_reader_exact(pack, pack_len)?;
+                return Ok(());
             }
 
             let mut temp_pack = NamedTempFile::new().map_err(|e| {
@@ -1439,6 +1523,28 @@ impl Pack {
             Ok(n) if n == compare_len => file_prefix == prefix[..compare_len],
             _ => false,
         }
+    }
+
+    #[cfg(unix)]
+    fn consume_reader_exact(
+        pack: &mut (impl BufRead + Send),
+        mut bytes: u64,
+    ) -> Result<(), GitError> {
+        while bytes != 0 {
+            let buf = pack
+                .fill_buf()
+                .map_err(|e| GitError::InvalidPackFile(format!("Read pack file error: {e}")))?;
+            if buf.is_empty() {
+                return Err(GitError::InvalidPackFile(
+                    "Pack reader ended before matched pack bytes were consumed".to_string(),
+                ));
+            }
+            let consumed =
+                usize::try_from(bytes).map_or(buf.len(), |remaining| remaining.min(buf.len()));
+            pack.consume(consumed);
+            bytes -= consumed as u64;
+        }
+        Ok(())
     }
 
     /// Decodes a pack file without materializing callback entries.
@@ -2703,19 +2809,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_large_mem_decode_ignores_unrelated_open_pack_fd() {
-        fn single_blob_pack(data: &[u8]) -> (Vec<u8>, ObjectHash) {
-            let obj_hash = utils::calculate_object_hash(ObjectType::Blob, data);
-            let mut pack_data = Vec::new();
-            pack_data.extend_from_slice(b"PACK");
-            pack_data.extend_from_slice(&2u32.to_be_bytes());
-            pack_data.extend_from_slice(&1u32.to_be_bytes());
-            pack_data.push(0x30 | data.len() as u8);
-            append_compressed(&mut pack_data, data);
-            let trailer = Sha1::digest(&pack_data);
-            pack_data.extend_from_slice(&trailer);
-            (pack_data, obj_hash)
-        }
-
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
         let dir = tempdir().unwrap();
         let (open_pack_data, open_hash) = single_blob_pack(b"open pack data");
@@ -2743,6 +2836,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(*decoded.lock().unwrap(), vec![b"reader data".to_vec()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_consume_reader_exact_leaves_following_bytes() {
+        let mut reader = Cursor::new(b"pack-datafollowing-data".to_vec());
+        Pack::consume_reader_exact(&mut reader, b"pack-data".len() as u64).unwrap();
+
+        let mut rest = Vec::new();
+        reader.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, b"following-data");
     }
 
     #[test]
@@ -2857,8 +2961,7 @@ mod tests {
         idx_data.extend_from_slice(obj_hash.as_ref());
         idx_data.extend_from_slice(&0u32.to_be_bytes());
         idx_data.extend_from_slice(&12u32.to_be_bytes());
-        idx_data.extend_from_slice(&trailer);
-        idx_data.extend_from_slice(&[0u8; 20]);
+        append_test_idx_trailer(&mut idx_data, &trailer);
         fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
 
         let mut pack = Pack::new(Some(1), None, Some(dir.path().join("tmp")), true);
@@ -2905,8 +3008,7 @@ mod tests {
         idx_data.extend_from_slice(obj_hash.as_ref());
         idx_data.extend_from_slice(&expected_crc.to_be_bytes());
         idx_data.extend_from_slice(&12u32.to_be_bytes());
-        idx_data.extend_from_slice(&trailer);
-        idx_data.extend_from_slice(&[0u8; 20]);
+        append_test_idx_trailer(&mut idx_data, &trailer);
         fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
 
         let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2927,6 +3029,56 @@ mod tests {
         assert_eq!(entries[0].meta.crc32, Some(expected_crc));
         assert_eq!(pack.number, 1);
         assert_eq!(pack.signature.to_string(), hex::encode(trailer));
+    }
+
+    #[test]
+    fn test_pack_decode_file_callback_ignores_idx_with_bad_checksum() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"a").unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut pack_data = Vec::new();
+        pack_data.extend_from_slice(b"PACK");
+        pack_data.extend_from_slice(&2u32.to_be_bytes());
+        pack_data.extend_from_slice(&1u32.to_be_bytes());
+        pack_data.push(0x31);
+        pack_data.extend_from_slice(&compressed);
+        let trailer = Sha1::digest(&pack_data);
+        pack_data.extend_from_slice(&trailer);
+
+        let dir = tempdir().unwrap();
+        let pack_path = dir.path().join("bad-idx-checksum.pack");
+        fs::write(&pack_path, &pack_data).unwrap();
+
+        let obj_hash = utils::calculate_object_hash(ObjectType::Blob, b"a");
+        let mut idx_data = Vec::new();
+        idx_data.extend_from_slice(&0xff74_4f63u32.to_be_bytes());
+        idx_data.extend_from_slice(&2u32.to_be_bytes());
+        let first = obj_hash.as_ref()[0] as usize;
+        for fanout_idx in 0..256 {
+            let count = if fanout_idx >= first { 1u32 } else { 0u32 };
+            idx_data.extend_from_slice(&count.to_be_bytes());
+        }
+        let hash_offset = idx_data.len();
+        idx_data.extend_from_slice(obj_hash.as_ref());
+        idx_data.extend_from_slice(&0u32.to_be_bytes());
+        idx_data.extend_from_slice(&12u32.to_be_bytes());
+        append_test_idx_trailer(&mut idx_data, &trailer);
+        idx_data[hash_offset] ^= 0xff;
+        fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
+
+        let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entries_for_cb = Arc::clone(&entries);
+        let mut pack = Pack::new(Some(1), None, Some(dir.path().join("tmp")), true);
+        pack.decode_file(
+            &pack_path,
+            move |entry| entries_for_cb.lock().unwrap().push(entry.inner.hash),
+            None::<fn(ObjectHash)>,
+        )
+        .unwrap();
+
+        assert_eq!(entries.lock().unwrap().as_slice(), &[obj_hash]);
     }
 
     #[test]
@@ -2961,8 +3113,7 @@ mod tests {
         idx_data.extend_from_slice(obj_hash.as_ref());
         idx_data.extend_from_slice(&0u32.to_be_bytes());
         idx_data.extend_from_slice(&12u32.to_be_bytes());
-        idx_data.extend_from_slice(&trailer);
-        idx_data.extend_from_slice(&[0u8; 20]);
+        append_test_idx_trailer(&mut idx_data, &trailer);
         fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
 
         let mut pack = Pack::new(Some(1), None, Some(dir.path().join("tmp")), true);
@@ -3006,8 +3157,7 @@ mod tests {
         idx_data.extend_from_slice(&0u32.to_be_bytes());
         idx_data.extend_from_slice(&0x8000_0000u32.to_be_bytes());
         idx_data.extend_from_slice(&12u64.to_be_bytes());
-        idx_data.extend_from_slice(&trailer);
-        idx_data.extend_from_slice(&[0u8; 20]);
+        append_test_idx_trailer(&mut idx_data, &trailer);
         fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
 
         let mut pack = Pack::new(Some(1), None, Some(dir.path().join("tmp")), true);
@@ -3078,8 +3228,7 @@ mod tests {
         idx_data.extend_from_slice(obj_hash.as_ref());
         idx_data.extend_from_slice(&0u32.to_be_bytes());
         idx_data.extend_from_slice(&12u32.to_be_bytes());
-        idx_data.extend_from_slice(&[0xff; 20]);
-        idx_data.extend_from_slice(&[0u8; 20]);
+        append_test_idx_trailer(&mut idx_data, &[0xff; 20]);
         fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
 
         let mut pack = Pack::new(Some(1), None, Some(dir.path().join("tmp")), true);
@@ -3135,8 +3284,7 @@ mod tests {
         idx_data.extend_from_slice(obj_hash.as_ref());
         idx_data.extend_from_slice(&0u32.to_be_bytes());
         idx_data.extend_from_slice(&12u32.to_be_bytes());
-        idx_data.extend_from_slice(&original_trailer);
-        idx_data.extend_from_slice(&[0u8; 20]);
+        append_test_idx_trailer(&mut idx_data, &original_trailer);
         fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
 
         let mut pack = Pack::new(Some(1), None, Some(dir.path().join("tmp")), true);
@@ -3151,6 +3299,26 @@ mod tests {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(data).unwrap();
         buf.extend_from_slice(&encoder.finish().unwrap());
+    }
+
+    fn single_blob_pack(data: &[u8]) -> (Vec<u8>, ObjectHash) {
+        let obj_hash = utils::calculate_object_hash(ObjectType::Blob, data);
+        let mut pack_data = Vec::new();
+        pack_data.extend_from_slice(b"PACK");
+        pack_data.extend_from_slice(&2u32.to_be_bytes());
+        pack_data.extend_from_slice(&1u32.to_be_bytes());
+        pack_data.push(0x30 | data.len() as u8);
+        append_compressed(&mut pack_data, data);
+        let trailer = Sha1::digest(&pack_data);
+        pack_data.extend_from_slice(&trailer);
+        (pack_data, obj_hash)
+    }
+
+    fn append_test_idx_trailer(idx_data: &mut Vec<u8>, pack_hash: &[u8]) {
+        idx_data.extend_from_slice(pack_hash);
+        let mut idx_hash = crate::utils::HashAlgorithm::new();
+        idx_hash.update(idx_data);
+        idx_data.extend_from_slice(&idx_hash.finalize());
     }
 
     fn write_test_idx(pack_path: &Path, mut objects: Vec<(ObjectHash, u32)>) {
@@ -3176,8 +3344,7 @@ mod tests {
         }
         let pack_data = fs::read(pack_path).unwrap();
         let hash_size = get_hash_kind().size();
-        idx_data.extend_from_slice(&pack_data[pack_data.len() - hash_size..]);
-        idx_data.extend_from_slice(&vec![0u8; hash_size]);
+        append_test_idx_trailer(&mut idx_data, &pack_data[pack_data.len() - hash_size..]);
         fs::write(pack_path.with_extension("idx"), idx_data).unwrap();
     }
 

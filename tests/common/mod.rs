@@ -47,15 +47,20 @@ fn release_ref(path: &Path) -> bool {
 static DOWNLOAD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn is_valid_pack_file(path: &Path, filename: &str) -> bool {
-    let Ok(bytes) = fs::read(path) else {
+    if !filename.ends_with(".pack") && !filename.ends_with(".idx") {
+        return true;
+    }
+    let Ok(mut file) = fs::File::open(path) else {
         return false;
     };
+    let mut header = [0; 4];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
     if filename.ends_with(".pack") {
-        bytes.starts_with(b"PACK")
-    } else if filename.ends_with(".idx") {
-        bytes.starts_with(&[0xff, 0x74, 0x4f, 0x63])
+        header == *b"PACK"
     } else {
-        true
+        header == [0xff, 0x74, 0x4f, 0x63]
     }
 }
 

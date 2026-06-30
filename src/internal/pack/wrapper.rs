@@ -15,8 +15,8 @@ use crate::{
 ///
 /// Fields:
 /// * `inner`: The inner reader.
-/// * `hash`: The  hash state.
-/// * `count_hash`: A flag to indicate whether to compute the hash while reading.
+/// * `hash`: The optional hash state. `None` means only bytes read are counted.
+/// * `bytes_read`: The number of bytes consumed from the wrapped reader.
 ///
 pub struct Wrapper<R> {
     inner: R,
@@ -28,11 +28,10 @@ impl<R> Wrapper<R>
 where
     R: BufRead,
 {
-    /// Constructs a new [`Wrapper`] with the given reader and a flag to enable or disable hashing.
+    /// Constructs a new [`Wrapper`] with hash tracking enabled.
     ///
     /// # Parameters
     /// * `inner`: The reader to wrap.
-    /// * `count_hash`: If `true`, the hash is computed while reading; otherwise, it is not.
     pub fn new(inner: R) -> Self {
         Self {
             inner,
@@ -88,7 +87,7 @@ where
         self.inner.fill_buf() // Delegate to the inner reader
     }
 
-    /// Consumes data from the buffer and updates the hash if `count_hash` is true.
+    /// Consumes data from the buffer and updates the hash when tracking is enabled.
     ///
     /// # Parameters
     /// * `amt`: The amount of data to consume from the buffer.
@@ -109,7 +108,7 @@ impl<R> Read for Wrapper<R>
 where
     R: BufRead,
 {
-    /// Reads data into the provided buffer and updates the hash if `count_hash` is true.
+    /// Reads data into the provided buffer and updates the hash when tracking is enabled.
     /// <br> [Read::read_exact] calls it internally.
     ///
     /// # Parameters
