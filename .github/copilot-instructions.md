@@ -2,7 +2,7 @@
 
 ## What this repository is
 
-This repository (git-internal) houses an advanced, internal rewrite / extension of the Git object model, transport, and packfile layer — intended to support very large repositories (monorepo scale), content-addressed storage, delta chains, multi‐pack indexing, and integration with next-generation build systems (for example Bazel, Buck2). The target language is primarily Rust; the goal is high-performance Git internals re-architected for modern workflows.
+This repository (git-internal) houses an advanced, internal rewrite / extension of the Git object model, transport, and packfile layer — intended to support very large repositories (monorepo scale), content-addressed storage, delta chains, and multi‐pack indexing. The target language is primarily Rust; the goal is high-performance Git internals re-architected for modern workflows.
 
 ## Languages & defaults
 
@@ -13,8 +13,8 @@ This repository (git-internal) houses an advanced, internal rewrite / extension 
 
 ## Build & run
 
-- Use cargo for local iteration (cargo build, cargo test, cargo bench) but the canonical build is through the monorepo tooling (Buck2/Bazel) when applicable.
-- For CI: ensure “clean workspace” builds succeed, e.g., buck2 build //git-internal/... or similar.
+- Use cargo for local iteration and CI (cargo build, cargo test, cargo bench).
+- For CI: ensure “clean workspace” builds succeed, e.g., cargo build --all-targets.
 - Testing incremental git pack/objects: provide reproducible scripts in scripts/ and reference them in CI workflows.
 
 ## Workspace layout & major components (mental map)
@@ -93,4 +93,3 @@ This repository (git-internal) houses an advanced, internal rewrite / extension 
 
 - Do not design a new VCS from scratch (unless explicitly requested).
 - Do not propose to abandon Git backwards compatibility without explicit scope.
-- Do not rewrite core build system (Buck2/Bazel) itself — focus remains on Git internals.

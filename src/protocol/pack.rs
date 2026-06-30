@@ -235,16 +235,16 @@ where
                     .await?;
                 }
                 crate::internal::object::tree::TreeItemMode::Blob
-                | crate::internal::object::tree::TreeItemMode::BlobExecutable => {
-                    if !visited_blobs.contains(&entry_hash) {
-                        visited_blobs.insert(entry_hash.clone());
-                        let blob = self.repo_access.get_blob(&entry_hash).await.map_err(|e| {
-                            ProtocolError::repository_error(format!(
-                                "Failed to get blob {entry_hash}: {e}"
-                            ))
-                        })?;
-                        blobs.push(blob);
-                    }
+                | crate::internal::object::tree::TreeItemMode::BlobExecutable
+                    if !visited_blobs.contains(&entry_hash) =>
+                {
+                    visited_blobs.insert(entry_hash.clone());
+                    let blob = self.repo_access.get_blob(&entry_hash).await.map_err(|e| {
+                        ProtocolError::repository_error(format!(
+                            "Failed to get blob {entry_hash}: {e}"
+                        ))
+                    })?;
+                    blobs.push(blob);
                 }
                 _ => {}
             }

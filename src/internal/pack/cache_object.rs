@@ -134,6 +134,7 @@ pub struct CacheObject {
     pub data_decompressed: Vec<u8>,
     pub mem_recorder: Option<Arc<AtomicUsize>>, // record mem-size of all CacheObjects of a Pack
     pub is_delta_in_pack: bool,
+    pub(crate) known_hash: Option<ObjectHash>,
 }
 
 #[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -177,6 +178,7 @@ impl From<CacheObjectOnDisk> for CacheObject {
             data_decompressed: value.data_decompressed,
             mem_recorder: None,
             is_delta_in_pack: value.is_delta_in_pack,
+            known_hash: None,
         }
     }
 }
@@ -207,6 +209,7 @@ impl Clone for CacheObject {
             data_decompressed: self.data_decompressed.clone(),
             mem_recorder: self.mem_recorder.clone(),
             is_delta_in_pack: self.is_delta_in_pack,
+            known_hash: self.known_hash,
         };
         obj.record_mem_size();
         obj
@@ -305,6 +308,7 @@ impl CacheObject {
             data_decompressed: data,
             mem_recorder: None,
             is_delta_in_pack: false,
+            known_hash: None,
         }
     }
 
@@ -370,6 +374,37 @@ impl CacheObject {
                 };
                 let meta = EntryMeta {
                     // pack_id:Some(pack_id),
+                    pack_offset: Some(self.offset),
+                    crc32: Some(self.crc32),
+                    is_delta: Some(self.is_delta_in_pack),
+                    ..Default::default()
+                };
+                MetaAttached { inner: entry, meta }
+            }
+
+            _ => {
+                unreachable!("delta object should not persist!")
+            }
+        }
+    }
+
+    /// transform the CacheObject to MetaAttached<Entry, EntryMeta> without cloning object data
+    pub fn into_entry_metadata(mut self) -> MetaAttached<Entry, EntryMeta> {
+        let recorded_size = self.mem_size();
+        if let Some(mem_recorder) = self.mem_recorder.take() {
+            mem_recorder.fetch_sub(recorded_size, Ordering::Release);
+        }
+
+        match self.info {
+            CacheObjectInfo::BaseObject(obj_type, hash) => {
+                let data = std::mem::take(&mut self.data_decompressed);
+                let entry = Entry {
+                    obj_type,
+                    data,
+                    hash,
+                    chain_len: 0,
+                };
+                let meta = EntryMeta {
                     pack_offset: Some(self.offset),
                     crc32: Some(self.crc32),
                     is_delta: Some(self.is_delta_in_pack),
@@ -495,6 +530,7 @@ mod test {
             data_decompressed: vec![0; size],
             mem_recorder: None,
             is_delta_in_pack: false,
+            known_hash: None,
         }
     }
 

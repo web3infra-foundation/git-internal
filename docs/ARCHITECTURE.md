@@ -49,7 +49,9 @@ Input: pack (BufRead / Stream<Bytes>)
 Entry points: encode_and_output_to_files; PackEncoder::encode / encode_idx_file
 
 entries (Entry+Meta) ──▶ PackEncoder
-  ├─ window_size==0: parallel straight write; >0: delta/zstdelta within window
+  ├─ window_size==0: parallel straight write
+  ├─ window_size>0: Rabin delta by default; Myers/Patience when Rabin is disabled
+  ├─ Optional explicit path: zstdelta within the delta window
   ├─ Build object header (type+size); offset-delta writes offset encoding
   ├─ zlib-compress body
   ├─ Async write pack chunks via channel (tokio task)
@@ -57,8 +59,9 @@ entries (Entry+Meta) ──▶ PackEncoder
   └─ Compute pack hash, rename to pack-<hash>.pack /.idx
 ```
 
-- Entrypoints: `encode_and_output_to_files` wires pack/idx writers and final rename; `PackEncoder::encode` produces pack data; `encode_idx_file` builds idx.
-- Delta strategy: `window_size` controls whether/how big the window is; supports custom delta or zstd dictionary delta; window_size==0 uses non-delta parallel path.
+- Entrypoints: `encode_and_output_to_files` is the only file-output API and wires pack/idx writers plus the final rename; `PackEncoder::encode` produces pack data; `encode_idx_file` builds idx.
+- Delta strategy: `window_size` controls whether/how big the window is; `window_size==0` uses the non-delta parallel path.
+- Algorithm selection: the default Cargo feature set enables only `diff_rabin`, so non-zero windows use Rabin fingerprint matching. Builds without `diff_rabin` fall back to Myers when `diff_mydrs` is enabled, otherwise Patience. zstdelta remains available through its explicit `PackEncoder` API.
 - Concurrency & IO: pack/idx writes are decoupled via channel + tokio writers to avoid blocking encode.
 - Output: temp files are renamed by final pack hash; idx includes fanout/CRC/offset (supports large offsets).
 - Configuration: `Pack::new` sets thread count, `mem_limit`, temp dir, and `clean_tmp` (cleanup temp on drop).
