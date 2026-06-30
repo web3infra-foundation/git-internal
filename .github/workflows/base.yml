@@ -91,4 +91,4 @@ jobs:
           lfs: true
 
       - name: Run cargo test
-        run: git lfs pull && cargo test --all
+        run: cargo test --all
