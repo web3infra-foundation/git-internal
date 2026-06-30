@@ -263,20 +263,36 @@ pub fn read_delta_object_size<R: Read>(stream: &mut R) -> io::Result<(usize, usi
     Ok((base_size, result_size))
 }
 
+fn decimal_usize_bytes(mut value: usize, buf: &mut [u8; 20]) -> &[u8] {
+    if value == 0 {
+        return b"0";
+    }
+
+    let mut cursor = buf.len();
+    while value > 0 {
+        cursor -= 1;
+        buf[cursor] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    &buf[cursor..]
+}
+
 /// Calculate the SHA1 hash of the given object.
 /// <br> "`<type> <size>\0<content>`"
 /// <br> data: The decompressed content of the object
-pub fn calculate_object_hash(obj_type: ObjectType, data: &Vec<u8>) -> ObjectHash {
+pub fn calculate_object_hash(obj_type: ObjectType, data: &[u8]) -> ObjectHash {
     let type_bytes = obj_type
         .to_bytes()
         .expect("calculate_object_hash called with a delta type that has no loose-object header");
+    let mut len_buf = [0; 20];
+    let len_bytes = decimal_usize_bytes(data.len(), &mut len_buf);
     match get_hash_kind() {
         crate::hash::HashKind::Sha1 => {
             let mut hash = Sha1::new();
             // Header: "<type> <size>\0"
             hash.update(type_bytes);
             hash.update(b" ");
-            hash.update(data.len().to_string());
+            hash.update(len_bytes);
             hash.update(b"\0");
 
             // Decompressed data(raw content)
@@ -290,7 +306,7 @@ pub fn calculate_object_hash(obj_type: ObjectType, data: &Vec<u8>) -> ObjectHash
             // Header: "<type> <size>\0"
             hash.update(type_bytes);
             hash.update(b" ");
-            hash.update(data.len().to_string());
+            hash.update(len_bytes);
             hash.update(b"\0");
 
             // Decompressed data(raw content)
@@ -355,17 +371,24 @@ mod tests {
     #[test]
     fn test_calc_obj_hash() {
         let _guard = set_hash_kind_for_test(HashKind::Sha1);
-        let hash = calculate_object_hash(ObjectType::Blob, &b"a".to_vec());
+        let hash = calculate_object_hash(ObjectType::Blob, b"a".as_ref());
         assert_eq!(hash.to_string(), "2e65efe2a145dda7ee51d1741299f848e5bf752e");
     }
     #[test]
     fn test_calc_obj_hash_sha256() {
         let _guard = set_hash_kind_for_test(HashKind::Sha256);
-        let hash = calculate_object_hash(ObjectType::Blob, &b"a".to_vec());
+        let hash = calculate_object_hash(ObjectType::Blob, b"a".as_ref());
         assert_eq!(
             hash.to_string(),
             "eb337bcee2061c5313c9a1392116b6c76039e9e30d71467ae359b36277e17dc7"
         );
+    }
+
+    #[test]
+    fn test_calc_empty_obj_hash() {
+        let _guard = set_hash_kind_for_test(HashKind::Sha1);
+        let hash = calculate_object_hash(ObjectType::Blob, b"".as_ref());
+        assert_eq!(hash.to_string(), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
     }
 
     #[test]
